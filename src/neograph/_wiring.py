@@ -38,6 +38,7 @@ from neograph.errors import ConfigurationError, ExecutionError
 from neograph.factory import (
     make_node_fn,
     make_portal_agent_cycle_fn,
+    make_portal_agent_cycle_tool_handoff_fn,
     make_portal_approval_fn,
     make_portal_dispatch_fn,
     make_portal_fn,
@@ -1205,6 +1206,7 @@ def _wire_agent_cycle_body(
     *,
     condition_lookup: dict[str, Callable] | None = None,
     parse_destinations: tuple[str, ...] | None = None,
+    tools_destinations: tuple[str, ...] | None = None,
     add_static_entry_edge: bool = True,
 ) -> str:
     """Shared agent/tools/gate/router wiring for ONE ReAct cycle.
@@ -1217,6 +1219,16 @@ def _wire_agent_cycle_body(
     (agent/tools node registration, the optional gate arm, the 3-way router,
     the tools→agent loopback) is identical, so it is single-sourced here
     rather than copy-then-maybe-merged per call site.
+
+    ``tools_destinations`` (a tool-triggered Portal member, design
+    portal-tool-triggered-handoff §3.4): register ``{node}__tools`` as a
+    ``Command``-emitting node with these ``destinations=`` (declared peers ∪
+    ``{node}__agent`` loopback) and SKIP the static ``tools -> agent`` edge.
+    LangGraph does NOT reject a node that has both a static out-edge AND a
+    ``destinations=``-registered ``Command`` body — it silently double-executes
+    BOTH targets in one superstep (verified live), so the static edge MUST be
+    omitted, not merely tolerated. ``None`` (every non-tool-triggered member)
+    keeps the plain tools node + static loopback, unchanged.
 
     Adds three parent nodes — ``{node}__agent`` / ``{node}__tools`` /
     ``{node}__parse`` — with a 3-way conditional router and a tools→agent
@@ -1242,9 +1254,11 @@ def _wire_agent_cycle_body(
     graph.add_node(
         names.agent, cast(Any, named(RunnableLambda(agent_sync, afunc=agent_async), names.agent, mode=node.mode))
     )
-    graph.add_node(
-        names.tools, cast(Any, named(RunnableLambda(tools_sync, afunc=tools_async), names.tools, mode=node.mode))
-    )
+    tools_runnable = named(RunnableLambda(tools_sync, afunc=tools_async), names.tools, mode=node.mode)
+    if tools_destinations is not None:
+        graph.add_node(names.tools, cast(Any, tools_runnable), destinations=tools_destinations)
+    else:
+        graph.add_node(names.tools, cast(Any, tools_runnable))
     parse_runnable = named(RunnableLambda(parse_sync, afunc=parse_async), names.parse, mode=node.mode)
     if parse_destinations is not None:
         graph.add_node(names.parse, cast(Any, parse_runnable), destinations=parse_destinations)
@@ -1299,8 +1313,14 @@ def _wire_agent_cycle_body(
             path_map=[names.tools, names.parse],
         )
 
-    # ReAct loopback: after executing tools, take another agent turn.
-    graph.add_edge(names.tools, names.agent)
+    # ReAct loopback: after executing tools, take another agent turn. A
+    # tool-triggered member (tools_destinations set) expresses this loopback as a
+    # dynamic Command(goto={node}__agent) from its Command-emitting tools body
+    # instead — a static edge here would coexist with the destinations= registration
+    # and silently double-execute (design portal-tool-triggered-handoff §3.4), so it
+    # is omitted for that member class only.
+    if tools_destinations is None:
+        graph.add_edge(names.tools, names.agent)
 
     return names.parse
 
@@ -1354,25 +1374,51 @@ def _add_portal_agent_cycle_member(
     Reuses ``_wire_agent_cycle_body`` for everything except the parse node's
     registration (``destinations=`` + Command-returning body, built by
     ``factory.make_portal_agent_cycle_fn``).
+
+    A ``trigger="tool"`` member (design portal-tool-triggered-handoff §3.4)
+    additionally lowers ``{node}__tools`` into a ``Command``-emitting handoff exit
+    (``factory.make_portal_agent_cycle_tool_handoff_fn`` + ``tools_destinations=``)
+    with NO static ``tools -> agent`` edge; its ``parse`` node is still wired
+    exactly like a ``trigger="output"`` member (the normal-completion exit).
     """
-    parts = make_portal_agent_cycle_fn(
-        node,
-        portal,
-        entry_field,
-        exit_name,
-        max_hops=max_hops,
-        on_exhaust=on_exhaust,
-        entry_name=entry_name,
-        runtime=runtime,
-        tool_factory_lookup=tool_factory_lookup,
-        target_resolve=target_resolve,
-    )
     # destinations = declared peers ∪ {exit}, resolved through the entry-label
     # map so an agent/act peer's destination is its real entry node name —
     # mirrors the atomic member's `graph.add_node(member.name, fn,
     # destinations=...)` in `_add_portal_mesh`.
     resolve = target_resolve or {}
-    destinations = tuple(resolve.get(t, t) for t in (portal.to or ())) + (exit_name,)
+    peer_targets = tuple(resolve.get(t, t) for t in (portal.to or ()))
+    parse_destinations = peer_targets + (exit_name,)
+    tools_destinations: tuple[str, ...] | None = None
+    if portal.is_tool_triggered:
+        parts = make_portal_agent_cycle_tool_handoff_fn(
+            node,
+            portal,
+            entry_field,
+            exit_name,
+            max_hops=max_hops,
+            on_exhaust=on_exhaust,
+            entry_name=entry_name,
+            runtime=runtime,
+            tool_factory_lookup=tool_factory_lookup,
+            target_resolve=target_resolve,
+        )
+        # The tools node routes to a peer's real entry (handoff) OR loops back to
+        # {node}__agent (no handoff this turn) — both are dynamic Command targets,
+        # so the static tools -> agent edge is dropped (design §3.4).
+        tools_destinations = peer_targets + (parts["names"].agent,)
+    else:
+        parts = make_portal_agent_cycle_fn(
+            node,
+            portal,
+            entry_field,
+            exit_name,
+            max_hops=max_hops,
+            on_exhaust=on_exhaust,
+            entry_name=entry_name,
+            runtime=runtime,
+            tool_factory_lookup=tool_factory_lookup,
+            target_resolve=target_resolve,
+        )
     # A Portal mesh member (entry or peer) is never reached via a static
     # prev-node edge — the mesh's single static edge (prev -> entry) is
     # wired once by `_add_portal_mesh` itself, resolved through the SAME
@@ -1384,7 +1430,8 @@ def _add_portal_agent_cycle_member(
         parts,
         prev_node,
         condition_lookup=condition_lookup,
-        parse_destinations=destinations,
+        parse_destinations=parse_destinations,
+        tools_destinations=tools_destinations,
         add_static_entry_edge=False,
     )
 

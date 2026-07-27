@@ -844,6 +844,165 @@ class TestToAgentSpecLowersModifiers:
         )
 
 
+# ── neograph-s7zt3.8: Construct-ITEM modifier export (silent-drop bug fix) ────
+
+
+class TestConstructItemModifierExport:
+    """Pins neograph-s7zt3.8 (master architecture doc §5, EACH/ORACLE/LOOP/
+    OPERATOR Construct-export rows, all pre-fix ``BROKEN -- silent drop``).
+
+    ``_lower_construct_item``'s ``isinstance(item, Construct)`` branch used to
+    wrap a bare ``FlowNode`` and return BEFORE ``classify_modifiers`` ran, so a
+    ``Construct(...) | Each()/Oracle()/Loop()/Operator()`` used as ONE ITEM
+    inside a parent Construct lost its modifier on export -- no error, no
+    marker, no diagnostic. The fix routes Node AND Construct items through the
+    SAME modifier dispatch (reusing ``_lower_each``/``_lower_oracle``/
+    ``_lower_loop``/``_lower_operator`` over the item's ``_lower_item_body``),
+    and FAILS LOUD for the EACH_ORACLE / EACH_ORACLE_OPERATOR fusion combos,
+    mirroring ``compiler.py``'s own permanent sub-construct rejection.
+
+    Pre-fix, every ``*_lowers_*`` test below saw a lone ``FlowNode`` with no
+    ``neograph/modifier`` marker (the silent drop, reproduced directly by
+    building the pipeline and finding zero modifier markers), and the two
+    ``*_fails_loud`` tests saw a clean export instead of the mandated
+    ConfigurationError.
+    """
+
+    @staticmethod
+    def _sub(input_type: type, output_type: type) -> Construct:
+        from neograph.node import Node
+
+        step = Node.scripted("step", fn="step_fn", inputs=input_type, outputs=output_type)
+        return Construct("sub", input=input_type, output=output_type, nodes=[step])
+
+    def test_each_on_construct_item_lowers_to_map_node_with_marker(self):
+        from pyagentspec.flows.nodes import MapNode
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.modifiers import Each
+
+        sub = self._sub(RawText, Claims) | Each(over="items", key="label")
+        parent = Construct("parent", nodes=[sub])
+
+        flow = to_agent_spec(parent)
+
+        map_nodes = [n for n in flow.nodes if isinstance(n, MapNode)]
+        assert len(map_nodes) == 1, "Each on a Construct item must lower to a MapNode, not a bare FlowNode"
+        assert map_nodes[0].metadata["neograph/modifier"] == "each"
+        assert map_nodes[0].metadata["neograph/each_spec"]["over"] == "items"
+
+    def test_oracle_on_construct_item_lowers_to_variant_flow_nodes_plus_merge(self):
+        from pyagentspec.flows.nodes import FlowNode
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.modifiers import Oracle
+
+        # Same-type boundary: an ensemble re-runs the sub-flow and merges.
+        sub = self._sub(Claims, Claims) | Oracle(n=2, merge_fn="combine")
+        parent = Construct("parent", nodes=[sub])
+
+        flow = to_agent_spec(parent)
+
+        oracle_nodes = [n for n in flow.nodes if n.metadata and n.metadata.get("neograph/modifier") == "oracle"]
+        assert len(oracle_nodes) == 3, "expected 2 variant nodes + 1 merge node, all marker-stamped"
+        variant_nodes = [n for n in oracle_nodes if "neograph/variant" in (n.metadata or {})]
+        assert len(variant_nodes) == 2
+        assert all(isinstance(v, FlowNode) for v in variant_nodes), (
+            "a Construct-item Oracle variant is a copy of the sub-flow -- a FlowNode over the exported sub-Flow"
+        )
+        group_ids = {n.metadata["neograph/group_id"] for n in oracle_nodes}
+        assert len(group_ids) == 1, "all Oracle-group nodes must share one group_id"
+
+    def test_loop_on_construct_item_lowers_to_branching_node_with_marker(self):
+        from pyagentspec.flows.edges import ControlFlowEdge
+        from pyagentspec.flows.nodes import BranchingNode, FlowNode
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.modifiers import Loop
+
+        sub = self._sub(Claims, Claims) | Loop(when="claims_incomplete", max_iterations=3)
+        parent = Construct("parent", nodes=[sub])
+
+        flow = to_agent_spec(parent)
+
+        # The looped body is the Construct's FlowNode; the check is a marker-stamped BranchingNode.
+        assert any(isinstance(n, FlowNode) and n.name == "sub" for n in flow.nodes)
+        branch_nodes = [
+            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get("neograph/modifier") == "loop"
+        ]
+        assert len(branch_nodes) == 1
+        assert branch_nodes[0].metadata["neograph/loop_spec"]["when"] == "claims_incomplete"
+        back_edges = [
+            e
+            for e in flow.control_flow_connections
+            if isinstance(e, ControlFlowEdge)
+            and e.from_node.name == branch_nodes[0].name
+            and e.from_branch == "continue"
+        ]
+        assert len(back_edges) == 1, "expected a cyclic ControlFlowEdge back into the sub-flow body"
+
+    def test_operator_on_construct_item_lowers_to_pause_composite(self):
+        from pyagentspec.flows.nodes import BranchingNode, InputMessageNode
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.modifiers import Operator
+
+        sub = self._sub(RawText, Claims) | Operator(when="needs_review")
+        parent = Construct("parent", nodes=[sub])
+
+        flow = to_agent_spec(parent)
+
+        checks = [
+            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get("neograph/modifier") == "operator"
+        ]
+        assert len(checks) == 1
+        assert checks[0].metadata["neograph/operator_spec"]["when"] == "needs_review"
+        assert checks[0].mapping["true"] == "pause"
+        assert len([n for n in flow.nodes if isinstance(n, InputMessageNode)]) == 1
+
+    def test_bare_construct_item_still_exports_as_plain_flow_node(self):
+        """Regression guard: the fix must NOT change the BARE Construct-item
+        path -- an unmodified sub-construct still lowers to a single FlowNode."""
+        from pyagentspec.flows.nodes import FlowNode
+
+        from neograph._agent_spec import to_agent_spec
+
+        parent = Construct("parent", nodes=[self._sub(RawText, Claims)])
+
+        flow = to_agent_spec(parent)
+
+        flow_nodes = [n for n in flow.nodes if isinstance(n, FlowNode)]
+        assert len(flow_nodes) == 1
+        assert flow_nodes[0].name == "sub"
+
+    def test_each_oracle_on_construct_item_fails_loud(self):
+        from neograph._agent_spec import to_agent_spec
+        from neograph.errors import ConfigurationError
+        from neograph.modifiers import Each, Oracle
+
+        sub = self._sub(Claims, Claims) | Each(over="items", key="label") | Oracle(n=2, merge_fn="combine")
+        parent = Construct("parent", nodes=[sub])
+
+        with pytest.raises(ConfigurationError, match="Each x Oracle fusion is not supported on sub-constructs"):
+            to_agent_spec(parent)
+
+    def test_each_oracle_operator_on_construct_item_fails_loud(self):
+        from neograph._agent_spec import to_agent_spec
+        from neograph.errors import ConfigurationError
+        from neograph.modifiers import Each, Operator, Oracle
+
+        sub = (
+            self._sub(Claims, Claims)
+            | Each(over="items", key="label")
+            | Oracle(n=2, merge_fn="combine")
+            | Operator(when="needs_review")
+        )
+        parent = Construct("parent", nodes=[sub])
+
+        with pytest.raises(ConfigurationError, match="Each x Oracle fusion is not supported on sub-constructs"):
+            to_agent_spec(parent)
+
+
 # ── neograph-5x43u: Portal mode (a) peer mesh EXPORT direction ──────────────
 
 

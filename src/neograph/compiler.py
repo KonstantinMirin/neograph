@@ -49,7 +49,13 @@ from neograph.construct import Construct, iter_nodes
 from neograph.di import DIKind
 from neograph.errors import CompileError, ConfigurationError
 from neograph.factory import make_node_fn
-from neograph.modifiers import ModifierCombo, classify_modifiers
+from neograph.modifiers import (
+    COMBO_DECOMPOSITION,
+    SUB_CONSTRUCT_UNSUPPORTED_COMBOS,
+    ModifierCombo,
+    PrimaryShape,
+    classify_modifiers,
+)
 from neograph.naming import field_name_for
 from neograph.node import Node
 from neograph.state import (
@@ -515,16 +521,21 @@ def _add_subgraph(
     combo, mods = classify_modifiers(sub)
     operator = mods.get("operator")
 
-    match combo:
-        case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
-            # Each x Oracle fusion on Constructs: not supported.
-            raise CompileError.build(
-                "Each x Oracle fusion is not supported on sub-constructs",
-                found="both Oracle and Each modifiers on a sub-construct",
-                hint="Use a Node with map_over + ensemble_n instead",
-                construct=sub.name,
-            )
-        case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
+    # Table-driven dispatch: SUB_CONSTRUCT_UNSUPPORTED_COMBOS is consulted FIRST,
+    # because Each x Oracle folds to primary=EACH in COMBO_DECOMPOSITION (the
+    # fusion is a Node concern) but has no defined lowering on a Construct. After
+    # the gate the primary shape drives dispatch; Operator is the trailing check.
+    if combo in SUB_CONSTRUCT_UNSUPPORTED_COMBOS:
+        # Each x Oracle fusion on Constructs: not supported.
+        raise CompileError.build(
+            "Each x Oracle fusion is not supported on sub-constructs",
+            found="both Oracle and Each modifiers on a sub-construct",
+            hint="Use a Node with map_over + ensemble_n instead",
+            construct=sub.name,
+        )
+
+    match COMBO_DECOMPOSITION[combo].primary:
+        case PrimaryShape.ORACLE:
             oracle = mods["oracle"]
             collector_field = StateKeys.oracle_collector(field_name)
             redirect_fn = make_oracle_redirect_fn(
@@ -543,14 +554,16 @@ def _add_subgraph(
                 scripted_lookup=scripted_lookup,
             )
             last_name = _wire_oracle(graph, sub.name, redirect_fn, merge_fn, oracle, prev_node)
-        case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
+        case PrimaryShape.EACH:
+            # EACH_ORACLE folds here in the table but is rejected above, so only
+            # EACH/EACH_OPERATOR reach this arm.
             each = mods["each"]
             each_fn = make_each_redirect_fn(subgraph_fn, field_name, each, item=sub)
             last_name = _wire_each(graph, sub.name, each_fn, each, prev_node)
-        case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
+        case PrimaryShape.LOOP:
             loop = mods["loop"]
             last_name = _add_subgraph_loop(graph, sub, subgraph_fn, loop, prev_node, condition_lookup=condition_lookup)
-        case ModifierCombo.BARE | ModifierCombo.OPERATOR:
+        case PrimaryShape.BARE:
             # Plain subgraph — no modifiers (or Operator only)
             graph.add_node(sub.name, subgraph_fn)
             if prev_node:
@@ -558,7 +571,7 @@ def _add_subgraph(
             else:
                 graph.add_edge(START, sub.name)
             last_name = sub.name
-        case ModifierCombo.PORTAL | ModifierCombo.PORTAL_OPERATOR:
+        case PrimaryShape.PORTAL:
             # Portal (with or without Operator) on a sub-construct is illegal in
             # v1 (D-MESH-LEVEL); already rejected at assembly — this arm is
             # defense-in-depth + exhaustiveness.
@@ -601,87 +614,93 @@ def _add_node_to_graph(
     # built, so it arrives here as a Construct via _add_subgraph. By here an
     # agent/act Node is guaranteed BARE or OPERATOR-only. See neograph-m6d3.6.
 
-    match combo:
-        case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
-            # Each x Oracle fusion: flat M x N Send topology
-            last_name = _add_each_oracle_fused(
-                graph,
-                node,
-                mods["each"],
-                mods["oracle"],
-                prev_node,
-                runtime=runtime,
-                scripted_lookup=scripted_lookup,
-                tool_factory_lookup=tool_factory_lookup,
-            )
-        case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
-            # Oracle: expand to fan-out + merge
-            last_name = _add_oracle_nodes(
-                graph,
-                node,
-                mods["oracle"],
-                prev_node,
-                runtime=runtime,
-                scripted_lookup=scripted_lookup,
-                tool_factory_lookup=tool_factory_lookup,
-            )
-        case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
-            # Each: expand to fan-out + barrier
-            last_name = _add_each_nodes(
-                graph,
-                node,
-                mods["each"],
-                prev_node,
-                runtime=runtime,
-                scripted_lookup=scripted_lookup,
-                tool_factory_lookup=tool_factory_lookup,
-            )
-        case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
-            # Loop: conditional back-edge
-            last_name = _add_loop_back_edge(
-                graph,
-                node,
-                mods["loop"],
-                prev_node,
-                runtime=runtime,
-                scripted_lookup=scripted_lookup,
-                condition_lookup=condition_lookup,
-                tool_factory_lookup=tool_factory_lookup,
-            )
-        case ModifierCombo.BARE | ModifierCombo.OPERATOR:
-            if node.mode in ("agent", "act"):
-                # Agent/act: inline ReAct cycle (agent/tools/parse + conditional router).
-                last_name = _add_agent_cycle(
+    # Table-driven dispatch: the primary shape from COMBO_DECOMPOSITION drives the
+    # match; Operator is the trailing `if operator:` check. Each x Oracle folds to
+    # primary=EACH in the table (the fusion is a Node concern), so the fused M x N
+    # topology is split out first via the co-presence of both modifier instances
+    # this arm already consumes — not a second combo enumeration.
+    if mods.get("each") is not None and mods.get("oracle") is not None:
+        # Each x Oracle fusion: flat M x N Send topology
+        last_name = _add_each_oracle_fused(
+            graph,
+            node,
+            mods["each"],
+            mods["oracle"],
+            prev_node,
+            runtime=runtime,
+            scripted_lookup=scripted_lookup,
+            tool_factory_lookup=tool_factory_lookup,
+        )
+    else:
+        match COMBO_DECOMPOSITION[combo].primary:
+            case PrimaryShape.ORACLE:
+                # Oracle: expand to fan-out + merge
+                last_name = _add_oracle_nodes(
                     graph,
                     node,
+                    mods["oracle"],
                     prev_node,
                     runtime=runtime,
+                    scripted_lookup=scripted_lookup,
                     tool_factory_lookup=tool_factory_lookup,
+                )
+            case PrimaryShape.EACH:
+                # Each: expand to fan-out + barrier (EACH_ORACLE fusion handled above)
+                last_name = _add_each_nodes(
+                    graph,
+                    node,
+                    mods["each"],
+                    prev_node,
+                    runtime=runtime,
+                    scripted_lookup=scripted_lookup,
+                    tool_factory_lookup=tool_factory_lookup,
+                )
+            case PrimaryShape.LOOP:
+                # Loop: conditional back-edge
+                last_name = _add_loop_back_edge(
+                    graph,
+                    node,
+                    mods["loop"],
+                    prev_node,
+                    runtime=runtime,
+                    scripted_lookup=scripted_lookup,
                     condition_lookup=condition_lookup,
+                    tool_factory_lookup=tool_factory_lookup,
                 )
-            else:
-                # Simple node — no modifiers (or Operator only)
-                node_name = node.name
-                node_fn = make_node_fn(
-                    node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup
-                )
-                graph.add_node(node_name, node_fn)
-                if prev_node:
-                    graph.add_edge(prev_node, node_name)
+            case PrimaryShape.BARE:
+                if node.mode in ("agent", "act"):
+                    # Agent/act: inline ReAct cycle (agent/tools/parse + conditional router).
+                    last_name = _add_agent_cycle(
+                        graph,
+                        node,
+                        prev_node,
+                        runtime=runtime,
+                        tool_factory_lookup=tool_factory_lookup,
+                        condition_lookup=condition_lookup,
+                    )
                 else:
-                    graph.add_edge(START, node_name)
-                last_name = node_name
-        case ModifierCombo.PORTAL | ModifierCombo.PORTAL_OPERATOR:
-            # Unreachable: the mesh-aware walk (M1) lowers a contiguous mesh via
-            # _add_portal_mesh before per-node dispatch. Arm kept for match
-            # exhaustiveness; fails loud if the walk ever regresses.
-            raise CompileError.build(
-                "Portal member reached per-node dispatch",
-                found=f"Portal node '{node.name}' dispatched individually",
-                hint="the compile walk must collapse the contiguous mesh (M1)",
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
+                    # Simple node — no modifiers (or Operator only)
+                    node_name = node.name
+                    node_fn = make_node_fn(
+                        node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup
+                    )
+                    graph.add_node(node_name, node_fn)
+                    if prev_node:
+                        graph.add_edge(prev_node, node_name)
+                    else:
+                        graph.add_edge(START, node_name)
+                    last_name = node_name
+            case PrimaryShape.PORTAL:
+                # Unreachable: the mesh-aware walk (M1) lowers a contiguous mesh via
+                # _add_portal_mesh before per-node dispatch. Arm kept for match
+                # exhaustiveness; fails loud if the walk ever regresses.
+                raise CompileError.build(
+                    "Portal member reached per-node dispatch",
+                    found=f"Portal node '{node.name}' dispatched individually",
+                    hint="the compile walk must collapse the contiguous mesh (M1)",
+                )
+            case _ as unreachable:
+                assert_never(unreachable)
 
     # Operator stacking: add interrupt check after the primary modifier
     if operator:

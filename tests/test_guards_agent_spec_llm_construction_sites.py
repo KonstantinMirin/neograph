@@ -155,8 +155,10 @@ NODE_SITE_EXEMPTIONS: frozenset[tuple[str, str]] = frozenset(
 # added -- verify it has a paired _translate_placeholders/_node_translation call
 # OR a named exemption OR a ticketed shrinking-allowlist entry; never silent
 # drift. Current census (grep-verified, src/neograph/_agent_spec.py):
-#   node sites (4): LlmNode _lower_generation_step + _lower_oracle merge_node,
-#     AgentNode _lower_generation_step, InputMessageNode Portal-input.
+#   node sites (6): LlmNode _lower_generation_step + _lower_oracle merge_node,
+#     AgentNode _lower_generation_step, InputMessageNode Portal-input (_lower_operator),
+#     AND the Phase-6 PORTAL_OPERATOR mesh-exit composite (neograph-s7zt3.2):
+#     AgentNode(Swarm) + pause InputMessageNode, both in _lower_portal_mesh_to_swarm.
 #   _make_agent (2): _lower_generation_step (paired), _lower_portal_mesh_to_swarm
 #     (paired since the s7zt3.1 fix).
 # neograph-2s2o6 consolidation: _lower_node's + _lower_oracle-variant's two
@@ -166,18 +168,27 @@ NODE_SITE_EXEMPTIONS: frozenset[tuple[str, str]] = frozenset(
 # _lower_oracle merge_prompt LlmNode). Fewer physical sites, SAME pairing
 # invariant -- the guard's discriminating power (the _unpaired check + meta-guard)
 # is unchanged; these counts are the census tripwire, not the safety net.
-EXPECTED_NODE_SITES = 4
+# neograph-s7zt3.2 (Phase 6): the PORTAL_OPERATOR mesh-exit pause composite adds
+# TWO more collected sites in _lower_portal_mesh_to_swarm -- AgentNode(agent=Swarm)
+# and a prompt-less InputMessageNode pause. Both land AFTER that function's own
+# per-member _translate_placeholders loop, so both are translation-PAIRED by the
+# lineno heuristic (the InputMessageNode carries no ${var} -- outputs-only, like
+# _lower_operator's -- so its "paired" tag is a benign over-count, not a safety
+# concern). Neither can leak an untranslated ${var} to the wire.
+EXPECTED_NODE_SITES = 6
 EXPECTED_MAKE_AGENT_SITES = 2
-EXPECTED_PAIRED_NODE_SITES = 3  # 4 collected minus InputMessageNode (exempt)
+EXPECTED_PAIRED_NODE_SITES = 5  # 6 collected minus the ONE unpaired _lower_operator InputMessageNode (exempt)
 EXPECTED_PAIRED_MAKE_AGENT_SITES = 2  # ALL of them -- no allowlist since the s7zt3.1 fix
 
 # Req-4 reconciliation: post-2s2o6 the 5 SEMANTIC matrix dispatch branches
 # (_lower_node{think,agent/act} + _lower_oracle{think-variant,agent/act-variant,
-# merge_prompt}) lower through the shared _lower_generation_step, so they collapse
-# onto 3 PHYSICAL placeholder-coupled construction sites. The guard's paired
-# NODE-site count must equal this physical count (a lost/added physical site still
-# fails loud); it is NO LONGER the semantic-branch count (which stays 5).
-PHYSICAL_COUPLED_SITES = 3
+# merge_prompt}) lower through the shared _lower_generation_step, collapsing onto
+# 3 PHYSICAL placeholder-coupled sites; Phase 6's mesh-exit composite adds 2 more
+# paired physical sites (AgentNode(Swarm) + pause InputMessageNode in
+# _lower_portal_mesh_to_swarm), for 5 total. The guard's paired NODE-site count
+# must equal this physical count (a lost/added physical site still fails loud);
+# it is NOT the semantic-branch count.
+PHYSICAL_COUPLED_SITES = 5
 
 
 class TestPlaceholderEmittingSitesAreExhaustivelyCollected:
@@ -196,7 +207,7 @@ class TestPlaceholderEmittingSitesAreExhaustivelyCollected:
         by_name: dict[str, int] = {}
         for s in NODE_SITES:
             by_name[s.name] = by_name.get(s.name, 0) + 1
-        assert by_name == {"LlmNode": 2, "AgentNode": 1, "InputMessageNode": 1}, (
+        assert by_name == {"LlmNode": 2, "AgentNode": 2, "InputMessageNode": 2}, (
             f"coupled-constructor breakdown drifted: {by_name}"
         )
 

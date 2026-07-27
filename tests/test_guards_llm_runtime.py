@@ -1127,6 +1127,29 @@ class TestNormalizeIrIsSoleIrFieldWriter:
             "re-creates the drift class of neograph-vgc1/aqau/20xq)."
         )
 
+    def test_tool_trigger_adds_no_new_node_ir_field(self):
+        """Portal tool-triggered handoff (``trigger="tool"``, neograph-s7zt3.14)
+        adds ZERO new Node-level IR field (design portal-tool-triggered-handoff
+        §6 guard 3): the capability reuses ``Portal.to`` + the existing
+        ``handoff_param``/``handoff_channel`` machinery. This pins the
+        single-writer set to exactly the four fields — a new normalizer-written
+        field would have to be added here, failing this test and forcing a
+        conscious review — and confirms the trigger sub-mode lives on the Portal
+        modifier and the transient handoff sentinel is a state-bus key, neither a
+        Node IR field."""
+        from neograph.node import Node
+
+        assert self.IR_FIELDS == frozenset(
+            {"fan_out_param", "oracle_gen_type", "handoff_param", "handoff_channel"}
+        )
+        for field in self.IR_FIELDS:
+            assert field in Node.model_fields, f"IR field {field!r} must exist on the Node model"
+        # The trigger sub-mode is a Portal field; the tool-trigger sentinel is a
+        # transient state-bus key (StateKeys.handoff_tool_target) — neither is a
+        # Node IR field.
+        assert "trigger" not in Node.model_fields
+        assert "handoff_tool_target" not in Node.model_fields
+
     # Named so the regex carries a slip meta-test (PROC-2). Matches the exact
     # set of removed per-field Construct methods.
     _NORMALIZE_FIELD_RE = re.compile(r"_normalize_(fan_out_params|oracle_gen_type)")

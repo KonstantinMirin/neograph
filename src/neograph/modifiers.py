@@ -696,6 +696,7 @@ class Portal(Modifier, frozen=True):
     # -- mode (a): peer routing --
     to: list[str] | None = None  # declared successor names (directed, per-node)
     route: str = "goto"  # mode (a): routing FIELD on the payload model; mode (b): literal "decide"
+    trigger: Literal["output", "tool"] = "output"  # peer mode only: how the member decides its goto
     max_hops: int = 10  # mesh budget; settable ONLY on the entry member
     on_exhaust: Literal["error", "exit"] = "error"
     name: str | None = None  # mesh group name (peer mode only); None = the implicit default group
@@ -722,6 +723,22 @@ class Portal(Modifier, frozen=True):
         guard that bans the inline literal outside this module).
         """
         return self.route == DISPATCH_ROUTE
+
+    @property
+    def is_tool_triggered(self) -> bool:
+        """Peer-mode sub-mode discriminator (design portal-tool-triggered-handoff).
+
+        True when a PEER-mode member decides its handoff by emitting a
+        synthesized ``transfer_to_<peer>`` tool call from its ReAct turn
+        (``trigger == "tool"``), rather than by writing a routing field on its
+        typed output (``trigger == "output"``, the default). The direct sibling
+        of ``is_dispatch``: the SINGLE SOURCE OF TRUTH every layer (validator,
+        wiring, factory) reads to distinguish the trigger sub-mode — never an
+        inline ``trigger == "tool"`` check. Always False in dispatch mode (a
+        ``route="decide"`` Portal is not a peer member and cannot trigger a
+        tool handoff), guarded by ``not self.is_dispatch``.
+        """
+        return not self.is_dispatch and self.trigger == "tool"
 
     def model_post_init(self, __context: Any) -> None:
         is_peer = self.to is not None
@@ -769,11 +786,11 @@ class Portal(Modifier, frozen=True):
                     expected="spec_field=, input_field=, output=, max_depth=",
                     found=f"missing: {missing}",
                 )
-            forbidden = [k for k in ("max_hops", "on_exhaust", "name") if k in self.model_fields_set]
+            forbidden = [k for k in ("max_hops", "on_exhaust", "name", "trigger") if k in self.model_fields_set]
             if forbidden:
                 raise ConfigurationError.build(
                     "Portal dispatch mode forbids peer-mode knobs",
-                    expected="no max_hops/on_exhaust/name in dispatch mode",
+                    expected="no max_hops/on_exhaust/name/trigger in dispatch mode",
                     found=f"peer-mode knobs set: {forbidden}",
                 )
             if self.on_invalid == "route_to_error" and self.error_handler is None:

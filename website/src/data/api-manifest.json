@@ -478,6 +478,12 @@
           "required": false
         },
         {
+          "annotation": "Literal['output', 'tool']",
+          "default": "'output'",
+          "name": "trigger",
+          "required": false
+        },
+        {
           "annotation": "int",
           "default": "10",
           "name": "max_hops",
@@ -546,7 +552,7 @@
       ],
       "kind": "pydantic_model",
       "name": "Portal",
-      "signature": "(to: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', name: str | None = None, spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise', 'route_to_error'] = 'raise', error_handler: str | None = None, max_depth: int | None = None)"
+      "signature": "(to: list[str] | None = None, route: str = 'goto', trigger: Literal['output', 'tool'] = 'output', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', name: str | None = None, spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise', 'route_to_error'] = 'raise', error_handler: str | None = None, max_depth: int | None = None)"
     },
     {
       "anchor": "handoff_end",

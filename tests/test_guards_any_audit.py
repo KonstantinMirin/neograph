@@ -97,7 +97,9 @@ ANY_ALLOWLIST: dict[str, str] = {
     "factory.py:_extract_input:return": "user-supplied extracted input; type declared by node.inputs",
     # ── factory.py — Portal routing decision (neograph-nnds9 extraction) ──
     "factory.py:_portal_route_to_command:update": "state update dict; values typed by user node outputs",
+    "factory.py:_tool_handoff_to_command:update": "state update dict; values typed by user node outputs (tool-triggered handoff sibling of _portal_route_to_command)",
     "factory.py:make_portal_agent_cycle_fn:return": "ReAct-cycle body dict; callables typed by _agent_cycle, opaque here",
+    "factory.py:make_portal_agent_cycle_tool_handoff_fn:return": "ReAct-cycle body dict; callables typed by _agent_cycle, opaque here (tool-triggered sibling of make_portal_agent_cycle_fn)",
     # ── _wiring.py — shared agent-cycle wiring (neograph-nnds9) ──
     "_wiring.py:_wire_agent_cycle_body:parts": "ReAct-cycle body dict from make_agent_cycle_bodies/make_portal_agent_cycle_fn; opaque here",
     # ── _dispatch.py — render boundary; context_data is now precise (dict[str, str]) ──

@@ -156,6 +156,26 @@ def _check_one_mesh_group(
                 hint="agent/act and sub-construct mesh members do not yet support the approval-node splice",
             )
 
+        # trigger="tool" (design portal-tool-triggered-handoff §4): the member
+        # emits a synthesized transfer_to_<peer> tool call from its ReAct turn,
+        # so it MUST have a ReAct turn — an atomic (scripted/think/raw) Node or a
+        # Construct member has no tool-call loop to trigger a handoff from. Narrow
+        # rejection mirroring the dict-form / Operator-mode checks above (same
+        # per-member loop, same ConstructError shape).
+        member_portal = getattr(getattr(member, "modifier_set", None), "portal", None)
+        if member_portal is not None and member_portal.is_tool_triggered:
+            if not (isinstance(member, Node) and member.mode in ("agent", "act")):
+                found = "sub-construct" if not isinstance(member, Node) else f"{member.mode}-mode"
+                raise ConstructError.build(
+                    f'Portal mesh member \'{name}\' sets trigger="tool" on a {found} member',
+                    expected='trigger="tool" requires an agent/act member',
+                    found=f'trigger="tool" on a {found} member',
+                    node=name,
+                    construct=construct.name,
+                    location=_source_location(),
+                    hint="an atomic or sub-construct member has no ReAct tool-call turn to trigger a handoff from",
+                )
+
     # Past the shape checks every member is a Portal-modified Node OR a
     # Portal-modified Construct. The rules below read only the Portal-agnostic
     # surface (``.name`` / ``_declared_output`` / ``modifier_set.portal``); the

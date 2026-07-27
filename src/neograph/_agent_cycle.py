@@ -70,6 +70,7 @@ from neograph._tool_loop import (
 )
 from neograph.describe_type import type_display_name
 from neograph.errors import ConfigurationError
+from neograph.modifiers import Portal
 from neograph.naming import field_name_for
 from neograph.node import Node, TypeSpecStatic
 from neograph.tool import (
@@ -237,14 +238,72 @@ def _tracker_from_budget(node: Node, budget: dict[str, Any]) -> ToolBudgetTracke
     return tracker
 
 
-def _agent_caller(prep_prep: Any, node: Node, budget: dict[str, Any]) -> Any:
+# Reserved prefix for synthesized tool-triggered-handoff tools (Portal
+# trigger='tool', design portal-tool-triggered-handoff §3.1). One
+# ``transfer_to_<peer>`` tool per declared peer — never persisted into
+# ``Node.tools`` / any IR field, never registered via register_tool_factory.
+_HANDOFF_TOOL_PREFIX = "transfer_to_"
+
+
+def _handoff_targets(handoff_portal: Portal | None) -> dict[str, str]:
+    """Map ``transfer_to_<peer>`` tool name -> peer name for a tool-triggered
+    Portal member (design §3.2). Empty when the member is not tool-triggered, so
+    every detection site short-circuits to the ordinary tool-call path."""
+    if handoff_portal is None:
+        return {}
+    return {f"{_HANDOFF_TOOL_PREFIX}{peer}": peer for peer in (handoff_portal.to or ())}
+
+
+def _synthesize_handoff_tools(handoff_portal: Portal) -> dict[str, Any]:
+    """Build the ephemeral ``transfer_to_<peer>`` handoff tools bound for one
+    tool-triggered agent turn (design §3.1). One StructuredTool per declared peer
+    in ``handoff_portal.to`` — NEVER added to ``node.tools``, never registered
+    via ``register_tool_factory``, never round-tripped through the IR. Mirrors
+    ``tool.py``'s ``resource_reader``/``_build_read_blob`` ad-hoc StructuredTool
+    pattern.
+
+    The tool body is a trivial stub whose result is never observed:
+    :func:`_tool_call_precheck`'s handoff branch intercepts the call by NAME
+    before ``tool_instances.get(name)`` is ever reached, so the call is a pure
+    routing signal, not a computation. StructuredTool requires a non-None
+    ``func``/``coroutine`` to construct, so the stub stands in for "no body". The
+    optional ``reason`` arg is model self-explanation only — routing reads the
+    tool NAME, never its args.
+    """
+    from langchain_core.tools import StructuredTool
+    from pydantic import create_model
+
+    tools: dict[str, Any] = {}
+    for peer in handoff_portal.to or ():
+        name = f"{_HANDOFF_TOOL_PREFIX}{peer}"
+        args_schema = create_model(f"{name}_Args", reason=(str, ""))
+        tools[name] = StructuredTool(
+            name=name,
+            description=f"Transfer control to the '{peer}' agent to continue handling the request.",
+            args_schema=args_schema,
+            func=lambda **_: "transfer requested",
+            coroutine=None,
+        )
+    return tools
+
+
+def _agent_caller(prep_prep: Any, node: Node, budget: dict[str, Any], handoff_portal: Portal | None = None) -> Any:
     """Bind the LLM for one agent turn. Unbound when forced-final (exhaustion/
     guard) so the model must produce a final answer; otherwise bound to the tools
-    that still have budget."""
+    that still have budget.
+
+    ``handoff_portal`` (non-None only for a tool-triggered Portal member) folds
+    the synthesized ``transfer_to_<peer>`` tools into the bound set so the model
+    can actually emit a handoff call. Handoff tools are bound UNCONDITIONALLY
+    (never gated by ``tracker.can_call`` — a handoff is a control-flow action,
+    not budget-metered work) and are absent from ``node.tools``, so every budget/
+    idempotency mechanism keyed off ``node.tools`` skips them for free."""
     if budget.get("forced_final"):
         return prep_prep.llm
     tracker = _tracker_from_budget(node, budget)
     active = [prep_prep.tool_instances[t.name] for t in node.tools if tracker.can_call(t.name)]
+    if handoff_portal is not None:
+        active = active + list(_synthesize_handoff_tools(handoff_portal).values())
     if not active:
         return prep_prep.llm
     return _CoercingToolWrapper(prep_prep.llm.bind_tools(active))
@@ -384,12 +443,20 @@ def _tool_call_precheck(
     tc: dict,
     tracker: ToolBudgetTracker,
     tool_instances: dict,
+    handoff_targets: dict[str, str] | None = None,
 ) -> tuple[str, Any]:
-    """Pure pre-invoke check for one tool call. Returns ``("msg", ToolMessage)``
-    to short-circuit (unparseable args / budget exhausted / unknown tool) or
-    ``("run", tool_fn)``. Single-sites the short-circuit ToolMessage builders
-    across the twins."""
+    """Pure pre-invoke check for one tool call. Returns ``("handoff", peer)`` for
+    a synthesized ``transfer_to_<peer>`` call (design §3.2), ``("msg",
+    ToolMessage)`` to short-circuit (unparseable args / budget exhausted /
+    unknown tool), or ``("run", tool_fn)``. Single-sites the short-circuit
+    ToolMessage builders across the twins."""
     name = tc["name"]
+    # Tool-triggered-handoff detection FIRST (design §3.2): a synthesized
+    # transfer_to_<peer> call is a pure routing signal, never a real tool — it is
+    # intercepted by NAME before any arg-parse / budget / tool_instances lookup,
+    # so it never touches the budget tracker or the idempotency cache.
+    if handoff_targets and name in handoff_targets:
+        return "handoff", handoff_targets[name]
     # Unparseable args neograph-arus: the coercion path could not JSON-parse the
     # provider's args string, so it stamped the marker rather than blanking to {}.
     # Emit a RETRIABLE error to the LLM (so it can re-emit valid args) instead of
@@ -465,6 +532,24 @@ def _build_tool_interaction(
         duration_ms=elapsed_ms,
     )
     return interaction, ToolMessage(content=rendered, tool_call_id=tc["id"])
+
+
+def _handoff_ack(tc: dict, peer: str) -> tuple[ToolInteraction, ToolMessage]:
+    """Acknowledge a detected ``transfer_to_<peer>`` call (design §3.2): the
+    LLM-visible confirmation ``ToolMessage`` (mirrors the reference swarm's
+    "Successfully transferred to {peer}") + a ``ToolInteraction`` for tool_log/
+    observability parity. No tool ran (the call is a pure routing signal), so
+    ``duration_ms=0`` and ``typed_result=None``. Answering the ``tool_call_id``
+    keeps the LLM turn well-formed even when other calls share the batch."""
+    content = f"Successfully transferred to {peer}"
+    interaction = ToolInteraction(
+        tool_name=tc["name"],
+        args=tc.get("args", {}),
+        result=content,
+        typed_result=None,
+        duration_ms=0,
+    )
+    return interaction, ToolMessage(content=content, tool_call_id=tc["id"])
 
 
 def _record_tool_result(
@@ -544,11 +629,20 @@ def make_agent_cycle_bodies(
     *,
     runtime: LlmRuntime = EMPTY_RUNTIME,
     tool_factory_lookup: dict[str, Callable] | None = None,
+    handoff_portal: Portal | None = None,
 ) -> dict[str, Any]:
     """Build the three node bodies + router for an agent/act node's inline cycle.
 
     Returns a dict with sync+async callables for agent/tools/parse plus the
     router, ready for ``_wiring._add_agent_cycle`` to attach to the graph.
+
+    ``handoff_portal`` (non-None only for a tool-triggered Portal mesh member,
+    design §3.1) folds the synthesized ``transfer_to_<peer>`` tools into every
+    agent turn's bound tool set and makes the tools superstep detect a handoff
+    call, stamping the chosen peer onto a transient sentinel key the factory
+    Command-builder reads. ``None`` (every non-tool-triggered node — the two
+    existing call sites) is fully zero-behavior-change: no handoff tools are
+    bound and the sentinel is never written.
     """
     tfl = tool_factory_lookup or {}
     field = field_name_for(node.name)
@@ -556,6 +650,8 @@ def make_agent_cycle_bodies(
     tlog_key = StateKeys.agent_tool_log(field)
     manifest_key = StateKeys.resource_manifest(field)
     budget_key = StateKeys.agent_budget(field)
+    handoff_target_key = StateKeys.handoff_tool_target(field)
+    handoff_targets = _handoff_targets(handoff_portal)
     names = cycle_names(node.name)
     # Per-tool idempotency neograph-lhc6 stamped onto each lifted ref's producing
     # call so hydration replay neograph-a5nh can gate on it. A raw BaseTool with
@@ -570,7 +666,7 @@ def make_agent_cycle_bodies(
             return early
         tp = _build_turn_prep(node, runtime, tfl, state, config)
         working, seed = _agent_working_messages(tp.prep, channel_msgs)
-        caller = _agent_caller(tp.prep, node, budget)
+        caller = _agent_caller(tp.prep, node, budget, handoff_portal)
         response = caller.invoke(working, config=config)
         return _agent_turn_finalize(tp, response, budget, was_forced, seed, msgs_key, budget_key)
 
@@ -581,7 +677,7 @@ def make_agent_cycle_bodies(
             return early
         tp = await _abuild_turn_prep(node, runtime, tfl, state, config)
         working, seed = _agent_working_messages(tp.prep, channel_msgs)
-        caller = _agent_caller(tp.prep, node, budget)
+        caller = _agent_caller(tp.prep, node, budget, handoff_portal)
         response = await caller.ainvoke(working, config=config)
         return _agent_turn_finalize(tp, response, budget, was_forced, seed, msgs_key, budget_key)
 
@@ -638,27 +734,54 @@ def make_agent_cycle_bodies(
         return None, tool_calls, _tracker_from_budget(node, budget)
 
     def _tools_result(
-        new_msgs: list, interactions: list, refs: list, tracker: Any, budget: dict[str, Any]
+        new_msgs: list,
+        interactions: list,
+        refs: list,
+        tracker: Any,
+        budget: dict[str, Any],
+        handoff_target: str | None = None,
     ) -> dict[str, Any]:
         """Persist per-tool call counts, force-final on full exhaustion, assemble
-        the state update. Shared postamble for both twins."""
+        the state update. Shared postamble for both twins.
+
+        ``handoff_target`` (non-None only for a tool-triggered member that emitted
+        a ``transfer_to_<peer>`` call) stamps the TRANSIENT sentinel key the
+        factory Command-builder pops back out before it constructs the
+        ``Command(update=...)`` — so it never enters LangGraph state."""
         budget["calls"] = dict(tracker._counts)
         if tracker.all_exhausted():
             budget["forced_final"] = True
-        return {msgs_key: new_msgs, tlog_key: interactions, manifest_key: refs, budget_key: budget}
+        update = {msgs_key: new_msgs, tlog_key: interactions, manifest_key: refs, budget_key: budget}
+        if handoff_target is not None:
+            update[handoff_target_key] = handoff_target
+        return update
 
     def _run_tool_calls(
         tool_calls: list, tracker: Any, tp: _TurnPrep, config: RunnableConfig, repeat_cache: dict[str, str]
-    ) -> tuple[list, list, list]:
+    ) -> tuple[list, list, list, str | None]:
         """Sync execution seam: precheck → repeat-guard → invoke → advance-then-record, one call
         at a time in tool_call order. Divergent twin of ``_arun_tool_calls``
         (which pre-reserves budget before a concurrent gather); the sync path has
-        no gather, so it advances the tracker inline per successful call."""
+        no gather, so it advances the tracker inline per successful call.
+
+        Returns ``(new_msgs, interactions, refs, handoff_target)``. A detected
+        ``transfer_to_<peer>`` call answers its own ``tool_call_id`` and records
+        a ToolInteraction; the FIRST such call in tool_call order wins the routing
+        target (design §3.2), while any remaining calls in the batch are still
+        answered so the LLM turn is never left with an unanswered id."""
         new_msgs: list = []
         interactions: list = []
         refs: list = []
+        handoff_target: str | None = None
         for tc in tool_calls:
-            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances)
+            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances, handoff_targets)
+            if kind == "handoff":
+                interaction, msg = _handoff_ack(tc, payload)
+                interactions.append(interaction)
+                new_msgs.append(msg)
+                if handoff_target is None:
+                    handoff_target = payload
+                continue
             if kind == "msg":
                 new_msgs.append(payload)
                 continue
@@ -680,11 +803,11 @@ def make_agent_cycle_bodies(
             interactions.append(interaction)
             refs.extend(_lift_resource_refs(result, tc, idempotent_by_tool.get(tc["name"], False)))
             new_msgs.append(msg)
-        return new_msgs, interactions, refs
+        return new_msgs, interactions, refs, handoff_target
 
     async def _arun_tool_calls(
         tool_calls: list, tracker: Any, tp: _TurnPrep, config: RunnableConfig, repeat_cache: dict[str, str]
-    ) -> tuple[list, list, list]:
+    ) -> tuple[list, list, list, str | None]:
         """Async execution seam — the ONLY divergence from ``_run_tool_calls`` is
         concurrency neograph-dyy7. CRITICAL: Phase 1 pre-reserves each runnable
         call's budget SEQUENTIALLY, in tool_call order, BEFORE the gather — do NOT
@@ -694,12 +817,17 @@ def make_agent_cycle_bodies(
         plain gather-then-record would let both through because their can_call
         checks would race ahead of any record_call. ``plan`` preserves the
         original tool_call order so the ToolMessage / ToolInteraction message
-        history holds regardless of which coroutine finishes first."""
+        history holds regardless of which coroutine finishes first. A
+        ``transfer_to_<peer>`` handoff call is planned (never gathered — it runs
+        no coroutine) and the FIRST one wins the routing target in Phase 3."""
         # Phase 1 (sequential, in tool_call order): precheck + repeat-guard + PRE-RESERVE budget.
-        plan: list[tuple[str, Any]] = []  # ("msg", ToolMessage) | ("run", tc)
+        plan: list[tuple[str, Any]] = []  # ("handoff", (tc, peer)) | ("msg", ToolMessage) | ("run", tc)
         coros = []
         for tc in tool_calls:
-            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances)
+            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances, handoff_targets)
+            if kind == "handoff":
+                plan.append(("handoff", (tc, payload)))
+                continue
             if kind == "msg":
                 plan.append(("msg", payload))
                 continue
@@ -719,8 +847,17 @@ def make_agent_cycle_bodies(
         new_msgs: list = []
         interactions: list = []
         refs: list = []
+        handoff_target: str | None = None
         result_iter = iter(results)
         for kind, payload in plan:
+            if kind == "handoff":
+                tc, peer = payload
+                interaction, msg = _handoff_ack(tc, peer)
+                interactions.append(interaction)
+                new_msgs.append(msg)
+                if handoff_target is None:
+                    handoff_target = peer
+                continue
             if kind == "msg":
                 new_msgs.append(payload)
                 continue
@@ -733,7 +870,7 @@ def make_agent_cycle_bodies(
             interactions.append(interaction)
             refs.extend(_lift_resource_refs(result, tc, idempotent_by_tool.get(tc["name"], False)))
             new_msgs.append(msg)
-        return new_msgs, interactions, refs
+        return new_msgs, interactions, refs, handoff_target
 
     def tools_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         bus = adapt_state(state)
@@ -743,8 +880,8 @@ def make_agent_cycle_bodies(
         if early is not None:
             return early
         repeat_cache = _seed_repeat_cache(bus.get(tlog_key), idempotent_by_tool)
-        new_msgs, interactions, refs = _run_tool_calls(tool_calls, tracker, tp, config, repeat_cache)
-        return _tools_result(new_msgs, interactions, refs, tracker, budget)
+        new_msgs, interactions, refs, handoff_target = _run_tool_calls(tool_calls, tracker, tp, config, repeat_cache)
+        return _tools_result(new_msgs, interactions, refs, tracker, budget, handoff_target)
 
     async def atools_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         bus = adapt_state(state)
@@ -754,8 +891,10 @@ def make_agent_cycle_bodies(
         if early is not None:
             return early
         repeat_cache = _seed_repeat_cache(bus.get(tlog_key), idempotent_by_tool)
-        new_msgs, interactions, refs = await _arun_tool_calls(tool_calls, tracker, tp, config, repeat_cache)
-        return _tools_result(new_msgs, interactions, refs, tracker, budget)
+        new_msgs, interactions, refs, handoff_target = await _arun_tool_calls(
+            tool_calls, tracker, tp, config, repeat_cache
+        )
+        return _tools_result(new_msgs, interactions, refs, tracker, budget, handoff_target)
 
     # ── {node}__parse ─────────────────────────────────────────────────────
     def _finish_and_shape(state, config, tp, channel_msgs, tool_interactions, budget, parse_result, fallback_usage):

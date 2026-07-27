@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 import yaml  # type: ignore[import-untyped]
@@ -30,6 +30,7 @@ from neograph._agent_spec import (
     _MARK_MODIFIER,
     _MARK_OPERATOR_SPEC,
     _MARK_ORACLE_SPEC,
+    _MARK_PORTAL_OPERATOR_SPEC,
     _MARK_PORTAL_SPEC,
     _MARK_PROMPT_SPEC,
     _MARK_TOOL_SPEC,
@@ -687,6 +688,53 @@ def _synthesize_swarm_payload(swarm: Any, agents: list[Any]) -> type[BaseModel]:
     return create_model(f"{swarm.name}_SwarmHandoff", __base__=BaseModel, **fields)
 
 
+def _swarm_trigger(swarm: Any) -> Literal["output", "tool"]:
+    """Map a ``Swarm.handoff`` mode onto a native Portal ``trigger`` (C1 import,
+    grounded in the swarm-langgraph-compilation-spike).
+
+    ``HandoffMode.OPTIONAL``/``ALWAYS`` (or the bool ``True``) -> ``"tool"``: the
+    reference LangGraph adapter compiles BOTH to one bound ``transfer_to_<peer>``
+    tool per relationship (byte-identical — do NOT try to split OPTIONAL vs
+    ALWAYS, that distinction does not materially exist in the backend), which
+    neograph now represents natively as ``Portal(trigger="tool")`` (s7zt3.14).
+    ``HandoffMode.NEVER`` (or ``False``/absent) -> ``"output"``: the member never
+    initiates a transfer, so it keeps the existing typed-``goto`` routing.
+    """
+    handoff = getattr(swarm, "handoff", None)
+    if handoff is True:
+        return "tool"
+    if handoff is False or handoff is None:
+        return "output"
+    value = getattr(handoff, "value", handoff)  # HandoffMode enum -> its str value
+    return "tool" if value in ("optional", "always") else "output"
+
+
+def _flow_member_to_construct(agent: Any, payload: type[BaseModel]) -> Construct:
+    """Reconstruct a Flow Swarm member (C1) onto a Construct mesh member whose
+    boundary I/O is the synthesized uniform mesh ``payload`` (by identity).
+
+    Reuses the SAME ``from_agent_spec`` FlowNode->Construct recursion the
+    bare-FlowNode item path uses, then forces BOTH the Construct boundary
+    (``input``/``output``) AND its terminal interior producer's ``outputs`` to
+    ``payload`` — the sub-construct output-boundary validator requires an internal
+    node to actually produce the declared ``output`` type, and a round-tripped
+    interior re-synthesizes its own per-node types (agent-spec export does not
+    preserve type identity), so the boundary alone would not satisfy it. This is
+    the Construct-member analog of forcing an Agent member's ``outputs=payload``
+    (a foreign Swarm member never produced a ``goto`` value either) — a best-
+    effort structural import, flagged by the caller's mesh-level warning, not a
+    behaviorally-faithful foreign runtime. A non-Node terminal item (e.g. a
+    nested Construct) is left untouched: it will fail LOUD at the boundary check
+    rather than being silently mis-coerced, per the maintainer's fail-loud-over-
+    silent default for the interior-already-fixed case.
+    """
+    sub = from_agent_spec(agent)
+    nodes = list(sub.nodes)
+    if nodes and isinstance(nodes[-1], Node):
+        nodes[-1] = nodes[-1].model_copy(update={"outputs": payload})
+    return sub.model_copy(update={"name": agent.name, "input": payload, "output": payload, "nodes": nodes})
+
+
 def _reconstruct_swarm_mesh(swarm: Any) -> Construct:
     """Import a foreign pyagentspec ``Swarm`` onto a native Portal peer mesh
     (gap 2, ratification §3a).
@@ -715,42 +763,135 @@ def _reconstruct_swarm_mesh(swarm: Any) -> Construct:
     # max_hops/on_exhaust are entry-only per _check_portal_mesh, and route is
     # taken from the entry. Foreign Swarms have no marker -> plain Portal(to=peers).
     portal_spec = (getattr(swarm, "metadata", None) or {}).get(_MARK_PORTAL_SPEC)
+    mesh_trigger = _swarm_trigger(swarm)
 
     members: list[Any] = []
     for idx, agent in enumerate(agents):
         peers = [dst.name for (src, dst) in swarm.relationships if src is agent]
-        # The reserved mesh-channel input key is the literal "handoff" (design
-        # §3.3, mirrored in example 28's declarative form and _ir_normalize's
-        # sole-writer check); normalize_ir derives handoff_param/handoff_channel.
-        member = _node_from_spec_agent(agent.name, agent, None, {"handoff": payload}, payload)
-        # Option F (neograph-s7zt3.1): a neograph-exported mesh Agent carries the
-        # untranslated ${var} prompt in a neograph/prompt_spec marker (its
-        # system_prompt is the translated {{ flat }} wire form) -- prefer it so
-        # the round trip recovers the original grammar. Foreign Swarms have no
-        # marker and keep the system_prompt as-is.
-        prompt_marker = (getattr(agent, "metadata", None) or {}).get(_MARK_PROMPT_SPEC)
-        if prompt_marker is not None:
-            member = member.model_copy(update={"prompt": prompt_marker["original_text"] or None})
+        member: Node | Construct
+        member_trigger: Literal["output", "tool"]
+        if type(agent).__name__ == "Flow":
+            # C1 import: a Flow Swarm member (a neograph Construct exported via
+            # _lower_portal_mesh_to_swarm, or any foreign sub-Flow agent)
+            # reconstructs to a Construct mesh member, reusing the SAME
+            # FlowNode->Construct recursion the bare-FlowNode item path uses.
+            # Its boundary I/O is forced to the synthesized uniform payload (by
+            # identity) so _check_portal_mesh's uniform-payload rule holds. A
+            # Construct member cannot be trigger="tool" (s7zt3.14 validation:
+            # tool-trigger requires an agent/act member with a ReAct turn), so it
+            # always routes via typed output regardless of the Swarm's HandoffMode.
+            member = _flow_member_to_construct(agent, payload)
+            member_trigger = "output"
+        else:
+            # The reserved mesh-channel input key is the literal "handoff" (design
+            # §3.3, mirrored in example 28's declarative form and _ir_normalize's
+            # sole-writer check); normalize_ir derives handoff_param/handoff_channel.
+            member = _node_from_spec_agent(agent.name, agent, None, {"handoff": payload}, payload)
+            # Option F (neograph-s7zt3.1): a neograph-exported mesh Agent carries
+            # the untranslated ${var} prompt in a neograph/prompt_spec marker (its
+            # system_prompt is the translated {{ flat }} wire form) -- prefer it so
+            # the round trip recovers the original grammar. Foreign Swarms have no
+            # marker and keep the system_prompt as-is.
+            prompt_marker = (getattr(agent, "metadata", None) or {}).get(_MARK_PROMPT_SPEC)
+            if prompt_marker is not None:
+                member = member.model_copy(update={"prompt": prompt_marker["original_text"] or None})
+            member_trigger = mesh_trigger
         if idx == 0 and portal_spec is not None:
             portal = Portal(
                 to=peers,
+                trigger=member_trigger,
                 max_hops=portal_spec["max_hops"],
                 on_exhaust=portal_spec["on_exhaust"],
                 route=portal_spec["route"],
             )
         else:
-            portal = Portal(to=peers)
+            portal = Portal(to=peers, trigger=member_trigger)
         members.append(member | portal)
 
+    # Trigger-aware best-effort warning (ACTION ITEM, retargeted now that
+    # s7zt3.14's Portal(trigger="tool") exists). pyagentspec Swarms route via
+    # handoff/send_message TOOLS called mid-conversation (HandoffMode
+    # NEVER/OPTIONAL/ALWAYS). The precise remaining mismatch depends on the mode:
+    #   - OPTIONAL/ALWAYS -> Portal(trigger="tool"): neograph NOW represents the
+    #     mid-loop optional handoff faithfully (a synthesized transfer_to_<peer>
+    #     tool), so the old "OPTIONAL collapses into a must-always-emit-a-goto
+    #     contract" caveat NO LONGER applies. The residual downgrade is only that
+    #     members are name-bound live-LLM agents needing an LLM factory at compile.
+    #   - NEVER -> Portal(trigger="output"): the member routes via a typed 'goto'
+    #     final output, so it IS forced to always decide a goto as structured
+    #     output (the genuine tool-call-vs-typed-output mismatch that remains).
+    if mesh_trigger == "tool":
+        detail = (
+            "its OPTIONAL/ALWAYS handoff maps to Portal(trigger='tool') (a synthesized "
+            "transfer_to_<peer> tool per relationship), so the optional mid-loop handoff is "
+            "represented faithfully; the residual downgrade is only that members are name-bound "
+            "live-LLM agents requiring an LLM factory at compile"
+        )
+    else:
+        detail = (
+            "pyagentspec Swarms route via handoff/send_message TOOLS called mid-conversation, but a "
+            "HandoffMode.NEVER member maps to Portal(trigger='output') typed routing — so it is "
+            "forced to ALWAYS decide a 'goto' as structured final output (a tool-call-vs-typed-output "
+            "mismatch), and the payload is a route-only synthesis (a 'goto' field plus any folded "
+            "Swarm/agent data properties)"
+        )
     warnings.warn(
-        f"Swarm {swarm.name!r} imported onto a native Portal mesh (best-effort): the mesh "
-        "payload is a route-only synthesis (a 'goto' field plus any folded Swarm/agent data "
-        "properties) and the members are name-bound live-LLM agents requiring an LLM factory "
-        "at compile. This is a structural downgrade of the Swarm's own runtime, not a lossless "
-        "import.",
+        f"Swarm {swarm.name!r} imported onto a native Portal mesh (best-effort): {detail}. This is a "
+        "structural downgrade of the Swarm's own runtime, not a lossless import.",
         stacklevel=2,
     )
     return Construct(name=swarm.name, nodes=members)
+
+
+def _reconstruct_swarm_mesh_with_operator_gates(flow: Any) -> Construct | None:
+    """Recognize the Phase 6 mesh-exit pause composite
+    (``AgentNode(Swarm)`` -> ``BranchingNode['portal_operator']`` ->
+    ``InputMessageNode``) and reconstruct the underlying Portal mesh with
+    per-member Operator gates re-attached (neograph-s7zt3.2, inverse of
+    ``_agent_spec._lower_portal_mesh_to_swarm``'s gated arm).
+
+    Returns ``None`` if the structure does not match -- the caller falls back to
+    treating ``flow`` as a plain (possibly foreign) Flow, never trusting the
+    marker blindly (same "confirm the structure, don't trust the marker"
+    discipline ``_group_flow_items`` applies to Loop/Operator lookahead).
+    """
+    agent_nodes = [n for n in flow.nodes if type(n).__name__ == "AgentNode"]
+    if len(agent_nodes) != 1 or type(agent_nodes[0].agent).__name__ != "Swarm":
+        return None
+    agent_node = agent_nodes[0]
+    swarm = agent_node.agent
+
+    check = next(
+        (n for n in flow.nodes if (n.metadata or {}).get(_MARK_MODIFIER) == "portal_operator"),
+        None,
+    )
+    if check is None or _MARK_PORTAL_OPERATOR_SPEC not in (check.metadata or {}):
+        return None
+
+    # Structural confirmation, not marker trust: the AgentNode really leads into
+    # this specific check via a real ControlFlowEdge.
+    edge_ok = any(
+        e.from_node.name == agent_node.name and e.to_node.name == check.name
+        for e in flow.control_flow_connections
+    )
+    if not edge_ok:
+        return None
+
+    base = _reconstruct_swarm_mesh(swarm)  # existing helper, unchanged
+    gated: dict[str, str] = check.metadata[_MARK_PORTAL_OPERATOR_SPEC]
+    # Operator.when is always a plain str (never a callable, unlike Loop.when),
+    # so the marker's string passes straight through -- exactly as
+    # _reconstruct_operator_item does for the single-node case, no parse_condition.
+    # _reconstruct_swarm_mesh only ever yields Node members (Agent -> Node |
+    # Portal), but base.nodes is typed list[ConstructItem]; the isinstance guard
+    # narrows to Node for the `| Operator` compose (a _BranchNode has no `|`).
+    updated_nodes = [
+        (member | Operator(when=gated[member.name]))
+        if isinstance(member, Node) and member.name in gated
+        else member
+        for member in base.nodes
+    ]
+    return base.model_copy(update={"nodes": updated_nodes})
 
 
 def from_agent_spec(flow: Any) -> Construct:
@@ -785,6 +926,16 @@ def from_agent_spec(flow: Any) -> Construct:
     # reaches the Flow.nodes walk below -- dispatch it onto a Portal mesh here.
     if type(flow).__name__ == "Swarm":
         return _reconstruct_swarm_mesh(flow)
+
+    # A PORTAL_OPERATOR mesh export is a Flow wrapping a Swarm (the mesh-exit
+    # pause composite, neograph-s7zt3.2), not a bare Swarm -- recognize that
+    # whole-Flow shape here, before the per-item _group_flow_items walk (a
+    # top-level dispatch decision like the bare-Swarm check above, not a
+    # per-item concern). Returns None if the structure does not match, so a
+    # foreign Flow falls through to the generic walk.
+    gated_mesh = _reconstruct_swarm_mesh_with_operator_gates(flow)
+    if gated_mesh is not None:
+        return gated_mesh
 
     output_types: dict[str, Any] = {}
     pipeline_items: list[Any] = []

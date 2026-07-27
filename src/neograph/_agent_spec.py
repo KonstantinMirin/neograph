@@ -37,14 +37,22 @@ so ``src/neograph`` core stays Agent-Spec-free by default — only calling
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 from neograph._ir_branch import _BranchNode, iter_with_arms
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._placeholders import DOLLAR_RE, apply_scanner
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
-from neograph.modifiers import Each, Loop, ModifierCombo, Operator, Oracle, classify_modifiers
+from neograph.modifiers import (
+    SUB_CONSTRUCT_UNSUPPORTED_COMBOS,
+    Each,
+    Loop,
+    ModifierCombo,
+    Operator,
+    Oracle,
+    classify_modifiers,
+)
 from neograph.naming import field_name_for, split_output_field
 from neograph.node import Node
 from neograph.spec_types import model_to_agent_spec_properties
@@ -80,6 +88,7 @@ _MARK_LOOP_SPEC = "neograph/loop_spec"
 _MARK_OPERATOR_SPEC = "neograph/operator_spec"
 _MARK_BRANCH = "neograph/branch"
 _MARK_PORTAL_SPEC = "neograph/portal_spec"
+_MARK_PORTAL_OPERATOR_SPEC = "neograph/portal_operator_spec"
 _MARK_PROMPT_SPEC = "neograph/prompt_spec"
 
 
@@ -239,12 +248,17 @@ def _node_translation(node: Node) -> tuple[str, list[Property], dict[str, str]]:
     return node.prompt or "", ref_props, original_to_flat
 
 
-def _is_translation_eligible(item: Any) -> bool:
+def _is_translation_eligible(item: Any) -> TypeGuard[Node]:
     """A construct item whose exported prompt is placeholder-translated: an
     LLM-mode (``think``/``agent``/``act``) ``Node``. Gates the consumer sweep on
     the CONSUMING ITEM's mode — NOT the destination SpecNode class (a MapNode
     wrapping a translated inner is still a translation target). Scripted/raw
     nodes have no ${var} prompt, so their edges keep the untranslated dotted form.
+
+    A ``TypeGuard[Node]`` so the ``node`` arg of ``_lower_each``/``_lower_loop``
+    (now ``Node | Construct``) narrows to ``Node`` inside the guarded branch that
+    calls the Node-only ``_node_translation`` — a Construct item is never
+    translation-eligible (it carries no ${var} prompt of its own).
     """
     return isinstance(item, Node) and item.mode in ("think", "agent", "act")
 
@@ -288,6 +302,39 @@ def _properties_for(type_spec: Any) -> list[Property]:
             result.extend(props)
         return result
     return model_to_agent_spec_properties(type_spec)
+
+
+def _item_inputs(item: Node | Construct) -> Any:
+    """The input TypeSpec a modifier lowerer reads, uniform across the two
+    item kinds it now wraps: a ``Node`` declares plural fan-in ``inputs``
+    (``dict|type|None``); a ``Construct`` used as one item declares the
+    singular boundary port ``input`` (``type|None``). Both feed
+    ``_properties_for`` / ``normalize_inputs`` the same way, so the modifier
+    helpers never branch on ``isinstance`` for I/O access."""
+    return item.input if isinstance(item, Construct) else item.inputs
+
+
+def _item_outputs(item: Node | Construct) -> Any:
+    """The output TypeSpec counterpart of ``_item_inputs`` — ``Node.outputs``
+    (plural) vs ``Construct.output`` (singular boundary port)."""
+    return item.output if isinstance(item, Construct) else item.outputs
+
+
+def _lower_item_body(item: Node | Construct) -> SpecNode:
+    """Lower one construct item to the SpecNode a modifier wraps.
+
+    A ``Node`` lowers via ``_lower_node`` (per-mode think/agent/scripted
+    dispatch). A ``Construct`` used as one item lowers to the SAME
+    ``FlowNode`` the BARE-Construct branch emits — its ``subflow`` is the
+    recursively-exported sub-``Flow`` (``to_agent_spec``). Shared by
+    ``_lower_each`` / ``_lower_loop`` / ``_lower_oracle`` and the
+    LOOP/OPERATOR/BARE arms of ``_lower_construct_item`` so a Construct-item
+    modifier wraps its sub-flow EXACTLY as a Node modifier wraps its lowered
+    primitive — one body-lowering seam, never a per-modifier re-derivation."""
+    if isinstance(item, Construct):
+        nodes_mod, _flow_mod, _edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
+        return nodes_mod.FlowNode(name=item.name, subflow=to_agent_spec(item))
+    return _lower_node(item)
 
 
 def _lower_generation_step(
@@ -493,8 +540,10 @@ def _make_server_tool(
     )
 
 
-def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge]]:
-    """Lower an Oracle-modified node: N single-LlmNode flows + merge node.
+def _lower_oracle(
+    node: Node | Construct, oracle: Oracle
+) -> tuple[list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge]]:
+    """Lower an Oracle-modified item: N variant bodies + merge node.
 
     Oracle is the flagship irreversible gap — no single Agent Spec node
     represents it. Lowers to a ``ParallelFlowNode`` of N single-node flows
@@ -507,8 +556,12 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
     # B2: the per-variant loop lowers ``node`` N times but never guarded its
     # unrepresentable fields — unlike ``_lower_node``, which calls this before
     # lowering. Without it an Oracle-modified node carrying a raw_fn / custom
-    # renderer / skip_when (etc.) exported silently. Guard once, up front.
-    _reject_unrepresentable_fields(node)
+    # renderer / skip_when (etc.) exported silently. Guard once, up front. A
+    # Construct item has none of those callable-valued Node fields (its own
+    # child nodes get the same guard during the recursive ``to_agent_spec``
+    # that ``_lower_item_body`` runs), so the guard is Node-only.
+    if isinstance(node, Node):
+        _reject_unrepresentable_fields(node)
 
     if oracle.merge_pre_process or oracle.merge_post_process or oracle.merge_fallback:
         raise ConfigurationError.build(
@@ -520,13 +573,32 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
         )
 
     group_id = f"{node.name}__oracle"
-    variant_models = oracle.models if oracle.models else [node.model] * oracle.n
-    gen_outputs = _properties_for(node.oracle_gen_type) if node.oracle_gen_type else _properties_for(node.outputs)
+    # A Construct item declares no ``.model`` (per-variant model swap rides the
+    # oracle_spec marker + runtime _inject_oracle_config, not the export body);
+    # ``.oracle_gen_type`` is likewise a Node-only IR field. Read both defensively
+    # so the shared lowering covers Node and Construct alike.
+    node_model = getattr(node, "model", None)
+    variant_models = oracle.models if oracle.models else [node_model] * oracle.n
+    oracle_gen_type = getattr(node, "oracle_gen_type", None)
+    gen_outputs = _properties_for(oracle_gen_type) if oracle_gen_type else _properties_for(_item_outputs(node))
 
     variant_nodes: list[SpecNode] = []
     for i, model_tier in enumerate(variant_models):
         variant_name = f"{node.name}__variant_{i}"
         variant_metadata = {_MARK_MODIFIER: "oracle", _MARK_GROUP_ID: group_id, _MARK_VARIANT: i}
+
+        if isinstance(node, Construct):
+            # A Construct variant is a copy of the sub-flow run N times (the
+            # runtime shape make_oracle_redirect_fn produces over the subgraph);
+            # each copy is a FlowNode over the recursively-exported sub-Flow.
+            # Per-variant Oracle.models rides the oracle_spec marker, not a
+            # FlowNode field (the sub-flow has no single model to swap here).
+            variant_nodes.append(
+                nodes_mod.FlowNode(
+                    name=variant_name, subflow=to_agent_spec(node), metadata=variant_metadata
+                )
+            )
+            continue
 
         # Unified per-node.mode dispatch neograph-2s2o6: each Oracle variant
         # lowers through the SAME _lower_generation_step _lower_node uses -- one
@@ -547,7 +619,7 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
             )
         )
 
-    outputs = _properties_for(node.outputs)
+    outputs = _properties_for(_item_outputs(node))
     # Option F neograph-cbpyx: the merge LlmNode's prompt references the variant
     # outputs via ${...}; translate to {{ flat }} and route the variant->merge
     # fan-in DataFlowEdges through the SAME flat map. merge_orig_to_flat stays empty
@@ -631,15 +703,18 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
     return [*variant_nodes, merge_node], control_edges, data_edges
 
 
-def _lower_each(node: Node, each: Each) -> SpecNode:
-    """Lower an Each-modified node: MapNode wrapping a single-node sub-Flow.
+def _lower_each(node: Node | Construct, each: Each) -> SpecNode:
+    """Lower an Each-modified item: MapNode wrapping a single-body sub-Flow.
 
+    The wrapped body is a Node's lowered primitive OR a Construct-item's
+    ``FlowNode`` (``_lower_item_body``), so ``Construct(...) | Each(...)`` used
+    as one item lowers to the SAME MapNode shape as ``node | Each(...)``.
     ``over``/``key``/``on_error`` have no primitive representation — ride in
     the ``neograph/modifier=each`` marker (``EachSpec``).
     """
     nodes_mod, flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
 
-    inner = _lower_node(node)
+    inner = _lower_item_body(node)
     # The MapNode infers its OWN inputs as ``iterated_{title}`` for every
     # property in ``subflow.inputs`` (pyagentspec MapNode._get_inferred_inputs,
     # which reads the sub-flow's StartNode inputs). Declare the inner node's
@@ -660,7 +735,7 @@ def _lower_each(node: Node, each: Each) -> SpecNode:
     if _is_translation_eligible(node):
         _rewritten, inner_inputs, _flat = _node_translation(node)
     else:
-        inner_inputs = _properties_for(node.inputs)
+        inner_inputs = _properties_for(_item_inputs(node))
     start_node = nodes_mod.StartNode(name=f"{node.name}__each_start", inputs=inner_inputs or None)
     end_node = nodes_mod.EndNode(name=f"{node.name}__each_end")
     sub_flow = flow_mod.Flow(
@@ -682,8 +757,14 @@ def _lower_each(node: Node, each: Each) -> SpecNode:
     )
 
 
-def _lower_loop(node: Node, loop: Loop, body: SpecNode) -> tuple[SpecNode, list[ControlFlowEdge], list[DataFlowEdge]]:
-    """Lower a Loop-modified node: BranchingNode({continue: back-edge, done: next}).
+def _lower_loop(
+    node: Node | Construct, loop: Loop, body: SpecNode
+) -> tuple[SpecNode, list[ControlFlowEdge], list[DataFlowEdge]]:
+    """Lower a Loop-modified item: BranchingNode({continue: back-edge, done: next}).
+
+    ``body`` is the caller-lowered primitive (a Node's lowered node or a
+    Construct-item's ``FlowNode``), so ``Construct(...) | Loop(...)`` loops its
+    sub-flow the same way ``node | Loop(...)`` loops its body node.
 
     A bare BranchingNode+back-edge is ambiguous (loop vs branch) without the
     ``neograph/modifier=loop`` marker (per the Core Invariant's marker
@@ -728,8 +809,8 @@ def _lower_loop(node: Node, loop: Loop, body: SpecNode) -> tuple[SpecNode, list[
     # own name" per the validator's Loop rule — OR the ORIGINAL upstream
     # producer's name, e.g. inputs={'seed': Draft} — either way it's the
     # key whose declared type matches the fed-back output).
-    ni = normalize_inputs(node.inputs)
-    no_self = normalize_outputs(node.outputs)
+    ni = normalize_inputs(_item_inputs(node))
+    no_self = normalize_outputs(_item_outputs(node))
     dest_prefix = ""
     if ni.is_dict_form and not no_self.is_dict_form:
         self_field = field_name_for(node.name)
@@ -747,7 +828,7 @@ def _lower_loop(node: Node, loop: Loop, body: SpecNode) -> tuple[SpecNode, list[
     # body's flat map (drop it if the fed-back output isn't referenced in the prompt).
     body_orig_to_flat = _node_translation(node)[2] if _is_translation_eligible(node) else {}
     data_edges: list[DataFlowEdge] = []
-    for prop in _properties_for(node.outputs):
+    for prop in _properties_for(_item_outputs(node)):
         dotted = f"{dest_prefix}{prop.title}"
         if _is_translation_eligible(node):
             dest_input = body_orig_to_flat.get(dotted)
@@ -767,9 +848,14 @@ def _lower_loop(node: Node, loop: Loop, body: SpecNode) -> tuple[SpecNode, list[
     return branch, control_edges, data_edges
 
 
-def _lower_operator(node: Node, operator: Operator) -> tuple[SpecNode, list[SpecNode], list[ControlFlowEdge]]:
-    """Lower an Operator-modified node: the FULLY PINNED HITL-pause composite
+def _lower_operator(
+    node: Node | Construct, operator: Operator
+) -> tuple[SpecNode, list[SpecNode], list[ControlFlowEdge]]:
+    """Lower an Operator-modified item: the FULLY PINNED HITL-pause composite
     (neograph-03djs, verified against real pyagentspec 26.1.2 source).
+
+    Reads only ``item.name`` + ``operator.when`` (the caller lowers the primary
+    body separately), so it applies uniformly to a Node or a Construct item.
 
     ``BranchingNode(mapping={<condition-string>: PAUSE_BRANCH})`` +
     ``ControlFlowEdge(from_branch=PAUSE_BRANCH) -> InputMessageNode`` +
@@ -834,19 +920,38 @@ def _lower_construct_item(
         )
         return [branch], [], [], branch, branch, [(branch, False)]
 
-    if isinstance(item, Construct):
-        sub_flow = to_agent_spec(item)
-        flow_node = nodes_mod.FlowNode(name=item.name, subflow=sub_flow)
-        return [flow_node], [], [], flow_node, flow_node, [(flow_node, False)]
-
-    if not isinstance(item, Node):
+    if not isinstance(item, (Node, Construct)):
         raise ConfigurationError.build(
             f"unrecognized construct item {item!r} — no Agent Spec lowering",
             expected="Node, Construct, or _BranchNode",
             found=type(item).__name__,
         )
 
+    # Node AND Construct items go through the SAME modifier dispatch — a
+    # Construct item's modifiers are NOT silently dropped (the pre-fix bug: the
+    # Construct branch wrapped a FlowNode and returned before classify_modifiers
+    # ran). The wrapped body differs (a Node lowers per-mode; a Construct lowers
+    # to a FlowNode over its sub-Flow), but that difference is absorbed once by
+    # _lower_item_body, so every arm below is item-kind-agnostic.
     combo, mods = classify_modifiers(item)
+
+    # A Construct item carrying an Each x Oracle fusion has no Construct-level
+    # lowering — mirror compiler.py's OWN permanent rejection (_add_subgraph's
+    # EACH_ORACLE | EACH_ORACLE_OPERATOR arm) rather than silently dropping it or
+    # inventing a meaning. The fusion is defined via a single Node's
+    # map_over/ensemble_n M x N Send topology, which a multi-node Construct
+    # structurally lacks. SUB_CONSTRUCT_UNSUPPORTED_COMBOS is the single source
+    # of truth both consumers consult (modifiers.py).
+    if isinstance(item, Construct) and combo in SUB_CONSTRUCT_UNSUPPORTED_COMBOS:
+        raise ConfigurationError.build(
+            f"sub-construct {item.name!r} has modifier combination {combo.name} — "
+            "Each x Oracle fusion is not supported on sub-constructs",
+            expected="Each x Oracle only on a bare Node (map_over + ensemble_n), never a Construct",
+            found=combo.name,
+            hint="mirrors compiler.py's permanent Each x Oracle sub-construct rejection — the fusion "
+            "is defined entirely via a single Node's map_over/ensemble_n fields, which a multi-node "
+            "Construct has no equivalent for",
+        )
 
     if combo == ModifierCombo.ORACLE:
         variant_and_merge, control_edges, data_edges = _lower_oracle(item, mods["oracle"])
@@ -859,20 +964,44 @@ def _lower_construct_item(
         return [map_node], [], [], map_node, map_node, [(map_node, True)]
 
     if combo == ModifierCombo.LOOP:
-        body = _lower_node(item)
+        body = _lower_item_body(item)
         branch, extra_control, extra_data = _lower_loop(item, mods["loop"], body)
         return [body, branch], extra_control, extra_data, branch, body, [(body, False)]
 
     if combo == ModifierCombo.OPERATOR:
         _nodes_mod, _flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
-        primary = _lower_node(item)
+        primary = _lower_item_body(item)
         check, extra_nodes, extra_control = _lower_operator(item, mods["operator"])
         pre_edge = edges_mod.ControlFlowEdge(name=f"{item.name}__to_operator_check", from_node=primary, to_node=check)
         return [primary, check, *extra_nodes], [pre_edge, *extra_control], [], check, primary, [(primary, False)]
 
     if combo == ModifierCombo.BARE:
-        primary = _lower_node(item)
+        primary = _lower_item_body(item)
         return [primary], [], [], primary, primary, [(primary, False)]
+
+    # C2 (neograph-s7zt3.12): a DISPATCH-mode Portal (route="decide") reaching
+    # here is genuinely unrepresentable in Agent Spec — fail LOUD, not "not yet".
+    # Peer-mode Portal meshes were already intercepted in to_agent_spec (the
+    # Swarm path), so any PORTAL combo at this point is dispatch mode. Its runtime
+    # semantics — SYNTHESIZE an Agent Spec Flow from emitted data at runtime,
+    # then compile+run it — has no static-spec primitive: every subflow-bearing
+    # pyagentspec node (FlowNode/MapNode/ParallelFlowNode/CatchExceptionNode)
+    # takes a STATIC ``subflow: Flow`` declared at authoring time, and
+    # BranchingNode only selects among pre-declared branches (verified against
+    # installed pyagentspec 26.1.2, tests/agent_spec_capabilities.py registry).
+    # A dispatch flow is not knowable until runtime, so it is a permanent,
+    # evidence-backed scope boundary — mirrors the Each x Oracle sub-construct
+    # rejection's fail-loud shape.
+    if combo in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR):
+        raise ConfigurationError.build(
+            f"node {item.name!r} is a dispatch-mode Portal (route='decide') — no Agent Spec lowering",
+            expected="a peer-mode Portal mesh (exported as a Swarm) or a non-Portal node",
+            found=f"dispatch-mode Portal ({combo.name})",
+            node=item.name,
+            hint="dispatch mode synthesizes and runs a flow from runtime-emitted data; Agent Spec has "
+            "no runtime-flow-synthesis primitive (every subflow node takes a static subflow), so it is "
+            "permanently unrepresentable — keep the dispatcher inside neograph, do not export it",
+        )
 
     raise ConfigurationError.build(
         f"node {item.name!r} has modifier combination {combo.name} — no Agent Spec lowering yet",
@@ -882,7 +1011,7 @@ def _lower_construct_item(
     )
 
 
-def _lower_portal_mesh_to_swarm(construct: Construct, members: list[Node], tools_mod: Any) -> Any:
+def _lower_portal_mesh_to_swarm(construct: Construct, members: list[Node | Construct], tools_mod: Any) -> Any:
     """Export a Portal mode-(a) peer mesh to a top-level pyagentspec ``Swarm``
     -- the export-direction mirror of ``loader.py``'s ``_reconstruct_swarm_mesh``
     Swarm import.
@@ -918,6 +1047,18 @@ def _lower_portal_mesh_to_swarm(construct: Construct, members: list[Node], tools
     # import recovers the original prompt grammar.
     agents_by_name: dict[str, Any] = {}
     for member in members:
+        # C1 (do0d9): a Construct mesh member lowers to its recursively-exported
+        # sub-Flow. A pyagentspec Flow IS an AgenticComponent (Flow.__mro__
+        # includes AgenticComponent), so it drops straight into
+        # Swarm.first_agent/relationships with NO Agent wrapper — the same
+        # recursive-Flow-production pattern _lower_item_body uses for a bare
+        # Construct item's FlowNode subflow. A Construct has no .prompt (its
+        # interior prompts are Option-F-translated inside the recursive
+        # to_agent_spec call) and cannot carry an Operator gate (rejected at
+        # assembly), so it never needs the prompt marker or enters `gated`.
+        if isinstance(member, Construct):
+            agents_by_name[member.name] = to_agent_spec(member)
+            continue
         rewritten, ref_props, flat_to_original = _translate_placeholders(
             member.prompt or "", _properties_for(member.inputs), member.name
         )
@@ -934,12 +1075,24 @@ def _lower_portal_mesh_to_swarm(construct: Construct, members: list[Node], tools
         for peer in (member.modifier_set.portal.to or [])  # type: ignore[union-attr]
     ]
 
-    from pyagentspec.swarm import Swarm
+    from pyagentspec.swarm import HandoffMode, Swarm
 
-    return Swarm(
+    # C1/s7zt3.14 round-trip: carry the mesh's trigger sub-mode on Swarm.handoff so
+    # _reconstruct_swarm_mesh's _swarm_trigger reads it back. A tool-triggered Node
+    # member (Portal(trigger="tool")) -> HandoffMode.OPTIONAL (the reference
+    # adapter's tool-bound-handoff mode; OPTIONAL/ALWAYS are byte-identical there,
+    # so OPTIONAL is the canonical choice); an all-output mesh -> HandoffMode.NEVER
+    # (typed-goto routing, no bound transfer tool). A Construct member is never
+    # tool-triggered (validation), so only Node members are polled.
+    any_tool = any(
+        isinstance(m, Node) and m.modifier_set.portal is not None and m.modifier_set.portal.is_tool_triggered
+        for m in members
+    )
+    swarm = Swarm(
         name=construct.name,
         first_agent=agents_by_name[entry.name],
         relationships=relationships,
+        handoff=HandoffMode.OPTIONAL if any_tool else HandoffMode.NEVER,
         metadata={
             _MARK_PORTAL_SPEC: {
                 "max_hops": entry_portal.max_hops,
@@ -947,6 +1100,82 @@ def _lower_portal_mesh_to_swarm(construct: Construct, members: list[Node], tools
                 "route": entry_portal.route,
             }
         },
+    )
+
+    # Phase 6 (neograph-s7zt3.2): a mesh member's Operator (HITL approval gate)
+    # must NOT silently vanish on export. Collect every gated member's `when` in
+    # member order (deterministic, matches every other _MARK_*_SPEC builder).
+    #
+    # Keyed by the AGENT name (`{member.name}-agent`, set by _make_agent), NOT
+    # the raw member name: _reconstruct_swarm_mesh names each imported member by
+    # its Swarm agent's `.name`, so keying by the agent name is what makes the
+    # loader's `member.name in gated` match on round-trip. (The design doc's §4
+    # said "member name"; its repro used ad-hoc agents and so never exercised
+    # _make_agent's `-agent` suffix -- the agent name is the identity that
+    # actually survives export->import.)
+    gated: dict[str, str] = {
+        agents_by_name[member.name].name: member.modifier_set.operator.when
+        for member in members
+        if member.modifier_set.operator is not None
+    }
+    if not gated:
+        return swarm  # unchanged today's-behavior path: pure PORTAL cell untouched
+
+    # Mesh-exit pause composite. Swarm has no interior per-member pause primitive
+    # (verified live, pyagentspec 26.1.2 -- Swarm.relationships is a flat
+    # AgenticComponent adjacency list, no Node graph to splice a check into), so
+    # the gate is approximated at the point control returns to the enclosing
+    # Flow, mirroring _lower_operator's existing BranchingNode + InputMessageNode
+    # shape one-for-one, with the Swarm wrapped in an AgentNode (legal:
+    # AgentNode.agent: SerializeAsAny[AgenticComponent], and Swarm IS an
+    # AgenticComponent). ALL gated members ride one shared marker dict on the
+    # single check node -- a mesh is one connected component (_check_portal_mesh),
+    # so "one shared composite" is always well-defined. This is a round-trip-
+    # lossless serialization, NOT a behaviorally-faithful foreign runtime: a
+    # foreign engine sees one exit-point BranchingNode, not neograph's own
+    # per-member interior gate (factory.make_portal_approval_fn).
+    nodes_mod, flow_mod, edges_mod, property_mod, _tools_mod = _import_agent_spec_flow_classes()
+
+    agent_node = nodes_mod.AgentNode(name=f"{construct.name}__mesh", agent=swarm)
+    check = nodes_mod.BranchingNode(
+        name=f"{construct.name}__portal_operator_check",
+        mapping={"true": _PAUSE_BRANCH, "false": _DEFAULT_BRANCH},
+        metadata={
+            _MARK_MODIFIER: "portal_operator",
+            _MARK_PORTAL_OPERATOR_SPEC: gated,
+        },
+    )
+    input_message = nodes_mod.InputMessageNode(
+        name=f"{construct.name}__portal_operator_pause",
+        outputs=[property_mod.StringProperty(title="user_input")],
+    )
+    start = nodes_mod.StartNode(name=f"{construct.name}__start")
+    end_default = nodes_mod.EndNode(name=f"{construct.name}__end_default")
+    end_paused = nodes_mod.EndNode(name=f"{construct.name}__end_paused")
+
+    return flow_mod.Flow(
+        name=construct.name,
+        start_node=start,
+        nodes=[start, agent_node, check, input_message, end_default, end_paused],
+        control_flow_connections=[
+            edges_mod.ControlFlowEdge(name=f"{construct.name}__start_to_mesh", from_node=start, to_node=agent_node),
+            edges_mod.ControlFlowEdge(name=f"{construct.name}__mesh_to_check", from_node=agent_node, to_node=check),
+            edges_mod.ControlFlowEdge(
+                name=f"{construct.name}__check_to_pause",
+                from_node=check,
+                from_branch=_PAUSE_BRANCH,
+                to_node=input_message,
+            ),
+            edges_mod.ControlFlowEdge(
+                name=f"{construct.name}__check_to_default",
+                from_node=check,
+                from_branch=_DEFAULT_BRANCH,
+                to_node=end_default,
+            ),
+            edges_mod.ControlFlowEdge(
+                name=f"{construct.name}__pause_to_end", from_node=input_message, to_node=end_paused
+            ),
+        ],
     )
 
 
@@ -988,12 +1217,11 @@ def to_agent_spec(construct: Construct) -> Flow:
                 hint="a Swarm is a top-level AgenticComponent, not a Flow node — a mixed "
                 "mesh+Flow construct has no single Agent Spec export shape yet",
             )
-        # A1 admits a Construct mesh member into DETECTION (do0d9); the actual
-        # per-Construct-member lowering is C1 (out of Phase-5 scope), so
-        # _lower_portal_mesh_to_swarm still only handles Node members and will
-        # AttributeError on a Construct member until C1 lands. The cast marks that
-        # known interim boundary rather than silently widening the callee.
-        return _lower_portal_mesh_to_swarm(construct, cast("list[Node]", mesh_members), tools_mod)
+        # A1 admits a Construct mesh member into DETECTION (do0d9); C1
+        # (_lower_portal_mesh_to_swarm) now lowers a Construct member to its
+        # recursive sub-Flow (an AgenticComponent) alongside Node members, so the
+        # cast widens to the real Node | Construct member union.
+        return _lower_portal_mesh_to_swarm(construct, cast("list[Node | Construct]", mesh_members), tools_mod)
 
     all_nodes: list[SpecNode] = []
     control_edges: list[ControlFlowEdge] = []
@@ -1213,8 +1441,22 @@ def to_agent_spec(construct: Construct) -> Flow:
     # A Flow requires exactly one StartNode and >=1 EndNode; neograph's
     # Construct has no explicit start/end sentinels (the node order IS the
     # DAG), so wrap the lowered chain with synthetic boundary nodes.
-    start_node = _nodes_mod.StartNode(name=f"{construct.name}__start")
-    end_node = _nodes_mod.EndNode(name=f"{construct.name}__end")
+    #
+    # When this construct is a SUB-construct (used as one item inside a parent,
+    # so it declares an input/output boundary port), the synthetic StartNode /
+    # EndNode carry that boundary I/O — pyagentspec's FlowNode infers its own
+    # inputs from the inner StartNode and its outputs from the inner EndNode
+    # (FlowNode docstring). Without this a Construct-item modifier that reads the
+    # sub-flow's OUTPUT — Loop's self-feedback edge, Oracle's variant fan-in —
+    # references a property the FlowNode does not expose, and pyagentspec raises
+    # a raw ValidationError. The OUTERMOST construct has input/output=None, so
+    # both stay unset there (unchanged behavior). Declaring boundary props needs
+    # no extra internal wiring: an unconsumed StartNode input / unfed EndNode
+    # output is legal (the payload flows through the item's own peer edges).
+    start_props = _properties_for(construct.input)
+    end_props = _properties_for(construct.output)
+    start_node = _nodes_mod.StartNode(name=f"{construct.name}__start", inputs=start_props or None)
+    end_node = _nodes_mod.EndNode(name=f"{construct.name}__end", outputs=end_props or None)
     all_nodes = [start_node, *all_nodes, end_node]
     control_edges = [
         edges_mod.ControlFlowEdge(name=f"{construct.name}__start_edge", from_node=start_node, to_node=primaries[0]),

@@ -131,6 +131,27 @@ _ALLOWLIST: Counter = Counter(
             "loader.py",
             'inner_nodes = [n for n in map_node.subflow.nodes if type(n).__name__ not in ("StartNode", "EndNode")]',
         ): 1,
+        # from_agent_spec's PORTAL_OPERATOR mesh-exit composite recognition
+        # (neograph-s7zt3.2, _reconstruct_swarm_mesh_with_operator_gates): these
+        # two walk a pyagentspec Flow's OWN `.nodes` list (to find the wrapping
+        # AgentNode and the portal_operator BranchingNode), NOT a neograph
+        # Construct.nodes -- there is no _BranchNode/arm concept on the Agent Spec
+        # side for iter_with_arms to apply to. Same false-positive category as the
+        # map_node.subflow.nodes entry above.
+        ("loader.py", 'agent_nodes = [n for n in flow.nodes if type(n).__name__ == "AgentNode"]'): 1,
+        ("loader.py", '(n for n in flow.nodes if (n.metadata or {}).get(_MARK_MODIFIER) == "portal_operator"),'): 1,
+        # Same reconstructor's per-member Operator re-attach walk over the
+        # reconstructed mesh Construct's node list. DELIBERATELY TOP-LEVEL only
+        # (mirrors the state.py "Portal mesh-member partition" entry above): a
+        # Portal mesh is one contiguous run of sibling members at ONE construct
+        # level (D-MESH-LEVEL) and NEVER spans branch arms, so there is no arm
+        # content to descend into. Routing through an arm-descending iterator
+        # would be WRONG -- it would flatten sub-construct-member arms whose nodes
+        # can never be mesh members receiving a top-level Operator gate. The
+        # isinstance(member, Node) guard at the call site further confirms only
+        # atomic top-level members are gated (a Construct mesh member cannot carry
+        # Operator per _validation_portal.py, so it is never in `gated`).
+        ("loader.py", "for member in base.nodes"): 1,
     }
 )
 

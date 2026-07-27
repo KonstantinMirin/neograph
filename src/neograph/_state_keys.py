@@ -160,6 +160,22 @@ class StateKeys:
         return f"neo_handoff_{field_name}"
 
     @staticmethod
+    def handoff_tool_target(field_name: str) -> str:
+        """Tool-triggered-handoff target sentinel (Portal trigger='tool', design
+        portal-tool-triggered-handoff §3.3).
+
+        Keyed off the tool-triggered MEMBER's own producer field. A TRANSIENT
+        signal: the member's ``{node}__tools`` body stamps the chosen peer name
+        under this key when it detects a synthesized ``transfer_to_<peer>`` tool
+        call, and the factory Command-builder (``_tool_handoff_to_command``)
+        pops it back OUT of the update dict BEFORE constructing the
+        ``Command(update=...)`` — so it never enters LangGraph state, never
+        persists in a checkpoint, and never touches the schema fingerprint. Built
+        only here (never an inline f-string) per the ``neo_``-fragment guard.
+        """
+        return f"neo_handoff_tool_target_{field_name}"
+
+    @staticmethod
     def portal_proposed_target(field_name: str) -> str:
         """Portal+Operator approval gate: the routing target proposed by an
         Operator-guarded mesh member, pending human approval.
