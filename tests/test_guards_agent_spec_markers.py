@@ -50,7 +50,6 @@ _EXPECTED_MARKER_VALUES = {
     "neograph/mode",
     "neograph/agent_spec",
     "neograph/tool_spec",
-    "neograph/remote_agent",
     "neograph/modifier",
     "neograph/group_id",
     "neograph/variant",
@@ -101,13 +100,12 @@ def test_no_reinlined_marker_literals_outside_constant_block():
 
 
 def test_marker_constants_pin_the_exact_wire_values():
-    """The four aa5gq-named constants pin their exact wire strings."""
+    """The three aa5gq-named constants pin their exact wire strings."""
     import neograph._agent_spec as ags
 
     assert getattr(ags, "_MARK_MODE", None) == "neograph/mode"
     assert getattr(ags, "_MARK_AGENT_SPEC", None) == "neograph/agent_spec"
     assert getattr(ags, "_MARK_TOOL_SPEC", None) == "neograph/tool_spec"
-    assert getattr(ags, "_MARK_REMOTE_AGENT", None) == "neograph/remote_agent"
 
 
 def test_every_marker_wire_value_is_a_module_constant():

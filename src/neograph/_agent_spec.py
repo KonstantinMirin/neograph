@@ -45,7 +45,7 @@ from neograph._placeholders import DOLLAR_RE, apply_scanner
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
 from neograph.modifiers import Each, Loop, ModifierCombo, Operator, Oracle, classify_modifiers
-from neograph.naming import field_name_for
+from neograph.naming import field_name_for, split_output_field
 from neograph.node import Node
 from neograph.spec_types import model_to_agent_spec_properties
 from neograph.tool import Tool
@@ -71,7 +71,6 @@ _PAUSE_BRANCH = "pause"
 _MARK_MODE = "neograph/mode"
 _MARK_AGENT_SPEC = "neograph/agent_spec"
 _MARK_TOOL_SPEC = "neograph/tool_spec"
-_MARK_REMOTE_AGENT = "neograph/remote_agent"
 _MARK_MODIFIER = "neograph/modifier"
 _MARK_GROUP_ID = "neograph/group_id"
 _MARK_VARIANT = "neograph/variant"
@@ -504,6 +503,12 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
     ``models``, which has no primitive representation).
     """
     nodes_mod, flow_mod, edges_mod, _property_mod, tools_mod = _import_agent_spec_flow_classes()
+
+    # B2: the per-variant loop lowers ``node`` N times but never guarded its
+    # unrepresentable fields — unlike ``_lower_node``, which calls this before
+    # lowering. Without it an Oracle-modified node carrying a raw_fn / custom
+    # renderer / skip_when (etc.) exported silently. Guard once, up front.
+    _reject_unrepresentable_fields(node)
 
     if oracle.merge_pre_process or oracle.merge_post_process or oracle.merge_fallback:
         raise ConfigurationError.build(
@@ -945,6 +950,21 @@ def _lower_portal_mesh_to_swarm(construct: Construct, members: list[Node], tools
     )
 
 
+def _is_peer_mesh_member(item: Any) -> bool:
+    """True iff ``item`` carries a PEER-mode (non-dispatch) Portal — i.e. it is
+    a Portal mesh member — using the SAME modifier-agnostic detection the IR
+    normalizer and ``_check_portal_mesh`` use, never an ``isinstance(Node)``
+    gate (A1).
+
+    ``classify_modifiers`` reads ``.modifier_set`` on Node AND Construct, so a
+    Construct mesh member (do0d9) is correctly detected as a member rather than
+    misclassified as a "non-mesh node" and false-rejecting the whole mesh.
+    """
+    _combo, mods = classify_modifiers(item)
+    portal = mods.get("portal")
+    return portal is not None and not portal.is_dispatch
+
+
 def to_agent_spec(construct: Construct) -> Flow:
     """Export a neograph ``Construct`` (IR) to an Open Agent Spec ``Flow``
     (or, for a Portal mode-(a) peer mesh, a top-level ``Swarm``).
@@ -958,13 +978,7 @@ def to_agent_spec(construct: Construct) -> Flow:
     _nodes_mod, flow_mod, edges_mod, _property_mod, tools_mod = _import_agent_spec_flow_classes()
 
     all_items = list(iter_with_arms(construct))
-    mesh_members = [
-        item
-        for item in all_items
-        if isinstance(item, Node)
-        and item.modifier_set.portal is not None
-        and not item.modifier_set.portal.is_dispatch
-    ]
+    mesh_members = [item for item in all_items if _is_peer_mesh_member(item)]
     if mesh_members:
         if len(mesh_members) != len(all_items):
             raise ConfigurationError.build(
@@ -974,7 +988,12 @@ def to_agent_spec(construct: Construct) -> Flow:
                 hint="a Swarm is a top-level AgenticComponent, not a Flow node — a mixed "
                 "mesh+Flow construct has no single Agent Spec export shape yet",
             )
-        return _lower_portal_mesh_to_swarm(construct, mesh_members, tools_mod)
+        # A1 admits a Construct mesh member into DETECTION (do0d9); the actual
+        # per-Construct-member lowering is C1 (out of Phase-5 scope), so
+        # _lower_portal_mesh_to_swarm still only handles Node members and will
+        # AttributeError on a Construct member until C1 lands. The cast marks that
+        # known interim boundary rather than silently widening the callee.
+        return _lower_portal_mesh_to_swarm(construct, cast("list[Node]", mesh_members), tools_mod)
 
     all_nodes: list[SpecNode] = []
     control_edges: list[ControlFlowEdge] = []
@@ -1014,11 +1033,24 @@ def to_agent_spec(construct: Construct) -> Flow:
     ordered_items = list(iter_with_arms(construct))
     data_node_by_item_name = dict(zip((item.name for item in ordered_items), data_nodes, strict=True))
 
-    def _emit_input_edges(item_name: str, upstream_name: str, source_node: SpecNode, source_title: str) -> None:
+    def _emit_input_edges(
+        item_name: str,
+        upstream_name: str,
+        source_node: SpecNode,
+        source_title: str,
+        dest_title: str | None = None,
+    ) -> None:
         """Emit one DataFlowEdge per (destination target, prefix) for a single
         source Property. ``upstream_name`` is the dict-form key ('' for the
         single-type path, where the destination input title is the bare
         Property title, not '{upstream}.{title}').
+
+        ``dest_title`` decouples the DESTINATION input field from the
+        ``source_output`` when they differ — needed for a dict-form-OUTPUT
+        producer (B4), whose output Property is ``{key}.{field}`` but whose
+        downstream consumer declares the input as the bare ``{field}`` (or
+        ``{upstream}.{field}``). Defaults to ``source_title`` (unchanged for
+        every single-shape caller).
 
         Option F consumer sweep neograph-cbpyx: when the CONSUMING item is
         placeholder-translated (LLM mode), the destination declares the flat
@@ -1031,7 +1063,8 @@ def to_agent_spec(construct: Construct) -> Flow:
         dest_item = item_by_name.get(item_name)
         translate = _is_translation_eligible(dest_item)
         orig_to_flat = _node_translation(cast("Node", dest_item))[2] if translate else {}
-        dotted = f"{upstream_name}.{source_title}" if upstream_name else source_title
+        dest_core = dest_title if dest_title is not None else source_title
+        dotted = f"{upstream_name}.{dest_core}" if upstream_name else dest_core
         for target_node, iterated in input_targets_by_item_name[item_name]:
             if translate:
                 flat = orig_to_flat.get(dotted)
@@ -1081,6 +1114,23 @@ def to_agent_spec(construct: Construct) -> Flow:
                     continue
                 upstream_item = item_by_name.get(upstream_name)
                 source_node = data_node_by_item_name.get(upstream_name)
+                output_key: str | None = None
+                if upstream_item is None:
+                    # B4: a dict-form-OUTPUT producer is referenced by ONE of its
+                    # output keys via the ``{producer}_{key}`` state-field naming
+                    # the validator registers producers under (naming.output_field_name).
+                    # Recover (producer node, output key) with the canonical inverse
+                    # split — never an ad hoc rsplit — then wire ONLY that key's
+                    # ``{key}.{field}`` output Properties.
+                    for cand in ordered_items:
+                        if not isinstance(cand, Node):
+                            continue
+                        key = split_output_field(upstream_name, field_name_for(cand.name))
+                        if key is not None and key in normalize_outputs(cand.outputs).all_keys:
+                            upstream_item = cand
+                            source_node = data_node_by_item_name.get(cand.name)
+                            output_key = key
+                            break
                 if upstream_item is None or source_node is None or not isinstance(upstream_item, Node):
                     raise ConfigurationError.build(
                         f"node {item.name!r}'s dict-form inputs references upstream "
@@ -1091,17 +1141,27 @@ def to_agent_spec(construct: Construct) -> Flow:
                         "via '{upstream}_{key}' naming has no Agent Spec representation yet",
                     )
                 no = normalize_outputs(upstream_item.outputs)
-                if no.is_none or no.is_dict_form:
+                if no.is_none:
                     raise ConfigurationError.build(
                         f"node {item.name!r}'s dict-form inputs references upstream "
-                        f"{upstream_name!r}, whose outputs are not a single exportable type",
-                        expected="a single-type Node.outputs on the upstream node",
-                        found=f"{upstream_name!r}.outputs is dict-form or None",
-                        hint="multi-output (dict-form outputs) producers referenced by a "
-                        "downstream dict-form input have no Agent Spec representation yet",
+                        f"{upstream_name!r}, whose outputs are None",
+                        expected="a Node.outputs producing at least one exportable type",
+                        found=f"{upstream_name!r}.outputs is None",
+                        hint="an upstream with no outputs has no Agent Spec Property to wire",
                     )
-                for prop in _properties_for(no.primary):
-                    _emit_input_edges(item.name, upstream_name, source_node, prop.title)
+                if output_key is not None:
+                    # B4: dict-form producer, one key referenced. The producer's
+                    # output Property is ``{key}.{field}`` (the SAME prefix
+                    # ``_properties_for`` applies); the consumer's declared input is
+                    # ``{upstream_name}.{field}`` — decouple source/dest so the edge
+                    # is wired, not dropped.
+                    for prop in _properties_for({output_key: no.all_keys[output_key]}):
+                        field = prop.title[len(output_key) + 1 :]
+                        _emit_input_edges(item.name, upstream_name, source_node, prop.title, dest_title=field)
+                else:
+                    # Single-type producer referenced directly by node name.
+                    for prop in _properties_for(upstream_item.outputs):
+                        _emit_input_edges(item.name, upstream_name, source_node, prop.title)
             continue
 
         # Single-type inputs (convenience shorthand): the producer is
@@ -1113,11 +1173,31 @@ def to_agent_spec(construct: Construct) -> Flow:
             if not isinstance(upstream, Node):
                 continue
             no = normalize_outputs(upstream.outputs)
-            if no.is_none or no.is_dict_form:
+            if no.is_none:
+                continue
+            source_node = data_node_by_item_name[upstream.name]
+            if no.is_dict_form:
+                # B4: a dict-form-output producer is no longer skipped. Match the
+                # consumer's single input type against each output KEY; wire the
+                # matching key's ``{key}.{field}`` output Property to the consumer's
+                # bare ``{field}`` input (source/dest decoupled, same as the
+                # dict-form-input branch above).
+                matched = False
+                for key, ktype in no.all_keys.items():
+                    if not isinstance(ktype, type) or not isinstance(ni.single_type, type):
+                        continue
+                    if not (issubclass(ktype, ni.single_type) or issubclass(ni.single_type, ktype)):
+                        continue
+                    for prop in _properties_for({key: ktype}):
+                        field = prop.title[len(key) + 1 :]
+                        if field in input_props:
+                            _emit_input_edges(item.name, "", source_node, prop.title, dest_title=field)
+                            matched = True
+                if matched:
+                    break
                 continue
             if not (issubclass(no.primary, ni.single_type) or issubclass(ni.single_type, no.primary)):
                 continue
-            source_node = data_node_by_item_name[upstream.name]
             upstream_props = {p.title for p in _properties_for(no.primary)}
             for shared_title in input_props & upstream_props:
                 _emit_input_edges(item.name, "", source_node, shared_title)

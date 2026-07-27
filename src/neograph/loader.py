@@ -30,6 +30,7 @@ from neograph._agent_spec import (
     _MARK_MODIFIER,
     _MARK_OPERATOR_SPEC,
     _MARK_ORACLE_SPEC,
+    _MARK_PORTAL_SPEC,
     _MARK_PROMPT_SPEC,
     _MARK_TOOL_SPEC,
 )
@@ -706,8 +707,17 @@ def _reconstruct_swarm_mesh(swarm: Any) -> Construct:
     agents = _swarm_agents_ordered(swarm)
     payload = _synthesize_swarm_payload(swarm, agents)
 
+    # B3: the entry-only Portal knobs (max_hops/on_exhaust/route) ride the
+    # neograph/portal_spec marker on export (_lower_portal_mesh_to_swarm) but
+    # were silently dropped on re-import. Read them back the SAME way the sibling
+    # reconstructors read their _MARK_*_SPEC markers (e.g. _reconstruct_oracle_group,
+    # _reconstruct_loop_item) and apply them to the ENTRY member's Portal only --
+    # max_hops/on_exhaust are entry-only per _check_portal_mesh, and route is
+    # taken from the entry. Foreign Swarms have no marker -> plain Portal(to=peers).
+    portal_spec = (getattr(swarm, "metadata", None) or {}).get(_MARK_PORTAL_SPEC)
+
     members: list[Any] = []
-    for agent in agents:
+    for idx, agent in enumerate(agents):
         peers = [dst.name for (src, dst) in swarm.relationships if src is agent]
         # The reserved mesh-channel input key is the literal "handoff" (design
         # §3.3, mirrored in example 28's declarative form and _ir_normalize's
@@ -721,7 +731,16 @@ def _reconstruct_swarm_mesh(swarm: Any) -> Construct:
         prompt_marker = (getattr(agent, "metadata", None) or {}).get(_MARK_PROMPT_SPEC)
         if prompt_marker is not None:
             member = member.model_copy(update={"prompt": prompt_marker["original_text"] or None})
-        members.append(member | Portal(to=peers))
+        if idx == 0 and portal_spec is not None:
+            portal = Portal(
+                to=peers,
+                max_hops=portal_spec["max_hops"],
+                on_exhaust=portal_spec["on_exhaust"],
+                route=portal_spec["route"],
+            )
+        else:
+            portal = Portal(to=peers)
+        members.append(member | portal)
 
     warnings.warn(
         f"Swarm {swarm.name!r} imported onto a native Portal mesh (best-effort): the mesh "
