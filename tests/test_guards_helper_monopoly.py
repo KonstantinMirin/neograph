@@ -640,9 +640,15 @@ class TestNoRawOutputsInFanInWiring:
 def _combo_map_dict_literals(source: str) -> int:
     """Count dict literals mapping (mostly) to ``ModifierCombo.<member>`` values.
 
-    A combo map has >=4 values that are ``ModifierCombo`` attribute accesses
-    (matches on the ``ModifierCombo`` prefix, alias-tolerant). The module-level
-    `_COMBO_MAP` is the single sanctioned instance."""
+    A combo map has >=4 values that are ``ModifierCombo`` attribute accesses.
+    The module-level `_COMBO_MAP` is the single sanctioned instance.
+
+    Scope: matches the LITERAL name ``ModifierCombo`` only — an aliased import
+    (``import ModifierCombo as MC`` then ``MC.EACH``) is invisible here. (The
+    docstring previously claimed "alias-tolerant"; that was never true of this
+    code. Corrected 2026-07-28.) The newer
+    `tests/test_guards_combo_decomposition_consumers.py` resolves local import
+    aliases before scanning and is the exemplar to follow for new guards."""
     tree = ast.parse(source)
     count = 0
     for node in ast.walk(tree):

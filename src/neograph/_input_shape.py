@@ -9,7 +9,7 @@ from neograph._normalize import normalize_inputs, primary_output_field
 from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
 from neograph.di import _isinstance_safe, _unwrap_each_dict, _unwrap_loop_value
-from neograph.modifiers import ModifierCombo, classify_modifiers
+from neograph.modifiers import COMBO_DECOMPOSITION, PrimaryShape, classify_modifiers
 from neograph.naming import field_name_for
 from neograph.node import Node
 
@@ -30,7 +30,7 @@ def _classify_input_shape(state: StateBus, node: Node) -> InputShape:
         return InputShape.NONE
 
     combo, _ = classify_modifiers(node)
-    if combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR):
+    if COMBO_DECOMPOSITION[combo].primary is PrimaryShape.LOOP:
         own_field = primary_output_field(field_name_for(node.name), node.outputs)
         # StateBus.get optional: loop-bootstrap — first router pass may have no
         # self-output yet; absence signals "iteration 0" and falls through.

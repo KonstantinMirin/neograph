@@ -47,12 +47,12 @@ from neograph.factory import (
 from neograph.modifiers import (
     Each,
     Loop,
-    ModifierCombo,
     Operator,
     Oracle,
     Portal,
+    PrimaryShape,
     _group_portal_members,
-    classify_modifiers,
+    primary_shape,
     split_each_path,
 )
 from neograph.naming import field_name_for, output_field_name
@@ -716,7 +716,7 @@ def _contiguous_portal_mesh(nodes: list[ConstructItem], entry: Node) -> list[Con
     start = next(i for i, n in enumerate(nodes) if n is entry)
     candidates: list[ConstructItem] = []
     for item in nodes[start:]:
-        if classify_modifiers(item)[0] not in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR):
+        if primary_shape(item) is not PrimaryShape.PORTAL:
             break
         # A dispatch-mode Portal (route="decide") is NOT a mesh member — it is a
         # standalone linear node lowered by _add_portal_dispatch (review M2). Stop

@@ -355,13 +355,22 @@ instead of their hand-rolled decomposition. This proves the table against the
 one implementation everything else must match, before any other consumer
 depends on it.
 
-**Phase 3 — migrate the remaining six non-Agent-Spec consumers.**
-`state.py` (three blocks), `_state_write.py`, `_subconstruct.py`,
-`_input_shape.py`, `runner.py`, `_wiring.py` — each is a mechanical
-"shared classification, different per-arm body" swap, verified individually
-(per the combo doc's mandate) rather than assumed to transfer cleanly. Land
-the structural anti-regrowth guard now, enumerating all ten consumers
-(the eight migrated so far plus `_agent_spec.py`/`loader.py`, still pending).
+**Phase 3 — migrate the remaining SEVEN non-Agent-Spec consumers.**
+`state.py` (SEVEN sites, not three), `_state_write.py`, `_subconstruct.py`,
+`_input_shape.py`, `runner.py`, `_wiring.py` — **and `compiler.py` again**:
+Phase 2 migrated its two `match` statements but left a third, compare-shaped
+Portal mesh-ENTRY site behind, found only by an AST census in Phase 3. Each is
+a mechanical "shared classification, different per-arm body" swap, verified
+individually (per the combo doc's mandate) rather than assumed to transfer
+cleanly — and that verification paid: `state.py`'s three `match` blocks do NOT
+group combos identically, one site (`has_any_oracle`/`has_any_each`) asks
+modifier PRESENCE rather than decomposition and must NOT move to the table, and
+the sub-construct `PORTAL` arm is live logic despite a stale comment calling it
+unreachable. Land the structural anti-regrowth guard now
+(`tests/test_guards_combo_decomposition_consumers.py`), enumerating the seven
+migrated consumers plus a `PENDING` allowlist holding `_agent_spec.py`
+(emptied by `neograph-tjpn4`). `loader.py` is NOT a consumer — it has zero
+`ModifierCombo` references until §6's recognize→classify design lands.
 
 **Phase 4 — fix the Construct-item-modifier-drop bug.**
 `_lower_construct_item` gains a `classify_modifiers` call for `Construct`

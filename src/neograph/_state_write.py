@@ -12,7 +12,7 @@ from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
 from neograph.describe_type import type_display_name
 from neograph.errors import ExecutionError, NodeOutputError
-from neograph.modifiers import Each, ModifierCombo, classify_modifiers
+from neograph.modifiers import COMBO_DECOMPOSITION, Each, PrimaryShape, classify_modifiers
 from neograph.naming import output_field_name
 from neograph.node import Node, TypeSpecStatic
 
@@ -76,21 +76,13 @@ def _build_state_update(
     # Skip Each wrapping when Oracle is also present — the Each×Oracle
     # fusion handles tagging in the redirect_fn.
     each_mod: Each | None = None
-    match combo:
-        case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
-            each_mod = mods["each"]
-        case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
-            each_mod = None  # fusion handles tagging
-        case (
-            ModifierCombo.BARE
-            | ModifierCombo.OPERATOR
-            | ModifierCombo.ORACLE
-            | ModifierCombo.ORACLE_OPERATOR
-            | ModifierCombo.LOOP
-            | ModifierCombo.LOOP_OPERATOR
-            | ModifierCombo.PORTAL
-            | ModifierCombo.PORTAL_OPERATOR
-        ):
+    match COMBO_DECOMPOSITION[combo].primary:
+        case PrimaryShape.EACH:
+            # EACH_ORACLE decomposes to primary=EACH, so the fusion is split out
+            # here by modifier CO-PRESENCE (the idiom compiler.py:622 uses), not
+            # by a second combo enumeration.
+            each_mod = None if "oracle" in mods else mods["each"]
+        case PrimaryShape.BARE | PrimaryShape.ORACLE | PrimaryShape.LOOP | PrimaryShape.PORTAL:
             # PORTAL (with or without an Operator approval gate): a mesh member
             # writes its own output plainly (no Each key-wrapping).
             each_mod = None

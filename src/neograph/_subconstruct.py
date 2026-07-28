@@ -15,7 +15,7 @@ from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ExecutionError
-from neograph.modifiers import ModifierCombo, classify_modifiers
+from neograph.modifiers import COMBO_DECOMPOSITION, PrimaryShape, classify_modifiers
 from neograph.naming import field_name_for
 
 if TYPE_CHECKING:
@@ -86,9 +86,16 @@ def make_subgraph_fn(
     sub_log = log.bind(subgraph=sub.name)
     field_name = field_name_for(sub.name)
 
-    sub_combo, _ = classify_modifiers(sub)
-    has_loop = sub_combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR)
-    has_each = sub_combo in (ModifierCombo.EACH, ModifierCombo.EACH_OPERATOR)
+    sub_combo, sub_mods = classify_modifiers(sub)
+    sub_shape = COMBO_DECOMPOSITION[sub_combo].primary
+    has_loop = sub_shape is PrimaryShape.LOOP
+    # EACH-shaped but NOT the Each x Oracle fusion: EACH_ORACLE decomposes to
+    # primary=EACH, so the co-presence test preserves the exclusion the old
+    # two-member combo tuple had. It is load-bearing, not defensive — this
+    # function is called at compiler.py:512, BEFORE _add_subgraph's
+    # SUB_CONSTRUCT_UNSUPPORTED_COMBOS gate rejects the fusion, so the line
+    # really does execute for a fused sub-construct.
+    has_each = sub_shape is PrimaryShape.EACH and "oracle" not in sub_mods
 
     def _build_sub_input(
         state: BaseModel | dict[str, Any], config: RunnableConfig

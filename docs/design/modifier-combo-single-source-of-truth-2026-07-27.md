@@ -24,7 +24,7 @@ file:line citations, not assumed:
 |---|---|
 | `compiler.py` (`_add_node_to_graph`, `_add_subgraph`) | the full `(primary, has_operator)` decomposition, in two separate `match combo:` statements |
 | `_agent_spec.py` (`_lower_construct_item`) | the same decomposition, flat 5-branch `if combo == ModifierCombo.X:` chain, incomplete |
-| `state.py:165,537,596` | the same combo-to-bucket grouping (BARE/OPERATOR, EACH/EACH_OPERATOR, ORACLE/ORACLE_OPERATOR, LOOP/LOOP_OPERATOR, EACH_ORACLE/EACH_ORACLE_OPERATOR, PORTAL/PORTAL_OPERATOR), in three separate `match combo:` blocks — one per producer category (sub-construct output shaping, dict-form node-output shaping, single-type node-output shaping); the grouping is byte-identical across all three, only the per-arm field/reducer-building body differs |
+| `state.py:143,165,218,241,272,544,603` | **SEVEN** combo-dispatch sites, not three (corrected 2026-07-28 by the Phase-3 AST census; the original row listed only the three `match` blocks). Three are `match combo:` blocks — one per producer category (sub-construct output shaping, dict-form node-output shaping, single-type node-output shaping) — and their groupings are **NOT** byte-identical, contrary to this row's original claim: the sub-construct block has 6 arms with EACH_ORACLE and PORTAL separate, the dict-form block has 3 arms and groups EACH *with* BARE/LOOP/PORTAL, and the single-type block has 5. The other four sites are compare-shaped: two LOOP tests (`:143`, `:241`), one PORTAL member filter (`:272`), and the `has_any_oracle`/`has_any_each` pair (`:218`) — the last of which asks modifier PRESENCE, not decomposition, and so migrates to a presence read rather than to the table |
 | `_state_write.py:72-97` | `combo, mods = classify_modifiers(node)` then `match combo:` — the same primary-with-operator-orthogonal grouping |
 | `_subconstruct.py:89-91` | `sub_combo, _ = classify_modifiers(sub)` then `sub_combo in (LOOP, LOOP_OPERATOR)` / `sub_combo in (EACH, EACH_OPERATOR)` membership checks — Operator is correctly not consulted here (it's an orthogonal wrapper, not a shape, so its presence/absence doesn't change whether something is Loop-shaped or Each-shaped); this is correct orthogonality, not a gap |
 | `_input_shape.py:32-33` | `combo, _ = classify_modifiers(node)` then `combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR)` |
@@ -106,26 +106,44 @@ The epic (title updated 2026-07-27) now covers:
 
 1. `COMBO_DECOMPOSITION`/`PrimaryShape`/`SUB_CONSTRUCT_UNSUPPORTED_COMBOS` in
    `modifiers.py` (as designed in `agent-spec-rewrite-2026-07-27.md` §1) — unchanged.
-2. **All nine consumers** read from it: `compiler.py` (both match statements),
-   `_agent_spec.py` (rewritten dispatch), `loader.py` (§6's recognize→classify
-   design), **and now** `state.py`, `_state_write.py`, `_subconstruct.py`,
-   `_input_shape.py`, `runner.py`, `_wiring.py`. Each of the six newly-found
-   consumers needs the SAME verification rigor already applied to `compiler.py`:
-   read the real code, do not assume the pattern transfers cleanly. `state.py`'s
-   three separate match blocks, checked directly, group combos identically
-   across all three (the same BARE/OPERATOR, EACH/EACH_OPERATOR, etc. buckets) —
-   they differ only in which producer category's field/reducer body each arm
-   builds (sub-construct output shaping vs. dict-form node-output shaping vs.
-   single-type node-output shaping), and at least one arm (the sub-construct
-   block's `EACH_ORACLE` case) is a documented, currently-unreachable defensive
-   fallback rather than live logic. So the *classification* question is a single
-   clean unification across all three blocks; only the per-arm *bodies* need
-   individual care — the same "shared decision, different bodies per site"
-   shape the `compiler.py` Node-vs-Construct discovery already proved necessary
-   to check for, not assume away.
-3. The structural anti-regrowth guard (§1.7 of the rewrite spec) is extended to
-   assert all nine modules import the shared table and none contains a second,
-   independent `ModifierCombo` enumeration for dispatch purposes.
+2. **Every consumer** reads from it: `compiler.py` (both match statements **and**
+   the compare-shaped mesh-entry detection at `:263` — see the correction below),
+   `_agent_spec.py` (rewritten dispatch), **and now** `state.py`,
+   `_state_write.py`, `_subconstruct.py`, `_input_shape.py`, `runner.py`,
+   `_wiring.py`. Each newly-found consumer needs the SAME verification rigor
+   already applied to `compiler.py`: read the real code, do not assume the
+   pattern transfers cleanly.
+
+   **Corrected 2026-07-28 (Phase 3), by re-grepping rather than trusting this
+   list — the very discipline this document mandates:**
+   - This clause originally said "all nine consumers" and named `loader.py`.
+     `loader.py` contains **zero** `ModifierCombo` references today; its mention
+     was forward-looking to §6's recognize→classify design. Removed from the
+     present-tense inventory.
+   - `compiler.py` was NOT finished by Phase 2. Its two `match` statements were
+     migrated, but a third, compare-shaped site (the Portal mesh-ENTRY detection)
+     survived — found only by an AST census in Phase 3. Phase 3 therefore touched
+     **seven** files, not six.
+   - `state.py`'s three match blocks do **NOT** group combos identically (this
+     clause previously claimed they did). They have 6, 3 and 5 arms respectively
+     and disagree about where `EACH`, `EACH_ORACLE` and `PORTAL` sit. The
+     *classification* question is therefore NOT a single clean unification; each
+     block needed its own reading, and two of them needed an Each×Oracle fusion
+     split by modifier co-presence inside the shared `PrimaryShape.EACH` arm.
+   - The sub-construct block's `PORTAL` arm is **live logic**, not the
+     "defensively-unreachable" fallback its code comment claimed: a
+     Portal-carrying Construct is a first-class mesh member and may be the mesh
+     entry (neograph-s7zt3.5), pinned by `tests/test_portal_construct_entry.py`.
+     Only the `EACH_ORACLE` arm is a genuine (reached-but-non-raising) defensive
+     fallback, and it must stay non-raising so that `_add_subgraph` — which runs
+     *after* state building — keeps ownership of the user-visible error.
+3. The structural anti-regrowth guard (§1.7 of the rewrite spec) asserts that
+   every migrated module imports **and uses** the shared table and that none
+   contains a second, independent `ModifierCombo` enumeration for dispatch
+   purposes. Landed in Phase 3 as
+   `tests/test_guards_combo_decomposition_consumers.py` (pure-AST,
+   alias-tolerant). `_agent_spec.py` is carried in an explicit `PENDING`
+   allowlist that may only shrink — emptied by `neograph-tjpn4`.
 
 ## 5. Why this record exists outside of beads
 

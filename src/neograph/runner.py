@@ -29,7 +29,7 @@ from neograph._run_cache import evict_run
 from neograph._state_keys import StateKeys, _strip_internals
 from neograph.construct import Construct, iter_nodes
 from neograph.errors import CheckpointSchemaError, ConfigurationError, ExecutionError
-from neograph.modifiers import ModifierCombo, classify_modifiers
+from neograph.modifiers import PrimaryShape, primary_shape
 from neograph.naming import field_name_for
 from neograph.node import Node
 
@@ -113,14 +113,14 @@ def _mesh_hop_cost(construct: Construct) -> int:
         # NOT flushed and re-costed as its own standalone nested mesh, which
         # would mis-segment the parent mesh (excluding the boundary hop) and the
         # members after it. This branch precedes the plain-Construct recursion.
-        if isinstance(item, Construct) and classify_modifiers(item)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR):
+        if isinstance(item, Construct) and primary_shape(item) is PrimaryShape.PORTAL:
             current_run.append(item)
             continue
         if isinstance(item, Construct):
             _flush()
             total += _mesh_hop_cost(item)
             continue
-        if isinstance(item, Node) and classify_modifiers(item)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR):
+        if isinstance(item, Node) and primary_shape(item) is PrimaryShape.PORTAL:
             current_run.append(item)
         else:
             _flush()
@@ -140,7 +140,7 @@ def _portal_mesh_member_ids(construct: Construct) -> set[int]:
     """
     ids: set[int] = set()
     for item in iter_with_arms(construct):
-        if isinstance(item, Construct) and classify_modifiers(item)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR):
+        if isinstance(item, Construct) and primary_shape(item) is PrimaryShape.PORTAL:
             # A Portal-carrying Construct mesh member (do0d9, §3.1 site 6): its
             # interior runs as a separate isolated invoke (0 parent-budget
             # contribution, Q4) and its per-hop cost is 1 in _mesh_hop_cost — so
@@ -151,7 +151,7 @@ def _portal_mesh_member_ids(construct: Construct) -> set[int]:
             ids |= {id(n) for n in iter_nodes(item)}
         elif isinstance(item, Construct):
             ids |= _portal_mesh_member_ids(item)
-        elif isinstance(item, Node) and classify_modifiers(item)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR):
+        elif isinstance(item, Node) and primary_shape(item) is PrimaryShape.PORTAL:
             ids.add(id(item))
     return ids
 

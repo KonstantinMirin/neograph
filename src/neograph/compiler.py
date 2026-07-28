@@ -52,9 +52,9 @@ from neograph.factory import make_node_fn
 from neograph.modifiers import (
     COMBO_DECOMPOSITION,
     SUB_CONSTRUCT_UNSUPPORTED_COMBOS,
-    ModifierCombo,
     PrimaryShape,
     classify_modifiers,
+    primary_shape,
 )
 from neograph.naming import field_name_for
 from neograph.node import Node
@@ -260,10 +260,7 @@ def compile(
         # A mesh ENTRY may be a sub-Construct (neograph-s7zt3.5) — the same
         # first-class Portal member a non-entry position already admits (do0d9).
         # The mesh helpers are Construct-agnostic; only DETECTION needed relaxing.
-        if isinstance(item, (Node, Construct)) and classify_modifiers(item)[0] in (
-            ModifierCombo.PORTAL,
-            ModifierCombo.PORTAL_OPERATOR,
-        ):
+        if isinstance(item, (Node, Construct)) and primary_shape(item) is PrimaryShape.PORTAL:
             portal = item.modifier_set.portal
             if portal is not None and portal.is_dispatch:
                 # Dispatch mode (design §4.2): a standalone LINEAR node (plain

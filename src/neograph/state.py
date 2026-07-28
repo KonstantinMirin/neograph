@@ -24,7 +24,15 @@ from typing import assert_never
 
 from neograph._normalize import _declared_output, normalize_outputs
 from neograph._state_keys import StateKeys
-from neograph.modifiers import EachFailure, ModifierCombo, _group_portal_members, classify_modifiers
+from neograph.modifiers import (
+    COMBO_DECOMPOSITION,
+    SUB_CONSTRUCT_UNSUPPORTED_COMBOS,
+    EachFailure,
+    PrimaryShape,
+    _group_portal_members,
+    classify_modifiers,
+    primary_shape,
+)
 from neograph.node import Node
 
 
@@ -141,7 +149,7 @@ def compile_state_model(
                     continue
                 field_name = field_name_for(arm_item.name)
                 arm_combo, _ = classify_modifiers(arm_item)
-                if arm_combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR):
+                if COMBO_DECOMPOSITION[arm_combo].primary is PrimaryShape.LOOP:
                     fields[field_name] = (
                         Annotated[list[arm_item.output], _append_loop_result],  # type: ignore[name-defined]
                         [],
@@ -163,8 +171,17 @@ def compile_state_model(
         field_name = field_name_for(sub.name)
 
         combo, mods = classify_modifiers(sub)
-        match combo:
-            case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
+        if combo in SUB_CONSTRUCT_UNSUPPORTED_COMBOS:
+            # Each x Oracle on a Construct. Gate checked FIRST, mirroring
+            # _add_subgraph's order — but deliberately NON-raising: state building
+            # runs at compiler.py:240, BEFORE _add_subgraph at :308, so raising
+            # here would pre-empt and replace the user-visible CompileError that
+            # _add_subgraph owns. Build a plain field and let the compiler raise.
+            # Pinned by tests/check_fixtures/should_fail/subconstruct_each_oracle_fusion.py.
+            fields[field_name] = (sub.output | None, None)
+            continue
+        match COMBO_DECOMPOSITION[combo].primary:
+            case PrimaryShape.ORACLE:
                 # Oracle on Construct: collector + consumer field
                 collector_field = StateKeys.oracle_collector(field_name)
                 fields[collector_field] = (
@@ -172,10 +189,13 @@ def compile_state_model(
                     [],
                 )
                 fields[field_name] = (sub.output | None, None)  # type: ignore[name-defined]
-            case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
+            case PrimaryShape.EACH:
                 # Each on Construct: dict field. Under on_error='collect' the
                 # barrier may hold a typed EachFailure per thrown item, so the
                 # value type widens to accept it (default 'raise' unchanged).
+                # The Each x Oracle fusion never reaches here — it left via the
+                # SUB_CONSTRUCT_UNSUPPORTED_COMBOS gate above — so mods["each"]
+                # is the plain-Each modifier.
                 each_mod = mods["each"]
                 value_type: Any = (
                     sub.output | EachFailure  # type: ignore[name-defined]
@@ -187,25 +207,23 @@ def compile_state_model(
                     Annotated[field_type, _merge_dicts],
                     None,
                 )
-            case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
+            case PrimaryShape.LOOP:
                 # Loop on Construct: append-list + iteration counter
                 fields[field_name] = (
                     Annotated[list[sub.output], _append_loop_result],  # type: ignore[name-defined]
                     [],
                 )
                 fields[StateKeys.loop_count(field_name)] = (int, 0)
-            case ModifierCombo.BARE | ModifierCombo.OPERATOR:
+            case PrimaryShape.BARE:
                 fields[field_name] = (sub.output | None, None)
-            case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
-                # Each×Oracle on Constructs not supported
-                # Compiler raises earlier; this is a defensive fallback.
-                fields[field_name] = (sub.output | None, None)
-            case ModifierCombo.PORTAL | ModifierCombo.PORTAL_OPERATOR:
-                # Portal (with or without Operator) on a Construct is rejected
-                # at assembly (D-MESH-LEVEL: mesh members are sibling Nodes,
-                # not sub-constructs), so this arm is defensively-unreachable —
-                # mirror the EACH_ORACLE fallback rather than crash the state
-                # build.
+            case PrimaryShape.PORTAL:
+                # LIVE, not defensive: a Portal-carrying Construct is a first-class
+                # mesh member and may even be the mesh ENTRY (neograph-s7zt3.5;
+                # compiler.py admits a Construct at the mesh-entry detection site).
+                # A mesh member writes its own output plainly, mirroring
+                # _add_single_output_field's BARE/PORTAL arm. Pinned by
+                # tests/test_portal_construct_entry.py. Do NOT fold this into a
+                # "defensively unreachable" arm — the field it builds is load-bearing.
                 fields[field_name] = (sub.output | None, None)
             case _ as unreachable:
                 assert_never(unreachable)
@@ -215,20 +233,15 @@ def compile_state_model(
     has_any_oracle = False
     has_any_each = False
     for item in all_items:
-        item_combo, _ = classify_modifiers(item)
-        if item_combo in (
-            ModifierCombo.ORACLE,
-            ModifierCombo.ORACLE_OPERATOR,
-            ModifierCombo.EACH_ORACLE,
-            ModifierCombo.EACH_ORACLE_OPERATOR,
-        ):
+        # Modifier PRESENCE, deliberately NOT a decomposition dispatch: an
+        # Each x Oracle node needs BOTH the Oracle fields and the Each item slot,
+        # but EACH_ORACLE decomposes to primary=EACH — so asking the table for a
+        # shape here would silently drop ORACLE_GEN_ID/ORACLE_MODEL for every
+        # fused node. classify_modifiers inserts a key only when the slot is set.
+        _item_combo, item_mods = classify_modifiers(item)
+        if "oracle" in item_mods:
             has_any_oracle = True
-        if item_combo in (
-            ModifierCombo.EACH,
-            ModifierCombo.EACH_OPERATOR,
-            ModifierCombo.EACH_ORACLE,
-            ModifierCombo.EACH_ORACLE_OPERATOR,
-        ):
+        if "each" in item_mods:
             has_any_each = True
     if has_any_oracle:
         fields[StateKeys.ORACLE_GEN_ID] = (str | None, None)
@@ -239,7 +252,7 @@ def compile_state_model(
     # Loop support: iteration counter per looped node
     for n in nodes_only:
         n_combo, n_mods = classify_modifiers(n)
-        if n_combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR):
+        if COMBO_DECOMPOSITION[n_combo].primary is PrimaryShape.LOOP:
             field_name = field_name_for(n.name)
             fields[StateKeys.loop_count(field_name)] = (int, 0)
             loop = n_mods["loop"]
@@ -269,7 +282,7 @@ def compile_state_model(
     portal_members: list[ConstructItem] = [
         m
         for m in construct.nodes
-        if classify_modifiers(m)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR) and not _is_dispatch(m)
+        if primary_shape(m) is PrimaryShape.PORTAL and not _is_dispatch(m)
     ]
     for _group_name, group_members in _group_portal_members(portal_members).items():
         entry = group_members[0]
@@ -542,10 +555,15 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
     # Dict-form outputs: one state field per key (neograph-1bp.2).
     if no.is_dict_form:
         combo, mods = classify_modifiers(node)
-        match combo:
-            case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
+        match COMBO_DECOMPOSITION[combo].primary:
+            case PrimaryShape.EACH if "oracle" in mods:
                 # Each×Oracle fusion + dict-form: tagged collector + dict output
                 # per key. Same as single-type fusion but per-key.
+                #
+                # This body must NOT be folded into the plain-Each delegation
+                # below: _add_single_output_field re-classifies and would emit a
+                # PER-KEY eachoracle_collector(key_field), not the node-level
+                # collector the fusion's redirect_fn reads.
                 collector_field = StateKeys.eachoracle_collector(field_name)
                 fields[collector_field] = (
                     Annotated[list, _concat_reducer],
@@ -558,7 +576,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                         Annotated[field_type, _merge_dicts],
                         None,
                     )
-            case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
+            case PrimaryShape.ORACLE:
                 # Oracle + dict-form: single collector for the whole result dict,
                 # per-key consumer fields without per-key collectors.
                 collector_field = StateKeys.oracle_collector(field_name)
@@ -569,16 +587,9 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                 for output_key, output_type in no.all_keys.items():
                     key_field = output_field_name(field_name, output_key)
                     fields[key_field] = (output_type | None, None)
-            case (
-                ModifierCombo.BARE
-                | ModifierCombo.OPERATOR
-                | ModifierCombo.EACH
-                | ModifierCombo.EACH_OPERATOR
-                | ModifierCombo.LOOP
-                | ModifierCombo.LOOP_OPERATOR
-                | ModifierCombo.PORTAL
-                | ModifierCombo.PORTAL_OPERATOR
-            ):
+            case PrimaryShape.BARE | PrimaryShape.EACH | PrimaryShape.LOOP | PrimaryShape.PORTAL:
+                # EACH reaches here only UNFUSED — the fused case is the guarded
+                # arm above; a plain Each dict-form defers per key like the rest.
                 # PORTAL dict-form is rejected at assembly (D-DICT-OUTPUTS);
                 # the arm is defensively-unreachable and defers to the per-key
                 # single-output builder (which treats PORTAL as bare).
@@ -601,27 +612,24 @@ def _add_single_output_field(
 ) -> None:
     """Add one output field to the state model, applying modifier wrapping."""
     combo, mods = classify_modifiers(node)
-    match combo:
-        case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
-            # Each×Oracle fusion: tagged collector + dict output
-            collector_field = StateKeys.eachoracle_collector(field_name)
-            fields[collector_field] = (
-                Annotated[list, _concat_reducer],
-                [],
-            )
-            # Final output: same shape as Each alone (dict[str, merged_type])
+    match COMBO_DECOMPOSITION[combo].primary:
+        case PrimaryShape.EACH:
+            # The Each×Oracle fusion adds a tagged collector; its FINAL output
+            # field is otherwise identical to plain Each's (dict[str, merged]),
+            # so the two paths share the field build rather than duplicating it.
+            # Split by modifier co-presence, not by a second combo enumeration.
+            if "oracle" in mods:
+                collector_field = StateKeys.eachoracle_collector(field_name)
+                fields[collector_field] = (
+                    Annotated[list, _concat_reducer],
+                    [],
+                )
             field_type = dict[str, output_type] | None  # type: ignore[valid-type]
             fields[field_name] = (
                 Annotated[field_type, _merge_dicts],
                 None,
             )
-        case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
-            field_type = dict[str, output_type] | None  # type: ignore[valid-type, misc, assignment]
-            fields[field_name] = (
-                Annotated[field_type, _merge_dicts],
-                None,
-            )
-        case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
+        case PrimaryShape.ORACLE:
             collector_field = StateKeys.oracle_collector(field_name)
             # When oracle_gen_type is set, the collector holds per-variant types
             # (list[gen_type]), not the post-merge type. The consumer-facing field
@@ -632,7 +640,7 @@ def _add_single_output_field(
                 [],
             )
             fields[field_name] = (output_type | None, None)
-        case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
+        case PrimaryShape.LOOP:
             # Loop: append-list reducer. Each iteration pushes to the list.
             # _extract_input unwraps [-1] for the node on re-entry.
             # Downstream nodes after loop exit see the final value (unwrapped).
@@ -640,7 +648,7 @@ def _add_single_output_field(
                 Annotated[list[output_type], _append_loop_result],
                 [],
             )
-        case ModifierCombo.BARE | ModifierCombo.OPERATOR | ModifierCombo.PORTAL | ModifierCombo.PORTAL_OPERATOR:
+        case PrimaryShape.BARE | PrimaryShape.PORTAL:
             # A Portal mesh member (with or without an Operator approval gate)
             # writes its OWN output field as a plain value (like a bare node);
             # the mesh channel + hop counter are separate neo_-prefixed fields

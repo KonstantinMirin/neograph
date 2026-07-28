@@ -231,6 +231,20 @@ def classify_modifiers(item: ConstructItem) -> tuple[ModifierCombo, dict]:
     return combo, mods
 
 
+def primary_shape(item: ConstructItem) -> PrimaryShape:
+    """The primary body-shape `item`'s modifier combo decomposes to.
+
+    Convenience over ``COMBO_DECOMPOSITION[classify_modifiers(item)[0]].primary``
+    for the many consumers that ask a pure shape question ("is this Portal-shaped?",
+    "is this Loop-shaped?") and need neither the combo value nor the modifier dict.
+
+    Call this only where the caller does NOT already hold a classify_modifiers
+    result; where it does, index COMBO_DECOMPOSITION with the combo it already has
+    rather than re-classifying.
+    """
+    return COMBO_DECOMPOSITION[classify_modifiers(item)[0]].primary
+
+
 class Modifier(BaseModel, frozen=True):
     """Base class for node modifiers. Applied via Node.__or__."""
 
