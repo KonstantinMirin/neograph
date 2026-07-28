@@ -30,7 +30,7 @@ This example covers mode (a) peer routing. Mode (b), dynamic flow dispatch
 at runtime from an emitted spec -- is shown in example 29.
 
 Run (keyless, no network):
-    uv run --extra dev python examples/28_portal_swarm.py
+    uv run python examples/28_portal_swarm.py
 """
 
 from __future__ import annotations

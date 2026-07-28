@@ -655,7 +655,7 @@ class TestDispatchAcceptsAgentSpecFlavoredSpec:
     ``ExecutionError`` until 0la8v re-points ``_prepare`` from ``load_spec``
     onto ``from_agent_spec`` (Implementation Plan step 2).
 
-    Gated on ``pyagentspec`` -- ``uv run --extra dev --extra agent-spec
+    Gated on ``pyagentspec`` -- ``uv run --extra agent-spec
     pytest tests/test_portal_dispatch.py``.
     """
 

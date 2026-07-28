@@ -70,7 +70,7 @@ pins today's bytes. It is not a TDD-red artifact; do not "fix" it for passing.
 
 Run with::
 
-    uv run --extra dev --extra agent-spec pytest tests/test_agent_spec_refactor_snapshot.py
+    uv run --extra agent-spec pytest tests/test_agent_spec_refactor_snapshot.py
 """
 
 from __future__ import annotations

@@ -19,7 +19,7 @@ stands in for a real agent stage. In production you would write, e.g.::
 and the `forward()` wiring below is byte-identical.
 
 Run (keyless, no network):
-    uv run --extra dev python examples/27_forward_agent_wiring.py
+    uv run python examples/27_forward_agent_wiring.py
 """
 
 from __future__ import annotations

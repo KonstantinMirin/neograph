@@ -5,7 +5,7 @@ Gated on ``pyagentspec`` via ``pytest.importorskip`` -- the ``[agent-spec]``
 optional extra keeps ``src/neograph`` core dependency-light by default. Run
 with::
 
-    uv run --extra dev --extra agent-spec pytest tests/test_agent_spec_import.py
+    uv run --extra agent-spec pytest tests/test_agent_spec_import.py
 
 TDD red step: ``from_agent_spec`` does not exist yet anywhere in
 ``src/neograph`` (neither ``neograph.loader`` nor the top-level

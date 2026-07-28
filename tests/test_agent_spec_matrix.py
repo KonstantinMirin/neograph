@@ -46,7 +46,7 @@ The two root-cause families the GREEN cells still pin (neograph-sdfgz):
 
 Run with::
 
-    uv run --extra dev --extra agent-spec pytest tests/test_agent_spec_matrix.py
+    uv run --extra agent-spec pytest tests/test_agent_spec_matrix.py
 """
 
 from __future__ import annotations

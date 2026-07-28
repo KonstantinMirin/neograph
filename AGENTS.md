@@ -404,6 +404,48 @@ An LLM-mode node (`think`/`agent`/`act`) never runs its body, so — unlike scri
 
 ## Test conventions
 
+### The gate command, and which extras it does NOT include
+
+**Run the whole suite with `uv run pytest`.** That is it — no `--extra`. `make quality`
+(`test` + `lint` + `typecheck`) runs the same thing. Everything the gate needs, including
+`pyagentspec` and the toolchain (`pytest`, `pytest-asyncio`, `ruff`, `mypy`), lives in
+`[dependency-groups].dev`, which uv installs by default.
+
+There is deliberately **no `dev` extra** (neograph-x75es). Older docs and commit messages say
+`uv run --extra dev pytest`; that form is gone. Having both a `dev` extra and a `dev`
+dependency-group gave every new dev dependency two plausible homes, only one of which the gate
+reads — and that is exactly how 271 Agent Spec tests plus `pytest-asyncio` ended up outside the
+gate. **One namespace: `[dependency-groups].dev`.** Optional *consumer-facing* extras
+(`agent-spec`, `mcp`, `mcp-examples`, `langfuse`) are unaffected and still exist.
+
+What the bare gate still does NOT run — the MCP suites, and only those:
+
+| Suite | Command | Why it stays extra-gated |
+|---|---|---|
+| `tests/test_mcp_examples_e2e.py` | `uv run --extra mcp-examples pytest tests/test_mcp_examples_e2e.py` | `importorskip`-gated; real MCP over stdio |
+| `tests/test_mcp_battery.py`, `test_mcp_oauth.py`, `test_mcp_transport_resilience.py`, `test_mcp_fakes.py`, MCP half of `test_guards_api_manifest.py` | `uv run --extra mcp pytest <file>` | `skipif(not _HAS_MCP)`; ~82 tests total |
+
+That optionality is **structural, not an oversight**: the no-session-ownership guard's premise is
+that the MCP stack stays out of the core install. "No-key" != "no extra" (see the MCP examples
+section). Everything else runs by default.
+
+**Adding a new dependency-gated test?** `tests/test_guards_test_gate_deps.py` enforces the rule:
+every `pytest.importorskip("x")` and every `find_spec("x")`-fed `skipif` must have its
+distribution in `[dependency-groups].dev`, or be listed in `GATED_IMPORT_EXEMPTIONS` with a
+structural reason (checked non-vacuous against the extra it names, and checked for staleness).
+Prefer the default group — `importorskip` is the SILENT form: the module yields zero tests and
+the summary line says nothing, so a green gate proves nothing about it.
+
+**Do NOT "tidy" `importorskip` onto the ~32 Agent Spec tests that hard-fail without
+`pyagentspec`.** The asymmetry (13 files guarded, ~32 tests unguarded) is deliberate: a loud
+failure beats a silent skip, and adding guards would spread the disease this rule exists to
+remove.
+
+**`src/neograph` stays Agent-Spec-free.** Now that `pyagentspec` is always installed, that is no
+longer proven by the dependency simply being absent — it is proven explicitly by
+`tests/test_guards_agent_spec_core_purity.py` (subprocess + `sys.modules`, plus a static
+module-level-import scan), the same shape as the MCP purity guard in `test_mcp_battery.py`.
+
 ### Test file layout
 
 The suite grows every wave, so the counts below rot fast — recount rather than
@@ -510,9 +552,9 @@ dependency-light**: they need `mcp` + `langchain-mcp-adapters`, which live in th
 `mcp-examples` optional extra (`[project.optional-dependencies].mcp-examples`),
 **not** core deps and **not** the default dev group. This keeps `src/neograph`
 MCP-free (the no-session-ownership guard scans `src/` only) and the core
-`uv run --extra dev pytest` suite light.
+`uv run pytest` suite light.
 
-- **Run the MCP E2E harness**: `uv run --extra dev --extra mcp-examples pytest tests/test_mcp_examples_e2e.py`
+- **Run the MCP E2E harness**: `uv run --extra mcp-examples pytest tests/test_mcp_examples_e2e.py`
 - The harness (`tests/test_mcp_examples_e2e.py`) is `pytest.importorskip`-gated, so
   the core suite **skips** it cleanly without the extra. It proves the demo server
   end-to-end (tool discovery, `get_deal` resource_link manifest, RFC-6570 email

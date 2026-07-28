@@ -289,7 +289,7 @@ async def deal_review(state, config):
 - `gate_tools_when` pauses before a mutation fires; approve runs it exactly once, deny never runs it and the agent is told why
 - `ToolInteraction.typed_result` carries the structured MCP payload; mark read-only readers `idempotent=True`
 
-See `examples/23_mcp_client_selective_binding.py` for the full runnable example (`uv run --extra dev --extra mcp-examples python examples/23_mcp_client_selective_binding.py`), `examples/25_mcp_single_tool_gateway.py` for the singular-factory story (offline build, gateway rename, per-run identity), and `examples/26_mcp_composite_session.py` for the composite story (`mcp_session`: one connection, two federated primitives, a typed assembled result) — all against the same demo server.
+See `examples/23_mcp_client_selective_binding.py` for the full runnable example (`uv run --extra mcp-examples python examples/23_mcp_client_selective_binding.py`), `examples/25_mcp_single_tool_gateway.py` for the singular-factory story (offline build, gateway rename, per-run identity), and `examples/26_mcp_composite_session.py` for the composite story (`mcp_session`: one connection, two federated primitives, a typed assembled result) — all against the same demo server.
 
 ---
 

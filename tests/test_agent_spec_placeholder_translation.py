@@ -23,7 +23,7 @@ neograph-i7k7j). It pins:
 
 Run with::
 
-    uv run --extra dev --extra agent-spec pytest tests/test_agent_spec_placeholder_translation.py
+    uv run --extra agent-spec pytest tests/test_agent_spec_placeholder_translation.py
 """
 
 from __future__ import annotations

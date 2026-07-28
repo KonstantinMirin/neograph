@@ -37,7 +37,7 @@ The dispatched inner flow compiles with NO checkpointer in v1, so on a parent
 resume the whole dispatch node re-executes -- see the Portal docs (durability).
 
 Run (keyless, no network):
-    uv run --extra dev python examples/29_portal_dynamic_flow.py
+    uv run python examples/29_portal_dynamic_flow.py
 """
 
 from __future__ import annotations

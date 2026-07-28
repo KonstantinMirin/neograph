@@ -25,7 +25,7 @@ Real transports, no protocol mocking — the shared FastMCP demo server echoes t
 ``Authorization`` header under ``bearer_identity`` (http) and the ``token`` tool
 argument under ``acting_as`` (stdio). Run with::
 
-    uv run --extra dev --extra mcp-examples pytest tests/test_mcp_identity_refresh.py
+    uv run --extra mcp-examples pytest tests/test_mcp_identity_refresh.py
 """
 
 from __future__ import annotations

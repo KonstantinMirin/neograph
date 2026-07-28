@@ -40,7 +40,7 @@ Proofs pinned here (mrb2y deliverables + hhgnz.30 refinement addendum):
 
 Run with::
 
-    uv run --extra dev --extra agent-spec pytest tests/test_hot_swap_agent_spec.py
+    uv run --extra agent-spec pytest tests/test_hot_swap_agent_spec.py
 """
 
 from __future__ import annotations

@@ -39,7 +39,7 @@ langfuse = ["langfuse>=3.0"]
 # the mcp-examples extra below; src/neograph itself stays MCP-free (the
 # no-session-ownership guard scans src/neograph only). Importing neograph_mcp
 # without this extra fails loud with an install hint. Run its tests with:
-#   uv run --extra dev --extra mcp pytest tests/test_mcp_battery.py
+#   uv run --extra mcp pytest tests/test_mcp_battery.py
 mcp = [
     "langchain-mcp-adapters>=0.3",
     # <2 pin: mcp 2.0 renames FastMCP -> MCPServer; langchain-mcp-adapters 0.3.x
@@ -57,16 +57,15 @@ mcp-examples = [
     # langchain-mcp-adapters 0.3.x both target the mcp 1.x FastMCP import.
     "mcp>=1.28,<2",
 ]
-dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "ruff>=0.3",
-    "mypy>=1.8",
-]
+# neograph-x75es: there is deliberately NO `dev` extra. The dev toolchain lives in
+# [dependency-groups].dev — the ONE group `uv run pytest` installs — because having
+# both a `dev` extra and a `dev` group is what stranded pytest-asyncio (and
+# pyagentspec) outside the project's own gate. One namespace, one source of truth.
 # neograph-nkjv9: Agent Spec Property<->spec_types type-registry bridge.
-# NOT a core dep — src/neograph stays Agent-Spec-free by default (imports of
-# pyagentspec in spec_types.py are function-local/import-guarded). Run with:
-#   uv run --extra dev --extra agent-spec pytest tests/test_agent_spec_types.py
+# CONSUMER-facing optional extra — src/neograph stays Agent-Spec-free by default
+# (imports of pyagentspec in spec_types.py / _agent_spec.py are function-local and
+# import-guarded, pinned by tests/test_guards_agent_spec_core_purity.py). The TEST
+# gate gets pyagentspec from [dependency-groups].dev instead; see the note there.
 agent-spec = [
     "pyagentspec>=26.1.0,<27",
 ]
@@ -153,6 +152,11 @@ markers = [
 ]
 
 [dependency-groups]
+# THE gate group. `uv run pytest` / `uv sync` install exactly this (plus
+# [project].dependencies) — extras need an explicit `--extra` and are therefore
+# invisible to `make quality`. Every dependency the quality gate needs belongs
+# HERE, not in [project.optional-dependencies]; see neograph-x75es, where a dep
+# in the wrong namespace hid 271 tests and broke the gate outright.
 dev = [
     "hypothesis>=6.151.12",
     "langchain>=1.0",
@@ -168,9 +172,27 @@ dev = [
     # tests/test_docs_snippets.py couples to the PRIVATE pre-1.0
     # pytest_examples.find_examples._extract_code_chunks; the upper bound guards
     # against a 0.1.x minor renaming that symbol (mirrors the mcp>=1.28,<2 pin).
-    # In [dependency-groups].dev (auto-installed by `uv run pytest`), NOT the
-    # --extra dev group, so the file collects under the bare test command.
+    # In [dependency-groups].dev (auto-installed by `uv run pytest`), so the file
+    # collects under the bare test command.
     "pytest-examples>=0.0.18,<0.1",
     "pytest-cov>=7.1.0",
+    # neograph-x75es: the Agent Spec proof surface — 271 tests across 13 files
+    # gated on `pytest.importorskip("pyagentspec")`. Here, NOT only in the
+    # [agent-spec] extra, so those files collect under the bare test command;
+    # while the dep sat in the extra alone the gate silently ran none of them and
+    # 32 more hard-failed. The [agent-spec] extra stays as the CONSUMER-facing
+    # optional dep — this is a test-gate placement, not a packaging change, and
+    # core stays Agent-Spec-free per tests/test_guards_agent_spec_core_purity.py.
+    "pyagentspec>=26.1.0,<27",
+    # neograph-x75es: the gate's own toolchain. These previously lived ONLY in a
+    # `dev` EXTRA, which `uv run pytest` does not install — so on a clean checkout
+    # `make quality` failed 51 async tests (asyncio_mode = "auto" with no plugin to
+    # drive it), and pytest/ruff were present only by accident, pulled in
+    # transitively by pytest-cov / pytest-examples. A gate whose own runner is a
+    # transitive accident is not a gate.
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.3",
+    "mypy>=1.8",
     "python-dotenv>=1.2.2",
 ]

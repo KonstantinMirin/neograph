@@ -36,7 +36,7 @@ export lands. Confirmed by running pytest, not by inspection.
 
 Run with::
 
-    uv run --extra dev --extra agent-spec pytest tests/test_agent_spec_oracle_agent_export.py
+    uv run --extra agent-spec pytest tests/test_agent_spec_oracle_agent_export.py
 """
 
 from __future__ import annotations

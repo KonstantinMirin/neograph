@@ -25,7 +25,7 @@ Plan Phase 5):
 Gated on ``pyagentspec`` via ``pytest.importorskip`` (the ``[agent-spec]``
 optional extra keeps ``src/neograph`` core dependency-light)::
 
-    uv run --extra dev --extra agent-spec pytest tests/test_agent_spec_phase5_reuse.py
+    uv run --extra agent-spec pytest tests/test_agent_spec_phase5_reuse.py
 """
 
 from __future__ import annotations

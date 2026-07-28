@@ -5,7 +5,7 @@ Gated on ``pyagentspec`` via ``pytest.importorskip`` -- the ``[agent-spec]``
 optional extra keeps ``src/neograph`` core dependency-light by default. Run
 with::
 
-    uv run --extra dev --extra agent-spec pytest tests/test_agent_spec_export.py
+    uv run --extra agent-spec pytest tests/test_agent_spec_export.py
 
 ## Step 1 gate (i3zsh implementation plan, sequenced FIRST)
 

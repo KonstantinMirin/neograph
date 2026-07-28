@@ -1089,12 +1089,6 @@ dependencies = [
 agent-spec = [
     { name = "pyagentspec" },
 ]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
 langfuse = [
     { name = "langfuse" },
 ]
@@ -1114,9 +1108,14 @@ dev = [
     { name = "langchain-openai" },
     { name = "langfuse" },
     { name = "langgraph-checkpoint-sqlite" },
+    { name = "mypy" },
+    { name = "pyagentspec" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-examples" },
     { name = "python-dotenv" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -1131,16 +1130,12 @@ requires-dist = [
     { name = "langgraph-checkpoint", specifier = ">=4.0,<5.0" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28,<2" },
     { name = "mcp", marker = "extra == 'mcp-examples'", specifier = ">=1.28,<2" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8" },
     { name = "pyagentspec", marker = "extra == 'agent-spec'", specifier = ">=26.1.0,<27" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3" },
     { name = "structlog", specifier = ">=23.0" },
 ]
-provides-extras = ["langfuse", "mcp", "mcp-examples", "dev", "agent-spec"]
+provides-extras = ["langfuse", "mcp", "mcp-examples", "agent-spec"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1149,9 +1144,14 @@ dev = [
     { name = "langchain-openai", specifier = ">=1.2.2" },
     { name = "langfuse", specifier = ">=3.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1" },
+    { name = "mypy", specifier = ">=1.8" },
+    { name = "pyagentspec", specifier = ">=26.1.0,<27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "pytest-examples", specifier = ">=0.0.18,<0.1" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "ruff", specifier = ">=0.3" },
 ]
 
 [[package]]

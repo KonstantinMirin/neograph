@@ -42,7 +42,7 @@ Round-trip-marker items (doc s6a):
 
 Run with::
 
-    uv run --extra dev --extra agent-spec pytest tests/test_agent_spec_roundtrip.py
+    uv run --extra agent-spec pytest tests/test_agent_spec_roundtrip.py
 """
 
 from __future__ import annotations
