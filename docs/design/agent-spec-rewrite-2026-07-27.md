@@ -147,6 +147,19 @@ if decomp.has_operator:
 
 The **structural guard** (§1.7) pins that both match statements' case sets are exactly `set(PrimaryShape)`, that `has_operator` postludes are unconditional across all arms in both, and that `SUB_CONSTRUCT_UNSUPPORTED_COMBOS` is checked before any Construct-level dispatch — so a future modifier addition that updates `ModifierCombo`/`COMBO_DECOMPOSITION` without updating either match, or without deciding its Construct-level validity, fails loud immediately.
 
+> **STATUS (2026-07-28, `neograph-tjpn4`).** The prescription in §1.5-§1.7 that
+> `has_operator` postludes are **unconditional across all arms** is the Phase 7 end
+> state (`neograph-s7zt3.10`), NOT what is landed today. As of `neograph-tjpn4` the
+> landed `_agent_spec.py` shape dispatches on `COMBO_DECOMPOSITION[combo].primary`
+> with five unguarded arms + `assert_never`, but implements the Operator postlude
+> **only on the BARE arm**; every other arm raises for its `*_OPERATOR` combo via a
+> single-sited `NoReturn` helper. Deciding what the five fusion combos MEAN is
+> Phase 7's job, so implementing the unconditional postlude earlier would have
+> silently executed that phase. The §1.7 guard clause pinning unconditional
+> postludes must therefore be written WITH Phase 7, not before it — against this
+> code it would fail by design. The prescription below is deliberately left
+> unedited: it remains the target.
+
 ### 1.6 How the new `_agent_spec.py` derives its dispatch from the same tables — including fixing a gap that exists today
 
 `_lower_construct_item` (rewritten) performs the **identical two-step lookup** `_add_node_to_graph` does, for a bare `Node` item: `classify_modifiers(item)` → `COMBO_DECOMPOSITION[combo]` → dispatch on `.primary`, then unconditionally check `.has_operator` and wrap with `_lower_operator` (unchanged — already generic over "the node/subgraph that came before it"). The **only** thing that differs from `compiler.py`'s consumption is the *target primitive* each `PrimaryShape` case builds (LangGraph `Send`/`Command`/conditional-edges vs pyagentspec `MapNode`/`LlmNode`-ensemble/`BranchingNode`/`Swarm`) — never the *decomposition decision*.

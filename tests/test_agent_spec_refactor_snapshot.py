@@ -26,18 +26,47 @@ Contract:
 ``pyagentspec`` ``Flow.model_dump(mode='json')`` RAISES (serialization-context
 error), so the JSON-native form is ``flow.to_dict()``. But ``to_dict()`` stamps
 a fresh random UUID on every component ``id`` and references components by that
-UUID (``$component_ref`` + a top-level ``$referenced_components`` map), so the
-raw dump is non-deterministic run-to-run. ``_canonicalize`` folds that away by
-RESOLVING every ``$component_ref`` inline (following the reference into
+UUID (``$component_ref`` + a ``$referenced_components`` map), so the raw dump is
+non-deterministic run-to-run. ``_canonicalize`` folds that away by RESOLVING
+every ``$component_ref`` inline (following the reference into
 ``$referenced_components``) and DROPPING every ``id`` field -- leaving a fully
 expanded, id-free tree whose content (component names, Property titles,
 metadata, node ordering, descriptions) is fully deterministic. Scripted Oracle
 variants legitimately share a ServerTool NAME across variants, so re-keying by
 name would collide -- inlining sidesteps that.
 
+``$referenced_components`` is NOT top-level-only: a subflow-bearing node (the
+``MapNode`` an EACH cell lowers to) carries its OWN nested map, whose KEYS are
+themselves random UUIDs. Resolving against the top-level map alone left those
+refs dangling (the ``$unresolved_ref`` sentinel fired) AND left the nested,
+UUID-keyed map in the tree, so an EACH cell could not be snapshotted at all.
+``_canonicalize`` therefore MERGES every ``$referenced_components`` map found
+anywhere in the dump (UUIDs are globally unique, so the merge is collision-free)
+and drops the key at every depth. Verified strictly wider, never different: all
+24 pre-existing BARE/ORACLE cells canonicalize BYTE-IDENTICALLY under the merged
+form -- they simply have no nested map (neograph-tjpn4).
+
 The golden lives in ``tests/fixtures/agent_spec_refactor_snapshot.json`` (a
 static, committed artifact captured ONCE from develop HEAD -- NOT regenerated at
 test time, which would be a vacuous self-comparison).
+
+## Extending the set (neograph-tjpn4, R-RM1) -- ADD keys, never regenerate
+
+The golden is a historical artifact: its 24 original BARE/ORACLE values are the
+neograph-2s2o6 proof, captured from an earlier develop HEAD. A wholesale
+regeneration silently REBASELINES them, destroying that proof if anything (a
+pyagentspec version bump, a prior landed change) has drifted since capture --
+and there is no regeneration tooling in-repo by design.
+
+So when a new cell is added to ``REPRESENTATIVE_CELLS``, APPEND only its key to
+the JSON, on the PRE-change tree, and verify ``git diff --stat`` on the fixture
+shows additions and ZERO modifications. If an existing value would change, that
+is a pre-existing drift FINDING to report, never something to absorb. The
+neograph-tjpn4 EACH/LOOP/OPERATOR extension was captured exactly that way (the
+one-off snippet is recorded in that bead's notes).
+
+POLARITY: this whole module is GREEN before and after the tjpn4 migration -- it
+pins today's bytes. It is not a TDD-red artifact; do not "fix" it for passing.
 
 Run with::
 
@@ -96,19 +125,64 @@ REPRESENTATIVE_CELLS: tuple[str, ...] = (
     "act-oracle-merge_fn-dict",
     "act-oracle-merge_prompt-single",
     "act-oracle-merge_prompt-dict",
+    # -- EACH / LOOP / OPERATOR (added by neograph-tjpn4, research risk T5).
+    #    The original 24 cells above cover only the BARE and ORACLE arms of
+    #    _lower_construct_item. neograph-tjpn4 restructures ALL FIVE arms onto
+    #    COMBO_DECOMPOSITION, so the three unpinned arms -- whose only prior net
+    #    was the matrix's weak "does not raise + flow.nodes non-empty" -- get a
+    #    byte-level pin too. Without these, an arm could start emitting a
+    #    different MapNode/BranchingNode/InputMessageNode shape (a dropped
+    #    each_spec marker, a lost iterated_ prefix, a re-ordered pause composite)
+    #    with the whole suite green.
+    #    scripted + think per arm covers _lower_item_body's ToolNode and LlmNode
+    #    lowerings; agent/act each-dict/context and loop-dict are UNREPRESENTABLE
+    #    (neograph's own assembly rejects them), so they cannot be pinned here.
+    "scripted-each-single",
+    "scripted-each-dict",
+    "scripted-each-context",
+    "think-each-single",
+    "scripted-loop-single",
+    "scripted-loop-dict",
+    "think-loop-single",
+    "scripted-operator-single",
+    "scripted-operator-dict",
+    "think-operator-single",
 )
+
+
+def _collect_referenced_components(obj: Any, into: dict[str, Any]) -> None:
+    """Merge every ``$referenced_components`` map in the dump into one.
+
+    A subflow-bearing node (``MapNode``, ``FlowNode``) nests its own map, so the
+    top-level one is incomplete. UUID keys are globally unique, so merging is
+    collision-free (neograph-tjpn4 -- without this, EACH cells cannot be
+    canonicalized: their refs dangle and the nested UUID-keyed map itself makes
+    the tree non-deterministic).
+    """
+    if isinstance(obj, dict):
+        nested = obj.get("$referenced_components")
+        if isinstance(nested, dict):
+            into.update(nested)
+        for value in obj.values():
+            _collect_referenced_components(value, into)
+    elif isinstance(obj, list):
+        for item in obj:
+            _collect_referenced_components(item, into)
 
 
 def _canonicalize(flow: Any) -> Any:
     """Fold ``flow.to_dict()`` into a deterministic, id-free tree.
 
-    Resolves every ``$component_ref`` inline against the top-level
-    ``$referenced_components`` map and drops every random-UUID ``id`` field. A
-    ``$cycle``/``$unresolved_ref`` sentinel would surface a structural surprise
-    loudly rather than silently corrupt the snapshot (asserted absent below).
+    Resolves every ``$component_ref`` inline against the MERGED
+    ``$referenced_components`` maps (top-level plus every nested subflow map)
+    and drops every random-UUID ``id`` field, plus the ``$referenced_components``
+    key at every depth. A ``$cycle``/``$unresolved_ref`` sentinel would surface a
+    structural surprise loudly rather than silently corrupt the snapshot
+    (asserted absent below).
     """
     d = flow.to_dict()
-    refs: dict[str, Any] = d.get("$referenced_components", {})
+    refs: dict[str, Any] = {}
+    _collect_referenced_components(d, refs)
 
     def resolve(obj: Any, seen: frozenset[str]) -> Any:
         if isinstance(obj, dict):
@@ -120,13 +194,12 @@ def _canonicalize(flow: Any) -> Any:
                 if target is None:
                     return {"$unresolved_ref": ref_id}
                 return resolve(target, seen | {ref_id})
-            return {k: resolve(v, seen) for k, v in obj.items() if k != "id"}
+            return {k: resolve(v, seen) for k, v in obj.items() if k not in ("id", "$referenced_components")}
         if isinstance(obj, list):
             return [resolve(item, seen) for item in obj]
         return obj
 
-    top = {k: v for k, v in d.items() if k != "$referenced_components"}
-    return resolve(top, frozenset())
+    return resolve(d, frozenset())
 
 
 def _load_golden() -> dict[str, Any]:
@@ -151,6 +224,18 @@ class TestRepresentativeSetCoversEveryDispatchPath:
             )
             assert any(c.startswith(f"{mode}-oracle-") for c in REPRESENTATIVE_CELLS), (
                 f"{mode} oracle cell (the _lower_oracle per-variant dispatch) missing from the set"
+            )
+
+    def test_all_five_lower_construct_item_arms_are_pinned(self) -> None:
+        """Arm-gap closure (neograph-tjpn4, risk T5): the representative set must
+        span EVERY arm of ``_lower_construct_item``'s modifier dispatch -- BARE,
+        ORACLE, EACH, LOOP and OPERATOR -- not just the BARE/ORACLE pair the
+        original 24 cells covered. The tjpn4 migration restructures all five onto
+        ``COMBO_DECOMPOSITION``, so an unpinned arm is an unproven arm."""
+        for arm in ("bare", "oracle", "each", "loop", "operator"):
+            assert any(f"-{arm}-" in c for c in REPRESENTATIVE_CELLS), (
+                f"no representative cell exercises the {arm.upper()} arm of "
+                "_lower_construct_item -- that arm has no byte-level pin"
             )
 
     def test_golden_fixture_covers_exactly_the_representative_set(self) -> None:

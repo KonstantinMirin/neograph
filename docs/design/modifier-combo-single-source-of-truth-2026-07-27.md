@@ -23,7 +23,7 @@ file:line citations, not assumed:
 | File | What it independently re-derives |
 |---|---|
 | `compiler.py` (`_add_node_to_graph`, `_add_subgraph`) | the full `(primary, has_operator)` decomposition, in two separate `match combo:` statements |
-| `_agent_spec.py` (`_lower_construct_item`) | the same decomposition, flat 5-branch `if combo == ModifierCombo.X:` chain, incomplete |
+| `_agent_spec.py` (`_lower_construct_item`) | ~~the same decomposition, flat 5-branch `if combo == ModifierCombo.X:` chain, incomplete~~ — **MIGRATED by `neograph-tjpn4` (2026-07-28)**: now `match COMBO_DECOMPOSITION[combo].primary` with five unguarded arms + `assert_never`, each arm doing its own `has_operator` / fusion co-presence check in-body, and a single-sited `NoReturn` raise helper. This was the LAST hand-written combo enumeration in the tree; the AST dispatch census is now **zero** |
 | `state.py:143,165,218,241,272,544,603` | **SEVEN** combo-dispatch sites, not three (corrected 2026-07-28 by the Phase-3 AST census; the original row listed only the three `match` blocks). Three are `match combo:` blocks — one per producer category (sub-construct output shaping, dict-form node-output shaping, single-type node-output shaping) — and their groupings are **NOT** byte-identical, contrary to this row's original claim: the sub-construct block has 6 arms with EACH_ORACLE and PORTAL separate, the dict-form block has 3 arms and groups EACH *with* BARE/LOOP/PORTAL, and the single-type block has 5. The other four sites are compare-shaped: two LOOP tests (`:143`, `:241`), one PORTAL member filter (`:272`), and the `has_any_oracle`/`has_any_each` pair (`:218`) — the last of which asks modifier PRESENCE, not decomposition, and so migrates to a presence read rather than to the table |
 | `_state_write.py:72-97` | `combo, mods = classify_modifiers(node)` then `match combo:` — the same primary-with-operator-orthogonal grouping |
 | `_subconstruct.py:89-91` | `sub_combo, _ = classify_modifiers(sub)` then `sub_combo in (LOOP, LOOP_OPERATOR)` / `sub_combo in (EACH, EACH_OPERATOR)` membership checks — Operator is correctly not consulted here (it's an orthogonal wrapper, not a shape, so its presence/absence doesn't change whether something is Loop-shaped or Each-shaped); this is correct orthogonality, not a gap |
@@ -142,8 +142,14 @@ The epic (title updated 2026-07-27) now covers:
    contains a second, independent `ModifierCombo` enumeration for dispatch
    purposes. Landed in Phase 3 as
    `tests/test_guards_combo_decomposition_consumers.py` (pure-AST,
-   alias-tolerant). `_agent_spec.py` is carried in an explicit `PENDING`
-   allowlist that may only shrink — emptied by `neograph-tjpn4`.
+   alias-tolerant). Its `PENDING` allowlist — which carried `_agent_spec.py` —
+   was **emptied by `neograph-tjpn4` (2026-07-28)**, and its bound tightened from
+   `PENDING <= {"_agent_spec.py"}` to `PENDING == frozenset()` so the ratchet sits
+   at its end stop: new combo dispatch must be written against the table, never
+   parked for a later migration. `_agent_spec.py` MOVED into `MIGRATED` rather
+   than merely leaving `PENDING`, because the completeness assertion is an
+   equality and the file is still a combo-vocabulary consumer via its table
+   imports.
 
 ## 5. Why this record exists outside of beads
 

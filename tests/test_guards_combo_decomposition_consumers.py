@@ -74,17 +74,22 @@ MIGRATED: frozenset[str] = frozenset(
         "_input_shape.py",
         "runner.py",
         "_wiring.py",
+        # neograph-tjpn4: MOVED here from PENDING, not merely dropped -- assertion
+        # (c) is an EQUALITY and _agent_spec.py is still a combo-vocabulary
+        # consumer via its table imports.
+        "_agent_spec.py",
     }
 )
 
 #: Known-diseased files whose migration is sequenced LATER, each with a ticket.
-#: This set is a RATCHET: it may only shrink. Closing the ticket must empty it.
-#:   _agent_spec.py -- flat `if combo == ModifierCombo.X:` chain + a PORTAL
-#:   membership test; deferred to neograph-tjpn4 (depends on this task and on
-#:   neograph-s7zt3.10, which changes what the fusion combos mean).
-#: `loader.py` is NOT here: it has zero combo references today; it joins when
-#: the s6 recognize->classify design lands.
-PENDING: frozenset[str] = frozenset({"_agent_spec.py"})
+#: This set is a RATCHET: it may only shrink, and it is now EMPTY -- neograph-tjpn4
+#: migrated the last one (_agent_spec.py's flat `if combo == ModifierCombo.X:`
+#: chain + PORTAL membership test), so every combo consumer in the tree reads the
+#: decomposition table. Re-parking a file here is forbidden: new combo dispatch
+#: must be written against the table, never deferred.
+#: `loader.py` is NOT here: it has zero combo references today; it joins MIGRATED
+#: (never PENDING) when the s6 recognize->classify design lands.
+PENDING: frozenset[str] = frozenset()
 
 #: The single definition site. Scoped out of (a)/(b) by construction.
 TABLE_OWNER = "modifiers.py"
@@ -268,9 +273,10 @@ class TestComboDecompositionConsumerMonopoly:
         """PENDING may only shrink, and a file cannot be both migrated and pending."""
         assert not (MIGRATED & PENDING), f"A file is both MIGRATED and PENDING: {sorted(MIGRATED & PENDING)}"
         assert TABLE_OWNER not in MIGRATED and TABLE_OWNER not in PENDING
-        assert PENDING <= frozenset({"_agent_spec.py"}), (
-            "PENDING grew. It is a ratchet -- new combo dispatch must be written "
-            "against the table, not parked. Closing neograph-tjpn4 empties it."
+        assert PENDING == frozenset(), (
+            "PENDING is EMPTY as of neograph-tjpn4 and must stay empty. It is a "
+            "ratchet at its end stop -- new combo dispatch must be written against "
+            "COMBO_DECOMPOSITION, never parked here for a later migration."
         )
 
 
@@ -371,19 +377,43 @@ class TestComboDispatchScannerMetaTests:
                 f"{name} is a modifier-PRESENCE reader and must never be flagged"
             )
 
-    def test_meta_agent_spec_healthy_gate_line_is_not_among_its_hits(self):
-        """_agent_spec.py:945 (`combo in SUB_CONSTRUCT_UNSUPPORTED_COMBOS`) is the
-        healthy exemplar; only its flat `if combo == ModifierCombo.X:` chain and
-        the PORTAL membership test may appear as hits (PENDING -> neograph-tjpn4)."""
-        source = (SRC_DIR / "_agent_spec.py").read_text()
-        hits = _combo_dispatch_sites(source)
-        assert hits, "expected the known PENDING dispatch chain in _agent_spec.py"
-        gate_lineno = next(
-            i
-            for i, line in enumerate(source.splitlines(), start=1)
-            if "combo in SUB_CONSTRUCT_UNSUPPORTED_COMBOS" in line
+    def test_meta_healthy_gate_unflagged_even_when_scanner_is_live(self):
+        """The healthy `combo in SUB_CONSTRUCT_UNSUPPORTED_COMBOS` gate stays
+        unflagged in a module where the scanner is LIVE.
+
+        Distinct from test_meta_ignores_unsupported_combos_frozenset_gate, which
+        proves the gate is ignored in a module holding NO ModifierCombo binding at
+        all -- there the scanner has nothing to match and passing is nearly free.
+        Here a ModifierCombo binding IS in scope and a diseased arm IS present, so
+        the scanner is actively producing hits; the assertion is that it
+        discriminates WITHIN such a module rather than flagging the whole file.
+
+        Previously this asserted against the real _agent_spec.py and required its
+        dispatch chain to exist (`assert hits`). neograph-tjpn4 cured that chain,
+        which would have turned a successful migration into a red guard -- so the
+        case is now expressed on a synthetic snippet that cannot rot.
+        """
+        src = (
+            "from neograph.modifiers import SUB_CONSTRUCT_UNSUPPORTED_COMBOS, ModifierCombo\n"
+            "def f(item, combo):\n"
+            "    if combo in SUB_CONSTRUCT_UNSUPPORTED_COMBOS:\n"  # healthy: line 3
+            "        raise ValueError('unsupported')\n"
+            "    if combo == ModifierCombo.EACH:\n"  # diseased: line 5
+            "        return 1\n"
+            "    return 0\n"
         )
-        assert gate_lineno not in {h[0] for h in hits}
+        flagged = {lineno for lineno, _form, _member in _combo_dispatch_sites(src)}
+        assert 5 in flagged, "the diseased `combo == ModifierCombo.EACH` arm must be flagged"
+        assert 3 not in flagged, "the healthy SUB_CONSTRUCT_UNSUPPORTED_COMBOS gate must NOT be flagged"
+
+    def test_agent_spec_now_holds_zero_combo_dispatch(self):
+        """neograph-tjpn4 end state: the last PENDING file is clean.
+
+        Redundant with assertion (a) by construction, but it keeps _agent_spec.py
+        named in a meta-test so a future reader sees the file that used to be the
+        exception is now the proof.
+        """
+        assert _combo_dispatch_sites((SRC_DIR / "_agent_spec.py").read_text()) == []
 
 
 class TestTableSymbolUsageScannerMetaTests:

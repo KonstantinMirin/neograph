@@ -1208,3 +1208,174 @@ class TestPortalMeshMemberPromptNeverShipsRawPlaceholder:
         prompts = {n.name: n.prompt for n in mesh.nodes}
         assert prompts["triage-agent"] == "Handle the case: ${handoff.note}"
         assert prompts["billing-agent"] == "Bill it: ${handoff.note}"
+
+
+# ── neograph-tjpn4: the generic "no Agent Spec lowering yet" fallthrough ─────
+#
+# POLARITY: GREEN BEFORE AND AFTER. This class pins TODAY's behavior for the
+# COMBO_DECOMPOSITION migration of ``_lower_construct_item`` (neograph-tjpn4),
+# which is a zero-behaviour-change refactor. It is NOT a TDD-red artifact --
+# do not "fix" it because it passes.
+
+from neograph.modifiers import Each, Loop, ModifierCombo, Operator, Oracle  # noqa: E402
+from neograph.node import Node  # noqa: E402
+
+from .test_agent_spec_matrix import UNSUPPORTED_COMBOS  # noqa: E402
+
+# DERIVED, never hand-listed: the matrix's UNSUPPORTED_COMBOS is the loud
+# partition over ModifierCombo (SUPPORTED | UNSUPPORTED == set(ModifierCombo),
+# asserted in test_agent_spec_matrix.TestAgentSpecMatrixExhaustiveness). The two
+# PORTAL combos are removed because they hit a DIFFERENT, dedicated raise (the
+# permanent dispatch-mode-Portal rejection), so what remains is exactly the set
+# that falls through to the generic "no Agent Spec lowering yet" raise. Deriving
+# it this way means a new ModifierCombo cannot silently escape this pin.
+_PORTAL_COMBOS: frozenset[ModifierCombo] = frozenset({ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR})
+FALLTHROUGH_COMBOS: tuple[ModifierCombo, ...] = tuple(sorted(UNSUPPORTED_COMBOS - _PORTAL_COMBOS, key=lambda c: c.name))
+
+
+class TestUnsupportedComboFallthroughRaise:
+    """Pins the generic ``ConfigurationError`` that ``_lower_construct_item``
+    raises for every ModifierCombo it has no lowering arm for -- the contract
+    with ZERO coverage before neograph-tjpn4 (research risk T4).
+
+    ``test_agent_spec_matrix`` only generates cells for ``SUPPORTED_COMBOS``, so
+    the five fusion combos were CLASSIFIED as unsupported but never actually
+    exported: nothing anywhere asserted the error's TYPE, TEXT or SITE. A wrong
+    arm/guard ordering in the migrated ``match COMBO_DECOMPOSITION[combo].primary``
+    dispatch could therefore swap ``ConfigurationError`` for ``AssertionError``
+    (an ``assert_never`` reached under a guarded ``case``), or silently start
+    exporting a fused node, with the whole suite green.
+
+    POLARITY (read before touching): these tests PASS on the pre-migration tree
+    and MUST STILL PASS, byte-identically, afterwards. They are the
+    zero-behaviour-change net, the opposite polarity to a TDD-red guard.
+
+    ``build_cell()`` in the matrix asserts ``unhandled combo`` for every
+    UNSUPPORTED combo, so the nodes here are hand-built through the programmatic
+    surface (``Node.scripted(...) | Modifier()``) rather than reusing the matrix
+    builder.
+    """
+
+    @staticmethod
+    def _register() -> None:
+        """conftest's autouse fixture resets every registry per test, so the
+        scripted fn / merge fn / conditions are registered inside the test."""
+        from .fakes import register_condition, register_scripted
+
+        register_scripted("f", lambda *a, **k: None)
+        register_scripted("combine", lambda variants, config: variants[0])
+        register_condition("needs_review", lambda d: True)
+        register_condition("keep_going", lambda d: False)
+
+    @staticmethod
+    def _construct_for(combo: ModifierCombo) -> Construct:
+        """A minimal two-node Construct whose LAST node carries exactly ``combo``.
+
+        Shapes are the empirically-minimal ones that survive assembly validation:
+          * Each needs a real fan-out receiver -- a dict-form input key naming no
+            peer producer (``item``), which ``_ir_normalize`` resolves into
+            ``fan_out_param`` -- over a peer that produces the collection.
+          * Loop needs SAME-type in/out on the looped node, or the loop back-edge
+            is rejected before export is ever reached.
+        """
+        each = Each(over="prod.groups", key="label")
+        oracle = Oracle(n=2, merge_fn="combine")
+        operator = Operator(when="needs_review")
+        loop = Loop(when="keep_going", max_iterations=3)
+
+        if combo is ModifierCombo.ORACLE_OPERATOR:
+            prod = Node.scripted("prod", "f", outputs=Clusters)
+            target = Node.scripted("target", "f", inputs={"prod": Clusters}, outputs=Claims) | oracle | operator
+        elif combo is ModifierCombo.LOOP_OPERATOR:
+            prod = Node.scripted("prod", "f", outputs=Claims)
+            target = Node.scripted("target", "f", inputs={"prod": Claims}, outputs=Claims) | loop | operator
+        elif combo in (
+            ModifierCombo.EACH_ORACLE,
+            ModifierCombo.EACH_OPERATOR,
+            ModifierCombo.EACH_ORACLE_OPERATOR,
+        ):
+            prod = Node.scripted("prod", "f", outputs=Clusters)
+            target = Node.scripted("target", "f", inputs={"item": ClusterGroup}, outputs=Claims) | each
+            if combo in (ModifierCombo.EACH_ORACLE, ModifierCombo.EACH_ORACLE_OPERATOR):
+                target = target | oracle
+            if combo in (ModifierCombo.EACH_OPERATOR, ModifierCombo.EACH_ORACLE_OPERATOR):
+                target = target | operator
+        else:  # pragma: no cover -- a new fallthrough combo must be shaped here
+            raise AssertionError(
+                f"{combo.name} is in FALLTHROUGH_COMBOS but this builder has no shape for it -- "
+                "add one rather than dropping the combo from the pin"
+            )
+
+        return Construct(f"fallthrough-{combo.name.lower()}", nodes=[prod, target])
+
+    def test_fallthrough_set_is_exactly_the_five_fusion_combos(self) -> None:
+        """Loud partition check: the combos with NO lowering arm are exactly the
+        five fusion combos. A new ModifierCombo, or a combo moving between the
+        matrix's SUPPORTED/UNSUPPORTED buckets, must fail HERE and be classified
+        deliberately -- it must never silently join or leave this pin."""
+        assert {c.name for c in FALLTHROUGH_COMBOS} == {
+            "EACH_ORACLE",
+            "EACH_OPERATOR",
+            "EACH_ORACLE_OPERATOR",
+            "LOOP_OPERATOR",
+            "ORACLE_OPERATOR",
+        }
+        assert _PORTAL_COMBOS <= UNSUPPORTED_COMBOS, (
+            "the PORTAL combos must still be UNSUPPORTED -- they are subtracted here only "
+            "because they raise the SEPARATE dispatch-mode-Portal error, not the generic one"
+        )
+
+    @pytest.mark.parametrize("combo", FALLTHROUGH_COMBOS, ids=lambda c: c.name)
+    def test_unsupported_combo_raises_configuration_error_with_exact_message(self, combo: ModifierCombo) -> None:
+        """The exact user-visible contract: type ``ConfigurationError``, and the
+        full four-line structured body (what / expected / found / hint) verbatim.
+
+        Asserting the WHOLE message (not a regex fragment) is deliberate -- the
+        migration must not reword, re-order, or drop any structured field, and a
+        substring match would not catch a lost ``expected=``/``hint=``."""
+        from neograph._agent_spec import to_agent_spec
+        from neograph.errors import ConfigurationError
+
+        self._register()
+        construct = self._construct_for(combo)
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            to_agent_spec(construct)
+
+        assert str(exc_info.value) == (
+            f"node 'target' has modifier combination {combo.name} — no Agent Spec lowering yet\n"
+            "  expected: BARE, ORACLE, EACH, LOOP, or OPERATOR\n"
+            f"  found: {combo.name}\n"
+            "  hint: composed modifier lowering (e.g. Each+Oracle) is out of scope for "
+            "i3zsh's primitive-level export"
+        )
+
+    @pytest.mark.parametrize("combo", FALLTHROUGH_COMBOS, ids=lambda c: c.name)
+    def test_fallthrough_is_not_the_dispatch_mode_portal_raise(self, combo: ModifierCombo) -> None:
+        """The two raises in ``_lower_construct_item`` must stay DISTINCT sites.
+
+        The dispatch-mode-Portal rejection is PERMANENT ('no Agent Spec
+        lowering' -- there is no runtime-flow-synthesis primitive); the fusion
+        fallthrough is provisional ('...yet', owned by neograph-s7zt3.10).
+        Hoisting the ``has_operator`` check out of the per-shape arms into one
+        pre-dispatch test would collapse them and silently downgrade PORTAL's
+        permanent message to the provisional one -- so pin that they do not
+        cross-fire."""
+        from neograph._agent_spec import to_agent_spec
+        from neograph.errors import ConfigurationError
+
+        self._register()
+        construct = self._construct_for(combo)
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            to_agent_spec(construct)
+
+        message = str(exc_info.value)
+        assert "dispatch-mode Portal" not in message, (
+            f"{combo.name} fired the dispatch-mode-Portal raise instead of the generic fallthrough"
+        )
+        assert "Each x Oracle fusion is not supported on sub-constructs" not in message, (
+            f"{combo.name} fired the SUB_CONSTRUCT_UNSUPPORTED_COMBOS gate -- that gate is "
+            "Construct-item-only and must not capture a bare Node"
+        )
+        assert message.endswith("i3zsh's primitive-level export")

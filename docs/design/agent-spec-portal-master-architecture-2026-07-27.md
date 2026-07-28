@@ -262,7 +262,7 @@ decomposition, not the three the original rewrite spec named:
 | # | Module | What it re-derives |
 |---|---|---|
 | 1 | `compiler.py` (`_add_node_to_graph`, `_add_subgraph`) | full `(primary, has_operator)` decomposition, two separate `match combo:` blocks |
-| 2 | `_agent_spec.py` (`_lower_construct_item`) | same decomposition, flat 5-branch chain, incomplete |
+| 2 | `_agent_spec.py` (`_lower_construct_item`) | ~~same decomposition, flat 5-branch chain, incomplete~~ — **MIGRATED by `neograph-tjpn4` (2026-07-28)**, the last one; AST dispatch census now zero |
 | 3 | `state.py:165,537,596` | same combo-to-bucket grouping, three separate `match combo:` blocks (byte-identical grouping, differing per-arm bodies) |
 | 4 | `_state_write.py:72-97` | same primary-with-operator-orthogonal grouping |
 | 5 | `_subconstruct.py:89-91` | `sub_combo in (LOOP, LOOP_OPERATOR)` / `(EACH, EACH_OPERATOR)` membership (Operator correctly not consulted — orthogonal wrapper, not a shape) |
