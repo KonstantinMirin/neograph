@@ -516,9 +516,9 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # ── modifiers.py — Pydantic field_validator + proxy attribute protocol ──
     # _PathRecorder.__getattr__ implements the attribute protocol. Pydantic
     # @field_validator boundaries catch ValueError into ValidationError.
-    "modifiers.py:281": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
-    "modifiers.py:521": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
-    "modifiers.py:596": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "modifiers.py:301": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
+    "modifiers.py:541": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "modifiers.py:616": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
     # ── node.py — Pydantic BeforeValidator boundary ──
     # _validate_type_spec runs inside Pydantic field validation; Pydantic
     # catches TypeError and rolls it into ValidationError.

@@ -54,6 +54,7 @@ from neograph.modifiers import (
     Oracle,
     PrimaryShape,
     classify_modifiers,
+    is_each_oracle_fused,
 )
 from neograph.naming import field_name_for, split_output_field
 from neograph.node import Node
@@ -997,7 +998,7 @@ def _lower_construct_item(
             # cover it. This is the idiom compiler.py uses and
             # agent-spec-rewrite-2026-07-27.md:115 prescribes, not a second
             # combo enumeration. (neograph-c265k consolidates the six copies.)
-            if decomp.has_operator or "oracle" in mods:
+            if decomp.has_operator or is_each_oracle_fused(mods):
                 _raise_no_agent_spec_lowering(item, combo)
             map_node = _lower_each(item, mods["each"])
             return [map_node], [], [], map_node, map_node, [(map_node, True)]

@@ -7,7 +7,7 @@ node | Operator(when="has_open_questions")
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self, runtime_checkable
 
@@ -243,6 +243,26 @@ def primary_shape(item: ConstructItem) -> PrimaryShape:
     rather than re-classifying.
     """
     return COMBO_DECOMPOSITION[classify_modifiers(item)[0]].primary
+
+
+def is_each_oracle_fused(mods: Mapping[str, object]) -> bool:
+    """True when this item carries BOTH Each and Oracle -- the fused M x N Send
+    topology ``compiler.py``'s ``_add_each_oracle_fused`` lowers.
+
+    A modifier-PRESENCE read, deliberately NOT a decomposition question.
+    ``COMBO_DECOMPOSITION`` folds EACH_ORACLE / EACH_ORACLE_OPERATOR to
+    ``primary=EACH`` (the fusion is a Node-level concern), so a consumer standing
+    in a ``PrimaryShape.EACH`` arm needs this second, orthogonal test to tell a
+    fused node from a plain Each one. ``mods`` is the dict ``classify_modifiers``
+    returns.
+
+    Inside a ``PrimaryShape.EACH`` arm the ``each`` half is redundant-but-true
+    (every EACH-primary combo contains ``each``). It is kept so this ONE definition
+    also reads correctly at ``compiler.py``'s pre-``match`` call site, and so the
+    concept has a single spelling rather than two. Do NOT "optimize" a call site
+    back to a bare ``"oracle" in mods``.
+    """
+    return mods.get("each") is not None and mods.get("oracle") is not None
 
 
 class Modifier(BaseModel, frozen=True):

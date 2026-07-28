@@ -15,7 +15,12 @@ from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ExecutionError
-from neograph.modifiers import COMBO_DECOMPOSITION, PrimaryShape, classify_modifiers
+from neograph.modifiers import (
+    COMBO_DECOMPOSITION,
+    PrimaryShape,
+    classify_modifiers,
+    is_each_oracle_fused,
+)
 from neograph.naming import field_name_for
 
 if TYPE_CHECKING:
@@ -95,7 +100,7 @@ def make_subgraph_fn(
     # function is called at compiler.py:512, BEFORE _add_subgraph's
     # SUB_CONSTRUCT_UNSUPPORTED_COMBOS gate rejects the fusion, so the line
     # really does execute for a fused sub-construct.
-    has_each = sub_shape is PrimaryShape.EACH and "oracle" not in sub_mods
+    has_each = sub_shape is PrimaryShape.EACH and not is_each_oracle_fused(sub_mods)
 
     def _build_sub_input(
         state: BaseModel | dict[str, Any], config: RunnableConfig

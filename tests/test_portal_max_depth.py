@@ -15,8 +15,8 @@ resolved design (post-review):
 
   * ``Portal.max_depth`` is REQUIRED (no numeric default) in dispatch mode
     (``route="decide"``) and FORBIDDEN in peer mode (``to=[...]``) — the
-    mirror image of the existing ``max_hops``/``on_exhaust`` guard
-    (modifiers.py:671-690).
+    mirror image of the existing ``max_hops``/``on_exhaust`` guard in
+    ``Portal.model_post_init`` (``modifiers.py``).
   * The depth is threaded through a single FLAT config-only key (this file
     assumes ``StateKeys.PORTAL_DISPATCH_DEPTH``, mirroring the
     ``StateKeys.DI_INPUTS`` / ``RESOURCE_MANIFEST_INJECT`` /
@@ -112,8 +112,8 @@ def _agent_spec_flavored_happy_spec() -> dict:
 
 class TestPortalMaxDepthAssemblyContract:
     """Mirrors the existing dispatch-mode 'requires spec_field/input_field/
-    output' guard (modifiers.py:677-683) and its mirror-image peer-mode
-    'forbids max_hops/on_exhaust' guard (modifiers.py:684-690)."""
+    output' guard and its mirror-image peer-mode 'forbids max_hops/on_exhaust'
+    guard, both in ``Portal.model_post_init`` (``modifiers.py``)."""
 
     def test_dispatch_mode_requires_max_depth(self):
         """A route='decide' Portal with no max_depth fails loud at
