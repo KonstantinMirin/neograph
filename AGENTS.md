@@ -526,6 +526,40 @@ it (xfail-style) before documenting it here.
 - The fixture author should be different from the validation author when possible — a fixture written AFTER the validation is "done" catches gaps the author's own fixtures miss.
 - Keep fixtures minimal — one Construct, one defect, ~15 lines.
 
+### The 500-line file-size ratchet (`tests/test_guards_file_size.py`)
+
+Every `.py` file under `src/neograph/` (recursively, so `testing/` is included) must be
+**under 500 lines** unless it has an entry in that guard's `ALLOWLIST`. The allowlist is
+a per-file **exact ceiling**, not a blanket exemption, and it obeys the same shrink-only
+discipline as this repo's other ratchets: **growth is blocked and fixed in-PR, never
+deferred.**
+
+Three rules, all enforced:
+
+- **Exact, not merely sufficient.** `ALLOWLIST[f] == len(read_text().splitlines())`. A
+  ceiling sitting above its file is a bug, not slack — it is silent headroom for future
+  growth. Both hand-rolled caps this guard replaced had already drifted stale-loose
+  before anyone noticed (`compiler.py` 775 vs 761 real; `_llm_retry.py` 665 vs 658),
+  which is exactly why there is no tolerance band.
+- **A shrink lowers the ceiling in the same commit.** Shrinking is always welcome and
+  needs no approval — but the number moves with the file. **A red
+  `test_guards_file_size` after a successful split is the expected, correct signal, not
+  a regression to route around.** The failure message prints the paste-ready replacement
+  literal.
+- **A file that drops under 500 has its entry DELETED**, never lowered to a sub-500
+  number — otherwise the allowlist quietly grants a private ceiling to a file the plain
+  500 rule should govern. This is how the allowlist shrinks toward empty as
+  `neograph-3ffdg`'s refactor wave lands.
+
+A ruff-format pass legitimately changes line counts and so legitimately requires a
+number update; that is not the guard misbehaving. Keep the dict one-entry-per-line and
+sorted by posix path — parallel refactor branches then edit disjoint lines.
+
+Two narrower line caps deliberately survive alongside it — `LINE_CAP` 330 and 400 in
+`test_guards_assembly.py`. They govern **disjoint** file sets (every file they cover is
+well under 500), so no file is capped twice. They keep loose `>` semantics; tightening
+them was out of scope, not endorsed.
+
 ### General test conventions
 
 - **New tests go in the matching file.** If a feature spans multiple files, put the test where the primary behavior lives and add cross-references in docstrings.

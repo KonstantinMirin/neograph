@@ -519,36 +519,14 @@ class TestCompilerWiringSplit:
     _wiring.py to keep compiler.py focused on the compile() entry point.
     """
 
-    def test_compiler_under_600_lines(self):
-        """compiler.py must stay under the cap after wiring extraction.
-
-        Cap raised 600 -> 690 for the m0tv ruff-format pass (mechanical rewrap
-        inflated line counts, zero code change; actual 679 post-format). Raised
-        690 -> 720 for the Portal mesh-aware compile walk (neograph-on6jt): the
-        walk orchestration + two exhaustiveness arms are core compiler
-        responsibility; the mesh WIRING helpers (_add_portal_mesh,
-        _contiguous_portal_mesh) were moved to _wiring.py per this guard. Raised
-        720 -> 735 for the Portal DISPATCH walk arm (neograph-f27xo, mode b): the
-        route="decide" discriminator is walk orchestration (same category as the
-        mesh arm); its WIRING helper (_add_portal_dispatch) lives in _wiring.py.
-        Raised 735 -> 745 for the PORTAL_OPERATOR exhaustiveness arm (Portal+
-        Operator D4 lift): the new ModifierCombo value needs a case in each of
-        the two existing exhaustive matches (sub-construct dispatch, per-node
-        dispatch) that this walk already owns -- no new wiring logic, purely
-        exhaustiveness upkeep for a combo the mesh-aware walk (M1) already
-        collapses before either match is reached.
-
-        Raised 745 -> 775 for the Phase-2 COMBO_DECOMPOSITION migration
-        (neograph-s7zt3.6): the two hand-rolled `match combo:` blocks now consume
-        the shared PrimaryShape table -- the multi-line import, the
-        SUB_CONSTRUCT_UNSUPPORTED_COMBOS / fused-Each-Oracle guard splits, and the
-        table-consult comments add lines but no new wiring logic (a pure,
-        zero-behavior-change refactor proving the table against the compiler)."""
-        compiler = SRC_DIR / "compiler.py"
-        line_count = len(compiler.read_text().splitlines())
-        assert line_count < 775, (
-            f"compiler.py is {line_count} lines — must be < 775. Move wiring helpers to _wiring.py."
-        )
+    # compiler.py's line-count assertion was RETIRED (neograph-wwhcw). It capped
+    # compiler.py at < 775 and had been raised five times (600 -> 690 -> 720 ->
+    # 735 -> 745 -> 775); by retirement it had also drifted stale-loose, granting
+    # 14 lines of silent headroom over the real count of 761. compiler.py is now
+    # governed by the repo-wide ratchet in tests/test_guards_file_size.py, at an
+    # EXACT ceiling that both tightens the retired cap and cannot drift.
+    # This class keeps only its symbol-home assertions, which that guard does not
+    # and cannot make.
 
     def test_wiring_module_exists(self):
         """_wiring.py must exist in the neograph package."""

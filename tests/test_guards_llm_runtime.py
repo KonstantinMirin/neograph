@@ -367,14 +367,16 @@ class TestLlmResponsibilityDiscipline:
         # _optional_inner_types) so the STRING "null" GLM emits for Optional
         # numeric/enum fields is normalized to None inside _apply_null_defaults
         # instead of crashing the node. Reviewed increase.
-        # neograph-zhwgh: 615 -> 665. Shape-driven nested descent
-        # (_unwrap_optional + _descend_null_defaults) replaces the 0.7.2
-        # hand-enumerated (bare-model, bare-list-of-model) descent that silently
-        # skipped every container shape it did not spell out -- Optional-wrapped
-        # models/lists, dict-of-models, list-of-optional-models. One recursive
-        # classifier now reaches every leaf model dict at any depth. Reviewed
-        # increase (net: kills the whole missing-shape bug family, not one case).
-        "_llm_retry.py": 665,
+        # _llm_retry.py's budget was REMOVED here (neograph-wwhcw). It is the only
+        # file in this dict over 500 lines, so it is now governed by the repo-wide
+        # ratchet in tests/test_guards_file_size.py at an EXACT ceiling (658) --
+        # strictly tighter than the 665 budget this entry declared, which had
+        # itself drifted stale-loose by 7 lines. Two guards must not make
+        # near-identical claims about one file; the exact ceiling wins.
+        # The five entries that remain are all comfortably under 500, so the
+        # repo-wide guard makes no claim about them: they stay as the tighter,
+        # topic-scoped anti-accretion proxy behind this class's load-bearing
+        # name-set assertion.
         # neograph-v569: 310 -> 445. The public standalone compile_prompt landed
         # here (its change axis) with a thorough public docstring, a shared
         # render-then-compile core (_render_and_compile, which render_prompt now
