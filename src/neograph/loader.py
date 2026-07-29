@@ -46,7 +46,17 @@ from neograph._state_keys import StateKeys
 from neograph.conditions import parse_condition
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
-from neograph.modifiers import Each, Loop, Operator, Oracle, Portal
+from neograph.modifiers import (
+    COMBO_DECOMPOSITION,
+    Each,
+    Loop,
+    Operator,
+    Oracle,
+    Portal,
+    PrimaryShape,
+    combo_for_modifier_names,
+    is_each_oracle_fused,
+)
 from neograph.naming import field_name_for
 from neograph.node import Node
 from neograph.spec_types import (
@@ -481,7 +491,7 @@ def _reconstruct_each_node(map_node: Any, flow: Any, output_types: dict[str, Any
     the inverse of ``_agent_spec._lower_each``."""
 
     each_spec = map_node.metadata[_MARK_EACH_SPEC]
-    inner_nodes = [n for n in map_node.subflow.nodes if type(n).__name__ not in ("StartNode", "EndNode")]
+    inner_nodes = _subflow_inner_nodes(map_node)
     if len(inner_nodes) != 1:
         raise ConfigurationError.build(
             f"Each group {map_node.name!r}'s sub-flow has {len(inner_nodes)} inner nodes, expected 1",
@@ -537,37 +547,155 @@ def _reconstruct_loop_item(body_spec: Any, check_spec: Any, flow: Any, output_ty
     return body | Loop(when=condition, max_iterations=loop_spec["max_iterations"], on_exhaust=loop_spec["on_exhaust"])
 
 
-def _reconstruct_operator_item(
-    primary_spec: Any, check_spec: Any, flow: Any, output_types: dict[str, Any]
-) -> Node:
-    """Reconstruct an Operator-modified Node from its exported
-    primary+check+pause composite -- the inverse of ``_agent_spec._lower_operator``."""
-    operator_spec = check_spec.metadata[_MARK_OPERATOR_SPEC]
+def _reconstruct_operator_primary(primary_spec: Any, flow: Any, output_types: dict[str, Any]) -> Node:
+    """Reconstruct the BODY node of a BARE+Operator composite, with its external
+    inputs routed -- the inverse of the ``PrimaryShape.BARE`` half of
+    ``_agent_spec._lower_construct_item``'s Operator path.
+
+    Returns the node WITHOUT the ``| Operator(...)`` pipe: the caller applies
+    that in the one shared postlude, so Operator composes onto every primary
+    shape the same way (neograph-s7zt3.10) rather than being fused into one
+    shape's reconstructor.
+    """
     inner_output_types: dict[str, Any] = {}
     primary = _reconstruct_primitive_node(primary_spec, flow, inner_output_types)
 
-    # External inputs land on the PRIMARY node (the real lowered node carrying
-    # the Properties), not the property-less check BranchingNode -- mirror
-    # to_agent_spec's input_targets routing for OPERATOR.
     inputs = _inputs_from_data_edges(primary_spec.name, flow, output_types)
     if not normalize_outputs(primary.outputs).is_none:
         output_types[primary_spec.name] = normalize_outputs(primary.outputs).primary
     if inputs is not None:
         primary = primary.model_copy(update={"inputs": inputs})
 
-    return primary | Operator(when=operator_spec["when"])
+    return primary
 
 
-def _group_flow_items(flow: Any) -> list[tuple[str, Any]]:
+def _reconstruct_fused_each_oracle_node(map_node: Any, output_types: dict[str, Any]) -> Node:
+    """Reconstruct an Each x Oracle FUSED Node from its exported MapNode whose
+    sub-flow is an Oracle variant+merge group -- the inverse of
+    ``_agent_spec._lower_each(node, each, oracle=...)``.
+
+    Composes the two EXISTING reconstructors rather than adding a third: the
+    nested group goes through ``_reconstruct_oracle_group`` (against the SUB-flow,
+    which is where its fan-in data edges live), then ``| Each(...)`` is piped on.
+    """
+    each_spec = map_node.metadata[_MARK_EACH_SPEC]
+    inner_nodes = _subflow_oracle_group(map_node)
+    if inner_nodes is None:  # pragma: no cover - the walk only routes here on a match
+        raise ConfigurationError.build(
+            f"Each group {map_node.name!r} was recognized as fused but its sub-flow holds no Oracle group",
+            expected="an Oracle variant+merge run sharing one neograph/group_id",
+            found="no shared group_id",
+        )
+
+    inner_output_types: dict[str, Any] = {}
+    inner = _reconstruct_oracle_group(inner_nodes, map_node.subflow, inner_output_types)
+    if inner is None:
+        raise ConfigurationError.build(
+            f"Each group {map_node.name!r}'s nested Oracle group did not reconstruct",
+            expected="a variant+merge run whose structure matches its neograph/modifier=oracle marker",
+            found="stale or inconsistent oracle markers inside the MapNode sub-flow",
+        )
+
+    # neograph-3lk2l inside the fusion: the fan-out receiver's element type is
+    # recovered from the FIRST VARIANT's dotted input Properties -- the fused
+    # analogue of the un-fused path's "inner spec" (there is no single inner
+    # node here, and the merge node's inputs are the variant OUTPUTS, not the
+    # per-item input shape). Without this the receiver reconstructs as a flat
+    # {"cluster.v": ...} model whose hash never matches the producer's element.
+    update: dict[str, Any] = {"name": map_node.name}
+    dict_inputs = _dict_form_inputs_from_props(inner_nodes[0].inputs)
+    if dict_inputs is not None:
+        update["inputs"] = dict_inputs
+    inner = inner.model_copy(update=update)
+
+    if not normalize_outputs(inner.outputs).is_none:
+        output_types[map_node.name] = normalize_outputs(inner.outputs).primary
+
+    return inner | Each(over=each_spec["over"], key=each_spec.get("key"))
+
+
+def _subflow_inner_nodes(map_node: Any) -> list[Any]:
+    """The real (non-sentinel) nodes inside an Each MapNode's sub-flow.
+
+    The ONE place that descends into a ``MapNode.subflow``, shared by the plain
+    Each reconstructor and the fusion recognizer so the descent is not walked
+    twice under two names.
+    """
+    inner_nodes = [n for n in map_node.subflow.nodes if type(n).__name__ not in ("StartNode", "EndNode")]
+    return inner_nodes
+
+
+def _subflow_oracle_group(map_node: Any) -> list[Any] | None:
+    """The Oracle variant+merge run nested INSIDE an Each MapNode's sub-flow,
+    or None when the MapNode wraps a plain single body.
+
+    This is how an Each x Oracle FUSION is recognized on import -- structurally,
+    by descending into the sub-flow and finding a shared ``neograph/group_id``
+    run, NOT by a dedicated marker on the MapNode. Per the loader's Core
+    Invariant, a marker is never trusted without confirming the structure it
+    claims to describe, so there is nothing a new marker could add here.
+    """
+    inner = _subflow_inner_nodes(map_node)
+    if len(inner) < 2:
+        return None
+    group_id = (inner[0].metadata or {}).get(_MARK_GROUP_ID)
+    if group_id is None or (inner[0].metadata or {}).get(_MARK_MODIFIER) != "oracle":
+        return None
+    if any((node.metadata or {}).get(_MARK_GROUP_ID) != group_id for node in inner):
+        return None
+    return inner
+
+
+def _trailing_operator(nodes: list[Any], j: int, primary_spec: Any, flow: Any) -> Any | None:
+    """Variable-length lookahead for the Operator pause composite that may
+    follow ANY primary group (bare / Each / Oracle / Loop). Returns the check
+    ``BranchingNode`` on a match -- the caller then consumes TWO nodes (check +
+    pause) -- or None.
+
+    ONE helper, called from every branch of the recognition walk, because
+    ``_lower_operator`` emits the SAME three-part composite regardless of what
+    it wraps. Structural confirmation, never marker trust: the marker must be
+    backed by a real ``primary -> check`` edge AND a real ``check --pause-->``
+    edge, or the shape is not an Operator and the nodes import as primitives.
+    """
+    if j + 1 >= len(nodes):
+        return None
+    check = nodes[j]
+    if (check.metadata or {}).get(_MARK_MODIFIER) != "operator":
+        return None
+    if not any(
+        e.from_node.name == primary_spec.name and e.to_node.name == check.name
+        for e in flow.control_flow_connections
+    ):
+        return None
+    pause = nodes[j + 1]
+    if not any(
+        e.from_node.name == check.name and e.from_branch == "pause" and e.to_node.name == pause.name
+        for e in flow.control_flow_connections
+    ):
+        return None
+    return check
+
+
+def _group_flow_items(flow: Any) -> list[tuple[frozenset[str], dict[str, Any]]]:
     """Walk ``Flow.nodes`` in order, skipping Start/End sentinels, and group
-    contiguous nodes into the same shapes ``to_agent_spec`` emits: a bare
-    primitive, an Oracle variant+merge run (shared ``neograph/group_id``), an
-    Each MapNode, a Loop body+check pair, or an Operator primary+check+pause
-    triple. Returns a list of ``(kind, payload)`` tuples in item order.
+    contiguous nodes into the shapes ``to_agent_spec`` emits.
+
+    RECOGNIZE, then CLASSIFY (the import-side mirror of the export dispatch):
+    each group yields the frozenset of modifier NAMES its structure encodes,
+    which ``from_agent_spec`` hands to ``combo_for_modifier_names`` and
+    dispatches on ``COMBO_DECOMPOSITION``. Emitting a fixed ``kind`` string per
+    shape does not survive composition -- there are 12 combos and only five
+    primary shapes, so a string enumeration would have to re-derive the
+    decomposition the table already owns.
+
+    The payload dict carries the recognized spec nodes: ``primary`` (bare),
+    ``group`` (Oracle run), ``map_node`` (Each), ``body``/``check`` (Loop), and
+    ``operator_check`` whenever the trailing pause composite was recognized.
     """
     nodes = flow.nodes
     n = len(nodes)
-    items: list[tuple[str, Any]] = []
+    items: list[tuple[frozenset[str], dict[str, Any]]] = []
     i = 0
     while i < n:
         node = nodes[i]
@@ -579,6 +707,9 @@ def _group_flow_items(flow: Any) -> list[tuple[str, Any]]:
         metadata = node.metadata or {}
         modifier = metadata.get(_MARK_MODIFIER)
 
+        names: set[str] = set()
+        payload: dict[str, Any] = {}
+
         if modifier == "oracle":
             group_id = metadata[_MARK_GROUP_ID]
             group = [node]
@@ -586,56 +717,64 @@ def _group_flow_items(flow: Any) -> list[tuple[str, Any]]:
             while j < n and ((nodes[j].metadata or {}).get(_MARK_GROUP_ID) == group_id):
                 group.append(nodes[j])
                 j += 1
-            items.append(("oracle", group))
-            i = j
-            continue
+            names.add("oracle")
+            payload["group"] = group
+            # The merge node (last in the run) is the group's control-flow
+            # identity -- the node a trailing Operator check attaches to.
+            primary_spec = group[-1]
 
-        if modifier == "each":
-            items.append(("each", node))
-            i += 1
-            continue
+        elif modifier == "each":
+            names.add("each")
+            payload["map_node"] = node
+            if _subflow_oracle_group(node) is not None:
+                names.add("oracle")  # Each x Oracle fusion
+            primary_spec = node
+            j = i + 1
 
-        if modifier in ("loop", "operator"):
+        elif modifier in ("loop", "operator"):
             # A floating check node with no preceding body (the lookahead
             # below always consumes body+check together) means the marker
             # doesn't match the actual structure -- fall back to primitive.
-            items.append(("bare", node))
-            i += 1
-            continue
+            payload["primary"] = node
+            primary_spec = node
+            j = i + 1
 
-        # A bare node MAY be the body of a following Loop/Operator check --
-        # peek ahead and confirm the control-flow edge actually connects them
-        # (per the Core Invariant: never trust a marker without checking the
-        # structure it claims to describe).
-        nxt = nodes[i + 1] if i + 1 < n else None
-        if nxt is not None:
-            nxt_name = nxt.name
-            nxt_modifier = (nxt.metadata or {}).get(_MARK_MODIFIER)
-            edge_to_nxt = any(
-                e.from_node.name == node.name and e.to_node.name == nxt_name for e in flow.control_flow_connections
-            )
-            if nxt_modifier == "loop" and edge_to_nxt:
+        else:
+            # A bare node MAY be the body of a following Loop check -- peek ahead
+            # and confirm the control-flow edge actually connects them (per the
+            # Core Invariant: never trust a marker without checking the structure
+            # it claims to describe). A trailing OPERATOR is not special-cased
+            # here: it is the shared postlude below, exactly as on the export side.
+            payload["primary"] = node
+            primary_spec = node
+            j = i + 1
+            nxt = nodes[i + 1] if i + 1 < n else None
+            if nxt is not None and (nxt.metadata or {}).get(_MARK_MODIFIER) == "loop":
+                edge_to_nxt = any(
+                    e.from_node.name == node.name and e.to_node.name == nxt.name
+                    for e in flow.control_flow_connections
+                )
                 back_edge = any(
-                    e.from_node.name == nxt_name and e.from_branch == "continue" and e.to_node.name == node.name
+                    e.from_node.name == nxt.name and e.from_branch == "continue" and e.to_node.name == node.name
                     for e in flow.control_flow_connections
                 )
-                if back_edge:
-                    items.append(("loop", (node, nxt)))
-                    i += 2
-                    continue
-            if nxt_modifier == "operator" and edge_to_nxt:
-                pause = nodes[i + 2] if i + 2 < n else None
-                pause_edge = pause is not None and any(
-                    e.from_node.name == nxt_name and e.from_branch == "pause" and e.to_node.name == pause.name
-                    for e in flow.control_flow_connections
-                )
-                if pause_edge:
-                    items.append(("operator", (node, nxt)))
-                    i += 3
-                    continue
+                if edge_to_nxt and back_edge:
+                    names.add("loop")
+                    payload.pop("primary")
+                    payload["body"] = node
+                    payload["check"] = nxt
+                    primary_spec = nxt
+                    j = i + 2
 
-        items.append(("bare", node))
-        i += 1
+        # ONE shared trailing-Operator lookahead for every primary group above.
+        check = _trailing_operator(nodes, j, primary_spec, flow)
+        if check is not None:
+            names.add("operator")
+            payload["operator_check"] = check
+            j += 2
+
+        items.append((frozenset(names), payload))
+        i = j
 
     return items
 
@@ -940,35 +1079,75 @@ def from_agent_spec(flow: Any) -> Construct:
     output_types: dict[str, Any] = {}
     pipeline_items: list[Any] = []
 
-    for kind, payload in _group_flow_items(flow):
-        if kind == "bare":
-            spec_node = payload
-            if type(spec_node).__name__ == "FlowNode":
-                sub = from_agent_spec(spec_node.subflow)
-                sub = sub.model_copy(update={"name": spec_node.name})
-                output_types[spec_node.name] = sub.output
-                pipeline_items.append(sub)
-            else:
-                pipeline_items.append(_reconstruct_primitive_node(spec_node, flow, output_types))
-        elif kind == "oracle":
-            reconstructed = _reconstruct_oracle_group(payload, flow, output_types)
-            if reconstructed is not None:
-                pipeline_items.append(reconstructed)
-            else:
-                # Stale marker -- fall back to importing every node in the
-                # group as a bare primitive (per the Core Invariant: never
-                # silently reconstruct a modifier that diverges from the
-                # actual structure).
-                for spec_node in payload:
-                    pipeline_items.append(_reconstruct_primitive_node(spec_node, flow, output_types))
-        elif kind == "each":
-            pipeline_items.append(_reconstruct_each_node(payload, flow, output_types))
-        elif kind == "loop":
-            body_spec, check_spec = payload
-            pipeline_items.append(_reconstruct_loop_item(body_spec, check_spec, flow, output_types))
-        elif kind == "operator":
-            primary_spec, check_spec = payload
-            pipeline_items.append(_reconstruct_operator_item(primary_spec, check_spec, flow, output_types))
+    # RECOGNIZE -> CLASSIFY -> dispatch on the DECOMPOSED shape: the exact mirror
+    # of _agent_spec._lower_construct_item's export dispatch. The walk recognizes
+    # which modifier NAMES a node grouping encodes; combo_for_modifier_names maps
+    # that to a ModifierCombo via the single _COMBO_MAP; COMBO_DECOMPOSITION says
+    # what the combo means. No local re-derivation of combo semantics lives here.
+    for names, payload in _group_flow_items(flow):
+        combo = combo_for_modifier_names(names, context=flow.name)
+        decomp = COMBO_DECOMPOSITION[combo]
+
+        item: Any
+        # The fusion split runs BEFORE the shape match, exactly as on the export
+        # side, and asks the ONE shared presence predicate rather than open-coding
+        # it -- see neograph-c265k. ``names`` is the recognized modifier-NAME set (the
+        # loader recognizes structure, so it has no Modifier instances to hand
+        # over); ``dict.fromkeys(names, True)`` presents it in the {name: <present>}
+        # mapping shape ``classify_modifiers`` returns. The sentinel must be
+        # non-None: the predicate tests ``mods.get(k) is not None``, so a
+        # None-valued key would read as ABSENT and silently un-fuse the import.
+        if is_each_oracle_fused(dict.fromkeys(names, True)):
+            # Fused Each x Oracle -- the MapNode's sub-flow IS an Oracle group.
+            item = _reconstruct_fused_each_oracle_node(payload["map_node"], output_types)
+        else:
+            match decomp.primary:
+                case PrimaryShape.ORACLE:
+                    reconstructed = _reconstruct_oracle_group(payload["group"], flow, output_types)
+                    if reconstructed is None:
+                        # Stale marker -- fall back to importing every node in the
+                        # group as a bare primitive (per the Core Invariant: never
+                        # silently reconstruct a modifier that diverges from the
+                        # actual structure). A trailing Operator is meaningless
+                        # against a group that did not reconstruct, so skip it too.
+                        for spec_node in payload["group"]:
+                            pipeline_items.append(_reconstruct_primitive_node(spec_node, flow, output_types))
+                        continue
+                    item = reconstructed
+
+                case PrimaryShape.EACH:
+                    item = _reconstruct_each_node(payload["map_node"], flow, output_types)
+
+                case PrimaryShape.LOOP:
+                    item = _reconstruct_loop_item(payload["body"], payload["check"], flow, output_types)
+
+                case PrimaryShape.BARE:
+                    spec_node = payload["primary"]
+                    if type(spec_node).__name__ == "FlowNode":
+                        sub = from_agent_spec(spec_node.subflow)
+                        sub = sub.model_copy(update={"name": spec_node.name})
+                        output_types[spec_node.name] = sub.output
+                        item = sub
+                    elif decomp.has_operator:
+                        # External inputs land on the PRIMARY node, not the
+                        # property-less check BranchingNode -- mirror
+                        # to_agent_spec's input_targets routing for BARE+Operator.
+                        item = _reconstruct_operator_primary(spec_node, flow, output_types)
+                    else:
+                        item = _reconstruct_primitive_node(spec_node, flow, output_types)
+
+                case PrimaryShape.PORTAL:  # pragma: no cover - a Portal mesh never reaches this walk
+                    raise ConfigurationError.build(
+                        f"Flow {flow.name!r} encodes a Portal at item level — no primitive import",
+                        expected="a peer-mode Portal mesh, imported from a Swarm before this walk",
+                        found=combo.name,
+                    )
+
+        # ONE shared Operator postlude, mirroring the export side's.
+        if decomp.has_operator:
+            item = item | Operator(when=payload["operator_check"].metadata[_MARK_OPERATOR_SPEC]["when"])
+
+        pipeline_items.append(item)
 
     return Construct(name=flow.name, nodes=pipeline_items)
 

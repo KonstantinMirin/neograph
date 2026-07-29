@@ -46,7 +46,7 @@ The two root-cause families the GREEN cells still pin (neograph-sdfgz):
 
 Run with::
 
-    uv run --extra agent-spec pytest tests/test_agent_spec_matrix.py
+    uv run pytest tests/test_agent_spec_matrix.py
 """
 
 from __future__ import annotations
@@ -62,7 +62,12 @@ from neograph import Construct, ConstructError, Tool, node  # noqa: E402
 from neograph._agent_spec import to_agent_spec  # noqa: E402
 from neograph.decorators import construct_from_functions  # noqa: E402
 from neograph.loader import from_agent_spec  # noqa: E402
-from neograph.modifiers import ModifierCombo, Oracle  # noqa: E402
+from neograph.modifiers import (  # noqa: E402
+    ModifierCombo,
+    Oracle,
+    classify_modifiers,
+    modifier_names_for_combo,
+)
 from neograph.node import Node  # noqa: E402
 from tests.agent_spec_capabilities import assert_registry_complete  # noqa: E402
 from tests.fakes import register_scripted  # noqa: E402
@@ -112,15 +117,20 @@ SUPPORTED_COMBOS: frozenset[ModifierCombo] = frozenset(
         ModifierCombo.ORACLE,
         ModifierCombo.LOOP,
         ModifierCombo.OPERATOR,
+        # neograph-s7zt3.10 (Phase 7): the five fusion combos gained BOTH an export
+        # lowering (_lower_construct_item's unconditional Operator postlude + the
+        # Each x Oracle fused arm) and the matching loader.py import recognition, in
+        # the same change -- an export-only combo would fail this file's round-trip
+        # axis, which is exactly why the two land together.
+        ModifierCombo.EACH_OPERATOR,
+        ModifierCombo.ORACLE_OPERATOR,
+        ModifierCombo.LOOP_OPERATOR,
+        ModifierCombo.EACH_ORACLE,
+        ModifierCombo.EACH_ORACLE_OPERATOR,
     }
 )
 UNSUPPORTED_COMBOS: frozenset[ModifierCombo] = frozenset(
     {
-        ModifierCombo.ORACLE_OPERATOR,
-        ModifierCombo.EACH_OPERATOR,
-        ModifierCombo.EACH_ORACLE,
-        ModifierCombo.EACH_ORACLE_OPERATOR,
-        ModifierCombo.LOOP_OPERATOR,
         ModifierCombo.PORTAL,
         ModifierCombo.PORTAL_OPERATOR,
     }
@@ -168,13 +178,13 @@ def _input_refs(combo: ModifierCombo, shape: str) -> str:
     the exported primitive), and the paths are the REAL dotted @node input titles
     (``{param}.{field}``), not the old generic ``${x}`` (which named no declared
     input and could never turn a cell green)."""
-    if combo is ModifierCombo.EACH:
+    if "each" in modifier_names_for_combo(combo):
         if shape == "single":
             return "${item.v}"
         if shape == "dict":
             return "${item.v} ${pb.b}"
         return "${source.c} ${item.v}"  # context
-    # BARE / ORACLE / LOOP / OPERATOR
+    # every non-Each shape: BARE / ORACLE / LOOP / OPERATOR and their _OPERATOR twins
     if shape == "single":
         return "${prod.a}"
     return "${pa.a} ${pb.b}"
@@ -211,7 +221,23 @@ def build_cell(mode: str, combo: ModifierCombo, config: str | None, shape: str) 
     lk = _llm_kwargs(mode, combo, shape)
     nm = _cell_id(mode, combo, config, shape)
 
-    if combo is ModifierCombo.BARE:
+    # Which modifiers this cell must carry is DERIVED from the single _COMBO_MAP
+    # (via modifier_names_for_combo), never from a second hand-typed combo list.
+    # COMBO_DECOMPOSITION cannot answer it: EACH_ORACLE folds to primary=EACH with
+    # has_operator=False, so the Oracle is invisible there. neograph-s7zt3.10.
+    names = modifier_names_for_combo(combo)
+    wants_each = "each" in names
+    wants_oracle = "oracle" in names
+    wants_loop = "loop" in names
+    wants_operator = "operator" in names
+
+    def _gate(field: str) -> dict[str, object]:
+        """The Operator gate kwarg, or nothing. The condition reads a REAL field
+        of the gated node's own output -- ``ok`` for an Out-producing node, ``a``
+        for an Alpha-producing one -- so the cell survives assembly validation."""
+        return {"interrupt_when": f'{field} == "x"'} if wants_operator else {}
+
+    if not (wants_each or wants_oracle or wants_loop) and not wants_operator:
         if shape == "single":
 
             @node(outputs=Alpha)
@@ -233,14 +259,32 @@ def build_cell(mode: str, combo: ModifierCombo, config: str | None, shape: str) 
 
         return construct_from_functions(nm, [pa, pb, target])
 
-    if combo is ModifierCombo.EACH:
+    def _oracle_kwargs() -> dict[str, object]:
+        """Oracle kwargs for any Oracle-bearing combo (ORACLE, ORACLE_OPERATOR,
+        EACH_ORACLE, EACH_ORACLE_OPERATOR) -- one builder, not one per combo."""
+        register_scripted("m_combine", lambda variants, config: variants[0])
+        kw: dict[str, object] = {"ensemble_n": 2}
+        if config == "merge_fn":
+            kw["merge_fn"] = "m_combine"
+        else:
+            # merge_prompt references the variant OUTPUT (gen node outputs=Out -> the
+            # single-type bare title 'ok'), so Option F translates ${ok} -> {{ ok }}
+            # and routes the variant->merge fan-in edge through that flat name.
+            kw["merge_prompt"] = "combine ${ok}"
+        return kw
+
+    if wants_each:
+        each_kw: dict[str, object] = {"map_over": "prod.groups", "map_key": "v"}
+        if wants_oracle:
+            each_kw.update(_oracle_kwargs())
+        each_kw.update(_gate("ok"))
 
         @node(outputs=Coll)
         def prod() -> Coll: ...
 
         if shape == "single":
 
-            @node(outputs=Out, map_over="prod.groups", map_key="v", **lk)
+            @node(outputs=Out, **each_kw, **lk)
             def target(item: Elem) -> Out: ...
 
             return construct_from_functions(nm, [prod, target])
@@ -250,7 +294,7 @@ def build_cell(mode: str, combo: ModifierCombo, config: str | None, shape: str) 
             @node(outputs=Beta)
             def pb() -> Beta: ...
 
-            @node(outputs=Out, map_over="prod.groups", map_key="v", **lk)
+            @node(outputs=Out, **each_kw, **lk)
             def target(item: Elem, pb: Beta) -> Out: ...
 
             return construct_from_functions(nm, [prod, pb, target])
@@ -260,21 +304,13 @@ def build_cell(mode: str, combo: ModifierCombo, config: str | None, shape: str) 
         @node(outputs=Ctx)
         def source() -> Ctx: ...
 
-        @node(outputs=Out, map_over="prod.groups", map_key="v", **lk)
+        @node(outputs=Out, **each_kw, **lk)
         def target(source: Ctx, item: Elem) -> Out: ...
 
         return construct_from_functions(nm, [prod, source, target])
 
-    if combo is ModifierCombo.ORACLE:
-        register_scripted("m_combine", lambda variants, config: variants[0])
-        oracle_kw: dict[str, object] = {"ensemble_n": 2}
-        if config == "merge_fn":
-            oracle_kw["merge_fn"] = "m_combine"
-        else:
-            # merge_prompt references the variant OUTPUT (gen node outputs=Out -> the
-            # single-type bare title 'ok'), so Option F translates ${ok} -> {{ ok }}
-            # and routes the variant->merge fan-in edge through that flat name.
-            oracle_kw["merge_prompt"] = "combine ${ok}"
+    if wants_oracle:
+        oracle_kw: dict[str, object] = {**_oracle_kwargs(), **_gate("ok")}
 
         if shape == "single":
 
@@ -297,16 +333,18 @@ def build_cell(mode: str, combo: ModifierCombo, config: str | None, shape: str) 
 
         return construct_from_functions(nm, [pa, pb, gen])
 
-    if combo is ModifierCombo.LOOP:
+    if wants_loop:
         # Expression condition (the documented serialization target and the shape
         # the passing round-trip cells use); condition references field ``a`` so
         # the loop node output stays Alpha.
+        loop_kw: dict[str, object] = {"loop_when": 'a == "x"', "max_iterations": 3, **_gate("a")}
+
         if shape == "single":
 
             @node(outputs=Alpha)
             def prod() -> Alpha: ...
 
-            @node(outputs=Alpha, loop_when='a == "x"', max_iterations=3, **lk)
+            @node(outputs=Alpha, **loop_kw, **lk)
             def refine(prod: Alpha) -> Alpha: ...
 
             return construct_from_functions(nm, [prod, refine])
@@ -317,12 +355,12 @@ def build_cell(mode: str, combo: ModifierCombo, config: str | None, shape: str) 
         @node(outputs=Beta)
         def pb() -> Beta: ...
 
-        @node(outputs=Alpha, loop_when='a == "x"', max_iterations=3, **lk)
+        @node(outputs=Alpha, **loop_kw, **lk)
         def refine(pa: Alpha, pb: Beta) -> Alpha: ...
 
         return construct_from_functions(nm, [pa, pb, refine])
 
-    if combo is ModifierCombo.OPERATOR:
+    if wants_operator:
         if shape == "single":
 
             @node(outputs=Alpha)
@@ -358,19 +396,18 @@ def _generate_cells() -> dict[str, tuple[str, ModifierCombo, str | None, str]]:
     cells: dict[str, tuple[str, ModifierCombo, str | None, str]] = {}
     for mode in MODES:
         for combo in SUPPORTED_COMBOS:
-            if combo is ModifierCombo.ORACLE:
-                for cfg in ORACLE_CONFIGS:
-                    for shape in SHAPES:
-                        cid = _cell_id(mode, combo, cfg, shape)
-                        cells[cid] = (mode, combo, cfg, shape)
-            elif combo is ModifierCombo.EACH:
-                for shape in (*SHAPES, "context"):
-                    cid = _cell_id(mode, combo, None, shape)
-                    cells[cid] = (mode, combo, None, shape)
-            else:  # BARE / LOOP / OPERATOR
-                for shape in SHAPES:
-                    cid = _cell_id(mode, combo, None, shape)
-                    cells[cid] = (mode, combo, None, shape)
+            # Axis membership is DERIVED from the combo's modifier names, never from
+            # a hand-typed combo list (neograph-s7zt3.10 / architect review M4). The
+            # old `combo is ModifierCombo.ORACLE` / `is EACH` chain silently dropped
+            # every Oracle-bearing FUSION combo to the single/dict-only `else` branch,
+            # under-crossing the very axis this file's docstring calls the sdfgz disease.
+            names = modifier_names_for_combo(combo)
+            shapes: tuple[str, ...] = (*SHAPES, "context") if "each" in names else SHAPES
+            configs: tuple[str | None, ...] = ORACLE_CONFIGS if "oracle" in names else (None,)
+            for cfg in configs:
+                for shape in shapes:
+                    cid = _cell_id(mode, combo, cfg, shape)
+                    cells[cid] = (mode, combo, cfg, shape)
     return cells
 
 
@@ -448,6 +485,69 @@ GREEN: frozenset[str] = frozenset(
         "act-oracle-merge_fn-dict",
         "act-oracle-merge_prompt-single",
         "act-oracle-merge_prompt-dict",
+        # -- neograph-s7zt3.10 (Phase 7): the five fusion combos ------------------
+        # Classified by the DECISION PROCEDURE, not by expectation: GREEN iff
+        # to_agent_spec AND from_agent_spec both succeed. Every one of the 84 newly
+        # generated cells landed in GREEN or UNREPRESENTABLE; ZERO third-state cells,
+        # so RED_EXPORT stays empty.
+        # scripted
+        "scripted-each_operator-context",
+        "scripted-each_operator-dict",
+        "scripted-each_operator-single",
+        "scripted-each_oracle-merge_fn-context",
+        "scripted-each_oracle-merge_fn-dict",
+        "scripted-each_oracle-merge_fn-single",
+        "scripted-each_oracle-merge_prompt-context",
+        "scripted-each_oracle-merge_prompt-dict",
+        "scripted-each_oracle-merge_prompt-single",
+        "scripted-each_oracle_operator-merge_fn-context",
+        "scripted-each_oracle_operator-merge_fn-dict",
+        "scripted-each_oracle_operator-merge_fn-single",
+        "scripted-each_oracle_operator-merge_prompt-context",
+        "scripted-each_oracle_operator-merge_prompt-dict",
+        "scripted-each_oracle_operator-merge_prompt-single",
+        "scripted-loop_operator-dict",
+        "scripted-loop_operator-single",
+        "scripted-oracle_operator-merge_fn-dict",
+        "scripted-oracle_operator-merge_fn-single",
+        "scripted-oracle_operator-merge_prompt-dict",
+        "scripted-oracle_operator-merge_prompt-single",
+        # think
+        "think-each_operator-context",
+        "think-each_operator-dict",
+        "think-each_operator-single",
+        "think-each_oracle-merge_fn-context",
+        "think-each_oracle-merge_fn-dict",
+        "think-each_oracle-merge_fn-single",
+        "think-each_oracle-merge_prompt-context",
+        "think-each_oracle-merge_prompt-dict",
+        "think-each_oracle-merge_prompt-single",
+        "think-each_oracle_operator-merge_fn-context",
+        "think-each_oracle_operator-merge_fn-dict",
+        "think-each_oracle_operator-merge_fn-single",
+        "think-each_oracle_operator-merge_prompt-context",
+        "think-each_oracle_operator-merge_prompt-dict",
+        "think-each_oracle_operator-merge_prompt-single",
+        "think-loop_operator-dict",
+        "think-loop_operator-single",
+        "think-oracle_operator-merge_fn-dict",
+        "think-oracle_operator-merge_fn-single",
+        "think-oracle_operator-merge_prompt-dict",
+        "think-oracle_operator-merge_prompt-single",
+        # agent
+        "agent-each_operator-single",
+        "agent-loop_operator-single",
+        "agent-oracle_operator-merge_fn-dict",
+        "agent-oracle_operator-merge_fn-single",
+        "agent-oracle_operator-merge_prompt-dict",
+        "agent-oracle_operator-merge_prompt-single",
+        # act
+        "act-each_operator-single",
+        "act-loop_operator-single",
+        "act-oracle_operator-merge_fn-dict",
+        "act-oracle_operator-merge_fn-single",
+        "act-oracle_operator-merge_prompt-dict",
+        "act-oracle_operator-merge_prompt-single",
     }
 )
 
@@ -462,6 +562,45 @@ UNREPRESENTABLE: frozenset[str] = frozenset(
         "act-each-dict",
         "act-each-context",
         "act-loop-dict",
+        # -- neograph-s7zt3.10 (Phase 7) ------------------------------------------
+        # The SAME pre-existing _fan_agent.py assembly rule, now visible on the five
+        # fusion combos: an Each/Loop over an agent/act node with multiple upstream
+        # inputs is unwriteable. Note EACH_ORACLE / EACH_ORACLE_OPERATOR are rejected
+        # in agent/act mode at EVERY shape (including "single") -- the architect review
+        # flagged those as the most likely third-state cells; they are not a lowering
+        # gap, neograph's own assembly refuses to build them.
+        # agent
+        "agent-each_operator-context",
+        "agent-each_operator-dict",
+        "agent-each_oracle-merge_fn-context",
+        "agent-each_oracle-merge_fn-dict",
+        "agent-each_oracle-merge_fn-single",
+        "agent-each_oracle-merge_prompt-context",
+        "agent-each_oracle-merge_prompt-dict",
+        "agent-each_oracle-merge_prompt-single",
+        "agent-each_oracle_operator-merge_fn-context",
+        "agent-each_oracle_operator-merge_fn-dict",
+        "agent-each_oracle_operator-merge_fn-single",
+        "agent-each_oracle_operator-merge_prompt-context",
+        "agent-each_oracle_operator-merge_prompt-dict",
+        "agent-each_oracle_operator-merge_prompt-single",
+        "agent-loop_operator-dict",
+        # act
+        "act-each_operator-context",
+        "act-each_operator-dict",
+        "act-each_oracle-merge_fn-context",
+        "act-each_oracle-merge_fn-dict",
+        "act-each_oracle-merge_fn-single",
+        "act-each_oracle-merge_prompt-context",
+        "act-each_oracle-merge_prompt-dict",
+        "act-each_oracle-merge_prompt-single",
+        "act-each_oracle_operator-merge_fn-context",
+        "act-each_oracle_operator-merge_fn-dict",
+        "act-each_oracle_operator-merge_fn-single",
+        "act-each_oracle_operator-merge_prompt-context",
+        "act-each_oracle_operator-merge_prompt-dict",
+        "act-each_oracle_operator-merge_prompt-single",
+        "act-loop_operator-dict",
     }
 )
 
@@ -595,3 +734,19 @@ class TestAgentSpecRoundTripMatrix:
         imported = from_agent_spec(flow)
         assert isinstance(imported, Construct)
         assert imported.nodes
+
+        # COMBO PRESERVATION (neograph-s7zt3.10 / architect review M3). Without
+        # this the round-trip axis is satisfied by ANY Construct with any nodes,
+        # so a combo whose import silently DOWNGRADES -- EACH_OPERATOR reimported
+        # as plain EACH, EACH_ORACLE as plain EACH -- would go green here and the
+        # matrix would certify an import that lost a modifier. That is the same
+        # vacuously-green hazard this file exists to remove, on the import side.
+        # Compared as a SET over the construct's items: the cell's modified node is
+        # the only one carrying modifiers, and export/import may rename items.
+        assert {classify_modifiers(i)[0] for i in imported.nodes} == {
+            classify_modifiers(i)[0] for i in construct.nodes
+        }, (
+            f"{cell_id}: modifier combos changed across the round trip -- "
+            f"exported {sorted(c.name for c in {classify_modifiers(i)[0] for i in construct.nodes})}, "
+            f"reimported {sorted(c.name for c in {classify_modifiers(i)[0] for i in imported.nodes})}"
+        )

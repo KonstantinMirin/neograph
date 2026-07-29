@@ -1234,26 +1234,29 @@ FALLTHROUGH_COMBOS: tuple[ModifierCombo, ...] = tuple(sorted(UNSUPPORTED_COMBOS 
 
 
 class TestUnsupportedComboFallthroughRaise:
-    """Pins the generic ``ConfigurationError`` that ``_lower_construct_item``
-    raises for every ModifierCombo it has no lowering arm for -- the contract
-    with ZERO coverage before neograph-tjpn4 (research risk T4).
+    """Pins that the generic "no Agent Spec lowering yet" fallthrough is GONE, and
+    that the two remaining rejections stayed DISTINCT and specific.
 
-    ``test_agent_spec_matrix`` only generates cells for ``SUPPORTED_COMBOS``, so
-    the five fusion combos were CLASSIFIED as unsupported but never actually
-    exported: nothing anywhere asserted the error's TYPE, TEXT or SITE. A wrong
-    arm/guard ordering in the migrated ``match COMBO_DECOMPOSITION[combo].primary``
-    dispatch could therefore swap ``ConfigurationError`` for ``AssertionError``
-    (an ``assert_never`` reached under a guarded ``case``), or silently start
-    exporting a fused node, with the whole suite green.
+    HISTORY / POLARITY CHANGE -- read before touching. This class was written by
+    neograph-tjpn4 to pin the PROVISIONAL ``ConfigurationError`` that
+    ``_lower_construct_item`` raised for the five fusion combos, and its own
+    docstring named the wording provisional and "owned by neograph-s7zt3.10".
+    Phase 7 (neograph-s7zt3.10) is that owner: all five combos now have real
+    lowerings AND matching loader.py import recognition, so the raise they pinned
+    is unreachable and ``_raise_no_agent_spec_lowering`` was DELETED rather than
+    left as dead code behind a green suite.
 
-    POLARITY (read before touching): these tests PASS on the pre-migration tree
-    and MUST STILL PASS, byte-identically, afterwards. They are the
-    zero-behaviour-change net, the opposite polarity to a TDD-red guard.
-
-    ``build_cell()`` in the matrix asserts ``unhandled combo`` for every
-    UNSUPPORTED combo, so the nodes here are hand-built through the programmatic
-    surface (``Node.scripted(...) | Modifier()``) rather than reusing the matrix
-    builder.
+    What still needs pinning, and is pinned below:
+      * FALLTHROUGH_COMBOS is now EMPTY -- derived, so a combo silently LEAVING
+        SUPPORTED_COMBOS re-populates it and fails here instead of quietly
+        reintroducing a provisional raise.
+      * The dispatch-mode-Portal rejection is PERMANENT and must keep its own
+        specific message -- the hazard the hoisted, unconditional Operator
+        postlude created (a hoisted raise, or a ``case ... if ...`` guard, would
+        have collapsed PORTAL's message into a generic one or swapped
+        ConfigurationError for assert_never's AssertionError).
+      * The SUB_CONSTRUCT_UNSUPPORTED_COMBOS gate still fires for a Construct
+        carrying the fusion, and still does NOT capture a bare Node.
     """
 
     @staticmethod
@@ -1308,21 +1311,73 @@ class TestUnsupportedComboFallthroughRaise:
 
         return Construct(f"fallthrough-{combo.name.lower()}", nodes=[prod, target])
 
-    def test_fallthrough_set_is_exactly_the_five_fusion_combos(self) -> None:
-        """Loud partition check: the combos with NO lowering arm are exactly the
-        five fusion combos. A new ModifierCombo, or a combo moving between the
-        matrix's SUPPORTED/UNSUPPORTED buckets, must fail HERE and be classified
-        deliberately -- it must never silently join or leave this pin."""
-        assert {c.name for c in FALLTHROUGH_COMBOS} == {
-            "EACH_ORACLE",
-            "EACH_OPERATOR",
-            "EACH_ORACLE_OPERATOR",
-            "LOOP_OPERATOR",
-            "ORACLE_OPERATOR",
-        }
+    def test_no_combo_falls_through_to_a_provisional_raise(self) -> None:
+        """Loud partition check: NO ModifierCombo lacks a lowering arm any more.
+
+        Phase 7 emptied this set by giving all five fusion combos real lowerings.
+        The set stays DERIVED (UNSUPPORTED_COMBOS - the Portal pair), so a combo
+        that later LEAVES SUPPORTED_COMBOS repopulates it and fails here -- the
+        ratchet against quietly reintroducing a "not supported yet" raise."""
+        assert {c.name for c in FALLTHROUGH_COMBOS} == set(), (
+            "a combo fell back out of SUPPORTED_COMBOS -- every non-Portal combo must "
+            "have a real Agent Spec lowering since neograph-s7zt3.10; do not re-add a "
+            f"provisional raise for {sorted(c.name for c in FALLTHROUGH_COMBOS)}"
+        )
         assert _PORTAL_COMBOS <= UNSUPPORTED_COMBOS, (
-            "the PORTAL combos must still be UNSUPPORTED -- they are subtracted here only "
-            "because they raise the SEPARATE dispatch-mode-Portal error, not the generic one"
+            "the PORTAL combos must still be UNSUPPORTED -- they raise the SEPARATE, "
+            "PERMANENT dispatch-mode-Portal error, not a provisional one"
+        )
+
+    def test_the_generic_fallthrough_raise_no_longer_exists(self) -> None:
+        """The provisional raiser is DELETED, not merely unreachable.
+
+        Leaving ``_raise_no_agent_spec_lowering`` in the tree with zero call sites
+        would let a future arm quietly re-adopt the "…yet" wording for a combo
+        that is now genuinely supported. Asserting on the SYMBOL is the only way
+        to pin a deletion (there is no behaviour left to observe)."""
+        import neograph._agent_spec as agent_spec
+
+        assert not hasattr(agent_spec, "_raise_no_agent_spec_lowering"), (
+            "_raise_no_agent_spec_lowering came back -- every non-Portal combo has a real "
+            "lowering since neograph-s7zt3.10. If a NEW combo genuinely has no lowering, "
+            "give it an explicit, permanent, combo-specific message instead."
+        )
+
+    def test_dispatch_mode_portal_keeps_its_own_permanent_message(self) -> None:
+        """The hoisted unconditional Operator postlude must NOT have collapsed the
+        PORTAL arm's specific rejection into a generic one, and must not have made
+        ``case _``/``assert_never`` reachable (which would swap the error TYPE)."""
+        from pydantic import BaseModel
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.errors import ConfigurationError
+        from neograph.modifiers import Portal
+
+        from .fakes import register_scripted
+
+        class Emitted(BaseModel, frozen=True):
+            spec: dict
+            dispatch_input: dict
+
+        class Summary(BaseModel, frozen=True):
+            text: str
+
+        register_scripted("_p7_planner", lambda i, c: Emitted(spec={}, dispatch_input={}))
+        construct = Construct(
+            "dispatch-portal",
+            nodes=[
+                Node.scripted("planner", fn="_p7_planner", outputs=Emitted)
+                | Portal(route="decide", spec_field="spec", input_field="dispatch_input", output=Summary, max_depth=3)
+            ],
+        )
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            to_agent_spec(construct)
+
+        message = str(exc_info.value)
+        assert "dispatch-mode Portal" in message, message
+        assert "no Agent Spec lowering yet" not in message, (
+            "PORTAL's PERMANENT rejection was downgraded to the provisional wording"
         )
 
     @pytest.mark.parametrize("combo", FALLTHROUGH_COMBOS, ids=lambda c: c.name)

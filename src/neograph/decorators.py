@@ -655,28 +655,31 @@ def node(
             )
             n = n | Oracle(**oracle_kw)
             n = n | Each(**_build_each_kwargs(map_over, map_key, map_on_error))
-            _register_sidecar(n, f, param_names)
-            if param_res:
-                _set_param_res(n, param_res)
-            return _apply_eager_oracle_gen_type(n)
+            # Rebind, never return (neograph-s7zt3.10). Both map_over branches used
+            # to early-return here, BEFORE the interrupt_when tail below, so
+            # ``@node(map_over=..., interrupt_when=...)`` silently classified as
+            # EACH / EACH_ORACLE with the Operator dropped and no error — the exact
+            # silent-seam class the North Star forbids. Operator is the ONLY
+            # modifier the early return dropped: map_over+loop_when and
+            # portal+map_over already raise ConstructError above. A DISCARDED
+            # rebind is the same silent-drop shape, hence ``n =``, not a bare call.
+            n = _apply_eager_oracle_gen_type(n)
 
         # -- Fan-out via Each when map_over is set (no Oracle) -----------------
-        if map_over is not None:
-            # Apply | Each(...) — this creates a new Node via model_copy.
-            n_mapped = n | Each(**_build_each_kwargs(map_over, map_key, map_on_error))
-            # The model_copy produced a new id(); re-register the sidecar on
-            # the new instance so construct_from_module can find it.
-            _register_sidecar(n_mapped, f, param_names)
-            if param_res:
-                _set_param_res(n_mapped, param_res)
-            return n_mapped
+        elif map_over is not None:
+            # Apply | Each(...) — this creates a new Node via model_copy. The
+            # shared re-registration below re-stamps the sidecar on the new
+            # instance so construct_from_module can find it.
+            n = n | Each(**_build_each_kwargs(map_over, map_key, map_on_error))
 
         _register_sidecar(n, f, param_names)
         if param_res:
             _set_param_res(n, param_res)
 
         # -- Oracle ensemble when any ensemble kwarg is set (no Each) ----------
-        if has_oracle_kwarg:
+        # Gated on ``map_over is None``: the fused Each×Oracle branch above already
+        # piped the Oracle, and re-piping here would double-apply it.
+        if has_oracle_kwarg and map_over is None:
             oracle_kw = _build_oracle_kwargs(
                 node_label=node_label,
                 f=f,

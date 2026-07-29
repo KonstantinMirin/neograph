@@ -37,7 +37,7 @@ so ``src/neograph`` core stays Agent-Spec-free by default — only calling
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, NoReturn, TypeGuard, assert_never, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeGuard, assert_never, cast
 
 from neograph._ir_branch import _BranchNode, iter_with_arms
 from neograph._normalize import normalize_inputs, normalize_outputs
@@ -49,7 +49,6 @@ from neograph.modifiers import (
     SUB_CONSTRUCT_UNSUPPORTED_COMBOS,
     Each,
     Loop,
-    ModifierCombo,
     Operator,
     Oracle,
     PrimaryShape,
@@ -706,7 +705,7 @@ def _lower_oracle(
     return [*variant_nodes, merge_node], control_edges, data_edges
 
 
-def _lower_each(node: Node | Construct, each: Each) -> SpecNode:
+def _lower_each(node: Node | Construct, each: Each, oracle: Oracle | None = None) -> SpecNode:
     """Lower an Each-modified item: MapNode wrapping a single-body sub-Flow.
 
     The wrapped body is a Node's lowered primitive OR a Construct-item's
@@ -714,10 +713,15 @@ def _lower_each(node: Node | Construct, each: Each) -> SpecNode:
     as one item lowers to the SAME MapNode shape as ``node | Each(...)``.
     ``over``/``key``/``on_error`` have no primitive representation — ride in
     the ``neograph/modifier=each`` marker (``EachSpec``).
+
+    ``oracle`` is the Each x Oracle FUSION seam (neograph-s7zt3.10), and mirrors
+    ``_lower_loop(node, loop, body)``'s caller-lowered-body seam: when set, the
+    sub-Flow's body is the variant-fan-out + merge group ``_lower_oracle``
+    already produces, instead of a single primitive. Composition, not a second
+    lowering — the fused MapNode adds ZERO new node-construction sites.
     """
     nodes_mod, flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
 
-    inner = _lower_item_body(node)
     # The MapNode infers its OWN inputs as ``iterated_{title}`` for every
     # property in ``subflow.inputs`` (pyagentspec MapNode._get_inferred_inputs,
     # which reads the sub-flow's StartNode inputs). Declare the inner node's
@@ -741,14 +745,37 @@ def _lower_each(node: Node | Construct, each: Each) -> SpecNode:
         inner_inputs = _properties_for(_item_inputs(node))
     start_node = nodes_mod.StartNode(name=f"{node.name}__each_start", inputs=inner_inputs or None)
     end_node = nodes_mod.EndNode(name=f"{node.name}__each_end")
+
+    if oracle is None:
+        inner = _lower_item_body(node)
+        body_nodes: list[SpecNode] = [inner]
+        body_control = [
+            edges_mod.ControlFlowEdge(name=f"{node.name}__each_start_edge", from_node=start_node, to_node=inner),
+            edges_mod.ControlFlowEdge(name=f"{node.name}__each_end_edge", from_node=inner, to_node=end_node),
+        ]
+        body_data: list[DataFlowEdge] = []
+    else:
+        # FUSED Each x Oracle. The Oracle group's own variant->merge control edges
+        # and fan-in data edges come through verbatim; only the Flow's boundary
+        # wiring is added here. A pyagentspec StartNode must have EXACTLY ONE
+        # outgoing control edge, so it points at the MERGE node — the same shape
+        # to_agent_spec already builds at top level for an un-fused ORACLE item
+        # (primary = the merge node; variants carry no inbound edge). The inner
+        # merge node keeps the MapNode's own name, which validates and round-trips.
+        body_nodes, body_control, body_data = _lower_oracle(node, oracle)
+        merge = body_nodes[-1]  # _lower_oracle returns [*variants, merge]
+        body_control = [
+            edges_mod.ControlFlowEdge(name=f"{node.name}__each_start_edge", from_node=start_node, to_node=merge),
+            *body_control,
+            edges_mod.ControlFlowEdge(name=f"{node.name}__each_end_edge", from_node=merge, to_node=end_node),
+        ]
+
     sub_flow = flow_mod.Flow(
         name=f"{node.name}__each_body",
         start_node=start_node,
-        nodes=[start_node, inner, end_node],
-        control_flow_connections=[
-            edges_mod.ControlFlowEdge(name=f"{node.name}__each_start_edge", from_node=start_node, to_node=inner),
-            edges_mod.ControlFlowEdge(name=f"{node.name}__each_end_edge", from_node=inner, to_node=end_node),
-        ],
+        nodes=[start_node, *body_nodes, end_node],
+        control_flow_connections=body_control,
+        data_flow_connections=body_data or None,
     )
     return nodes_mod.MapNode(
         name=node.name,
@@ -884,26 +911,16 @@ def _lower_operator(
     return check, [input_message], [pause_edge]
 
 
-def _raise_no_agent_spec_lowering(item: Any, combo: ModifierCombo) -> NoReturn:
-    """Fail loud for a ModifierCombo with no Agent Spec lowering arm.
-
-    Single-sited because the ``COMBO_DECOMPOSITION`` dispatch reaches it from
-    four arms, where the old flat chain simply fell off the end.
-    The message/expected/found/hint are byte-identical to that fall-through --
-    the error text is a user-visible contract the migration must not change
-    (pinned by ``TestUnsupportedComboFallthroughRaise``).
-    """
-    raise ConfigurationError.build(
-        f"node {item.name!r} has modifier combination {combo.name} — no Agent Spec lowering yet",
-        expected="BARE, ORACLE, EACH, LOOP, or OPERATOR",
-        found=combo.name,
-        hint="composed modifier lowering (e.g. Each+Oracle) is out of scope for i3zsh's primitive-level export",
-    )
+_LoweredItem: TypeAlias = (
+    "tuple[list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge], SpecNode, SpecNode, list[tuple[SpecNode, bool]]]"
+)
+"""What one lowered construct item is: (all_spec_nodes, extra_control_edges,
+extra_data_edges, primary_node, data_node, input_targets). Named so the
+per-shape arms of ``_lower_construct_item`` can BIND this shape and let the
+shared Operator postlude rewrite it, instead of each arm returning its own."""
 
 
-def _lower_construct_item(
-    item: Any,
-) -> tuple[list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge], SpecNode, SpecNode, list[tuple[SpecNode, bool]]]:
+def _lower_construct_item(item: Any) -> _LoweredItem:
     """Lower one top-level construct item (Node/Construct/_BranchNode) to
     (all_spec_nodes, extra_control_edges, extra_data_edges, primary_node,
     data_node, input_targets).
@@ -977,88 +994,106 @@ def _lower_construct_item(
     # in modifiers.py is the single source of truth for what a combo means
     # (neograph-tjpn4, closing the epic's last hand-written enumeration).
     #
-    # Each arm is UNGUARDED and does its own has_operator / fusion check INSIDE the
-    # body. Do NOT hoist those checks into one pre-dispatch test: a `case ... if ...`
+    # Three-part structure, mirroring compiler.py's _add_subgraph (:584) and
+    # _add_node_to_graph (:703) one-for-one (neograph-s7zt3.10 / Phase 7):
+    #   1. split the Each x Oracle FUSION out BEFORE the match (it decomposes to
+    #      primary=EACH with has_operator=False, so no arm test would catch it);
+    #   2. match on the primary shape — each arm BINDS its 6-tuple instead of
+    #      returning, and is item-kind-agnostic and Operator-agnostic;
+    #   3. ONE unconditional Operator postlude after the match.
+    #
+    # The postlude goes AFTER the match, not into a `case ... if ...` guard: a
     # guard would make `case _` reachable and swap ConfigurationError for
-    # assert_never's AssertionError, and a hoisted has_operator raise would swap
-    # PORTAL_OPERATOR's dispatch-mode-Portal message for the generic one.
+    # assert_never's AssertionError. And it hoists the LOWERING, never a raise —
+    # the PORTAL arm still raises its own dispatch-mode message from inside the
+    # arm, so PORTAL_OPERATOR keeps its specific text rather than a generic one.
     decomp = COMBO_DECOMPOSITION[combo]
-    match decomp.primary:
-        case PrimaryShape.ORACLE:
-            if decomp.has_operator:
-                _raise_no_agent_spec_lowering(item, combo)
-            variant_and_merge, control_edges, data_edges = _lower_oracle(item, mods["oracle"])
-            variants = variant_and_merge[:-1]
-            merge = variant_and_merge[-1]
-            return variant_and_merge, control_edges, data_edges, merge, merge, [(v, False) for v in variants]
 
-        case PrimaryShape.EACH:
-            # EACH_ORACLE decomposes to primary=EACH with has_operator=False, so the
-            # fusion needs its OWN co-presence test — the operator check does not
-            # cover it. This is the idiom compiler.py uses and
-            # agent-spec-rewrite-2026-07-27.md:115 prescribes, not a second
-            # combo enumeration. (neograph-c265k consolidates the six copies.)
-            if decomp.has_operator or is_each_oracle_fused(mods):
-                _raise_no_agent_spec_lowering(item, combo)
-            map_node = _lower_each(item, mods["each"])
-            return [map_node], [], [], map_node, map_node, [(map_node, True)]
+    if is_each_oracle_fused(mods):
+        # Each x Oracle: ONE MapNode whose subflow IS the un-fused Oracle
+        # variant-fan-out + merge that _lower_oracle already produces. Composed,
+        # not re-implemented — _lower_each grows an optional caller-lowered body
+        # group exactly the way _lower_loop(node, loop, body) already takes one.
+        map_node = _lower_each(item, mods["each"], oracle=mods["oracle"])
+        arm: _LoweredItem = ([map_node], [], [], map_node, map_node, [(map_node, True)])
+    else:
+        match decomp.primary:
+            case PrimaryShape.ORACLE:
+                variant_and_merge, control_edges, data_edges = _lower_oracle(item, mods["oracle"])
+                variants = variant_and_merge[:-1]
+                merge = variant_and_merge[-1]
+                arm = (variant_and_merge, control_edges, data_edges, merge, merge, [(v, False) for v in variants])
 
-        case PrimaryShape.LOOP:
-            if decomp.has_operator:
-                _raise_no_agent_spec_lowering(item, combo)
-            body = _lower_item_body(item)
-            branch, extra_control, extra_data = _lower_loop(item, mods["loop"], body)
-            return [body, branch], extra_control, extra_data, branch, body, [(body, False)]
+            case PrimaryShape.EACH:
+                map_node = _lower_each(item, mods["each"])
+                arm = ([map_node], [], [], map_node, map_node, [(map_node, True)])
 
-        case PrimaryShape.BARE:
-            # BARE and OPERATOR are the SAME primary shape; has_operator is what
-            # distinguishes them. This is the one arm where the Operator postlude
-            # is implemented today. The authoritative design doc prescribes an
-            # UNCONDITIONAL postlude across every arm — that is Phase 7's end state
-            # (neograph-s7zt3.10), deliberately NOT implemented here.
-            if decomp.has_operator:
-                _nodes_mod, _flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
+            case PrimaryShape.LOOP:
+                body = _lower_item_body(item)
+                branch, extra_control, extra_data = _lower_loop(item, mods["loop"], body)
+                arm = ([body, branch], extra_control, extra_data, branch, body, [(body, False)])
+
+            case PrimaryShape.BARE:
+                # BARE and OPERATOR are the SAME primary shape; has_operator is what
+                # distinguishes them, and that difference now lives entirely in the
+                # shared postlude below.
                 primary = _lower_item_body(item)
-                check, extra_nodes, extra_control = _lower_operator(item, mods["operator"])
-                pre_edge = edges_mod.ControlFlowEdge(
-                    name=f"{item.name}__to_operator_check", from_node=primary, to_node=check
+                arm = ([primary], [], [], primary, primary, [(primary, False)])
+
+            case PrimaryShape.PORTAL:
+                # C2 (neograph-s7zt3.12): a DISPATCH-mode Portal (route="decide") reaching
+                # here is genuinely unrepresentable in Agent Spec — fail LOUD, not "not yet".
+                # Peer-mode Portal meshes were already intercepted in to_agent_spec (the
+                # Swarm path), so any PORTAL combo at this point is dispatch mode. Its runtime
+                # semantics — SYNTHESIZE an Agent Spec Flow from emitted data at runtime,
+                # then compile+run it — has no static-spec primitive: every subflow-bearing
+                # pyagentspec node (FlowNode/MapNode/ParallelFlowNode/CatchExceptionNode)
+                # takes a STATIC ``subflow: Flow`` declared at authoring time, and
+                # BranchingNode only selects among pre-declared branches (verified against
+                # installed pyagentspec 26.1.2, tests/agent_spec_capabilities.py registry).
+                # A dispatch flow is not knowable until runtime, so it is a permanent,
+                # evidence-backed scope boundary — mirrors the Each x Oracle sub-construct
+                # rejection's fail-loud shape.
+                #
+                # Raised from INSIDE the arm, deliberately: hoisting it into the shared
+                # postlude would swap PORTAL_OPERATOR's dispatch-mode message for a
+                # generic one. The arm covers PORTAL_OPERATOR only vacuously — a
+                # dispatch-mode Portal carrying an Operator is rejected at IR level by
+                # ModifierSet.with_modifier, so PORTAL_OPERATOR provably cannot reach
+                # here. That is WHY the message may say "dispatch-mode" unconditionally.
+                raise ConfigurationError.build(
+                    f"node {item.name!r} is a dispatch-mode Portal (route='decide') — no Agent Spec lowering",
+                    expected="a peer-mode Portal mesh (exported as a Swarm) or a non-Portal node",
+                    found=f"dispatch-mode Portal ({combo.name})",
+                    node=item.name,
+                    hint="dispatch mode synthesizes and runs a flow from runtime-emitted data; Agent Spec has "
+                    "no runtime-flow-synthesis primitive (every subflow node takes a static subflow), so it is "
+                    "permanently unrepresentable — keep the dispatcher inside neograph, do not export it",
                 )
-                return [primary, check, *extra_nodes], [pre_edge, *extra_control], [], check, primary, [(primary, False)]
-            primary = _lower_item_body(item)
-            return [primary], [], [], primary, primary, [(primary, False)]
 
-        case PrimaryShape.PORTAL:
-            # C2 (neograph-s7zt3.12): a DISPATCH-mode Portal (route="decide") reaching
-            # here is genuinely unrepresentable in Agent Spec — fail LOUD, not "not yet".
-            # Peer-mode Portal meshes were already intercepted in to_agent_spec (the
-            # Swarm path), so any PORTAL combo at this point is dispatch mode. Its runtime
-            # semantics — SYNTHESIZE an Agent Spec Flow from emitted data at runtime,
-            # then compile+run it — has no static-spec primitive: every subflow-bearing
-            # pyagentspec node (FlowNode/MapNode/ParallelFlowNode/CatchExceptionNode)
-            # takes a STATIC ``subflow: Flow`` declared at authoring time, and
-            # BranchingNode only selects among pre-declared branches (verified against
-            # installed pyagentspec 26.1.2, tests/agent_spec_capabilities.py registry).
-            # A dispatch flow is not knowable until runtime, so it is a permanent,
-            # evidence-backed scope boundary — mirrors the Each x Oracle sub-construct
-            # rejection's fail-loud shape.
-            #
-            # The arm covers PORTAL_OPERATOR too, but only vacuously: a dispatch-mode
-            # Portal carrying an Operator is rejected at IR level by
-            # ModifierSet.with_modifier, so PORTAL_OPERATOR provably cannot reach here.
-            # That is WHY the message may say "dispatch-mode" unconditionally — not
-            # because a PORTAL_OPERATOR would be dispatch mode.
-            raise ConfigurationError.build(
-                f"node {item.name!r} is a dispatch-mode Portal (route='decide') — no Agent Spec lowering",
-                expected="a peer-mode Portal mesh (exported as a Swarm) or a non-Portal node",
-                found=f"dispatch-mode Portal ({combo.name})",
-                node=item.name,
-                hint="dispatch mode synthesizes and runs a flow from runtime-emitted data; Agent Spec has "
-                "no runtime-flow-synthesis primitive (every subflow node takes a static subflow), so it is "
-                "permanently unrepresentable — keep the dispatcher inside neograph, do not export it",
-            )
+            case _ as unreachable:
+                assert_never(unreachable)
 
-        case _ as unreachable:
-            assert_never(unreachable)
+    # -- ONE unconditional Operator postlude, orthogonal to every primary shape --
+    # Reuses _lower_operator as-is: it reads only item.name + operator.when and is
+    # already item-kind- and shape-agnostic. The arm's data_node and input_targets
+    # are preserved unchanged; only the control-flow primary moves to the check node
+    # (other items' ControlFlowEdges attach to the gate, so the pause is reachable).
+    if not decomp.has_operator:
+        return arm
+
+    arm_nodes, arm_control, arm_data, arm_primary, arm_data_node, arm_targets = arm
+    _nodes_mod, _flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
+    check, extra_nodes, extra_control = _lower_operator(item, mods["operator"])
+    pre_edge = edges_mod.ControlFlowEdge(name=f"{item.name}__to_operator_check", from_node=arm_primary, to_node=check)
+    return (
+        [*arm_nodes, check, *extra_nodes],
+        [*arm_control, pre_edge, *extra_control],
+        arm_data,
+        check,
+        arm_data_node,
+        arm_targets,
+    )
 
 
 def _lower_portal_mesh_to_swarm(construct: Construct, members: list[Node | Construct], tools_mod: Any) -> Any:

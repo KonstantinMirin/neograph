@@ -122,11 +122,13 @@ _ALLOWLIST: Counter = Counter(
         # iter_with_arms scan immediately after this walk, so routing this walk through
         # iter_with_arms would be wrong (it must NOT descend into arms).
         ("_fan_agent_wrap.py", "for item in construct.nodes:"): 1,
-        # from_agent_spec's Each-group reconstruction (neograph-01i0g): this
-        # walks a pyagentspec Flow's OWN `.subflow.nodes` list (the exported
-        # MapNode's sub-flow), not a neograph Construct.nodes list -- there is
-        # no _BranchNode/arm concept on the Agent Spec side for iter_with_arms
-        # to apply to.
+        # from_agent_spec's Each sub-flow descent (neograph-01i0g): this walks a
+        # pyagentspec Flow's OWN `.subflow.nodes` list (the exported MapNode's
+        # sub-flow), not a neograph Construct.nodes list -- there is no
+        # _BranchNode/arm concept on the Agent Spec side for iter_with_arms to
+        # apply to. Count stays 1 across the Each x Oracle fusion work
+        # (neograph-s7zt3.10): the fusion recognizer does NOT add a second walk,
+        # it calls the same `_subflow_inner_nodes` helper this line lives in.
         (
             "loader.py",
             'inner_nodes = [n for n in map_node.subflow.nodes if type(n).__name__ not in ("StartNode", "EndNode")]',

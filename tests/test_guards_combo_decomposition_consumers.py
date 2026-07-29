@@ -78,6 +78,13 @@ MIGRATED: frozenset[str] = frozenset(
         # (c) is an EQUALITY and _agent_spec.py is still a combo-vocabulary
         # consumer via its table imports.
         "_agent_spec.py",
+        # neograph-s7zt3.10 (Phase 7): loader.py joined the readership when its
+        # recognition walk moved to recognize->classify -- it now maps a recognized
+        # modifier-NAME frozenset through combo_for_modifier_names and dispatches on
+        # COMBO_DECOMPOSITION[combo].primary/.has_operator, the exact import-side
+        # mirror of _agent_spec.py's export dispatch. It joins MIGRATED directly and
+        # never passed through PENDING, exactly as the PENDING docstring pre-declared.
+        "loader.py",
     }
 )
 
@@ -87,8 +94,9 @@ MIGRATED: frozenset[str] = frozenset(
 #: chain + PORTAL membership test), so every combo consumer in the tree reads the
 #: decomposition table. Re-parking a file here is forbidden: new combo dispatch
 #: must be written against the table, never deferred.
-#: `loader.py` is NOT here: it has zero combo references today; it joins MIGRATED
-#: (never PENDING) when the s6 recognize->classify design lands.
+#: `loader.py` was pre-declared here as "joins MIGRATED (never PENDING) when the
+#: s6 recognize->classify design lands" -- that landed in neograph-s7zt3.10 and it
+#: is now in MIGRATED above. PENDING stays EMPTY.
 PENDING: frozenset[str] = frozenset()
 
 #: The single definition site. Scoped out of (a)/(b) by construction.

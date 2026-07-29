@@ -119,7 +119,8 @@ FUSION_READERS: frozenset[str] = frozenset(
         "state.py",  # dict-form fused arm + single-type collector
         "_state_write.py",  # Each key-wrapping suppression for the fusion
         "_subconstruct.py",  # NEGATED: EACH-shaped but not fused
-        "_agent_spec.py",  # fused combos have no Agent Spec lowering
+        "_agent_spec.py",  # EXPORT: the pre-`match` fusion split (MapNode over an Oracle subflow)
+        "loader.py",  # IMPORT: the mirror fusion split, over the RECOGNIZED modifier-name set
     }
 )
 

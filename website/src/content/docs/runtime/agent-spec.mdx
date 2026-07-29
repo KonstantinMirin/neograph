@@ -31,6 +31,22 @@ Agent Spec has no concept of neograph's modifiers. Exporting *flattens* them to 
 
 Oracle is the flagship gap to point at: there is no first-class "ensemble" concept in Agent Spec, so a single `Oracle(n=3, merge_fn=...)` line expands into a genuinely larger flat graph — a concrete demonstration of what the modifier layer buys you.
 
+### Combined modifiers
+
+Modifiers **compose**, and so does their lowering. A node carrying more than one modifier is not a special case in the exporter — `Operator` is an orthogonal wrapper chained after whatever primary shape the node has, and `Each` × `Oracle` fuses into a single `MapNode` whose sub-`Flow` *is* the Oracle fan-out:
+
+| neograph | Agent Spec lowering |
+|---|---|
+| `Each` + `Operator` | the `MapNode`, then the pause/continue `BranchingNode` + `InputMessageNode` |
+| `Oracle` + `Operator` | the fan-out + merge group, then the pause composite chained off the merge node |
+| `Loop` + `Operator` | the body + loop `BranchingNode`, then the pause composite |
+| `Each` × `Oracle` | **one** `MapNode` whose sub-`Flow` holds the N variants + merge — the ensemble runs per fanned-out item |
+| `Each` × `Oracle` + `Operator` | the fused `MapNode` above, then the pause composite |
+
+All five round-trip: `to_agent_spec()` → `from_agent_spec()` recovers the original modifier combination, not a flattened approximation. Import recognizes the composed shapes structurally (a real control-flow edge into the gate, a real `pause` branch out of it) rather than trusting the metadata markers alone.
+
+The one combination with no export is a **dispatch-mode `Portal`** (`route="decide"`), which fails loud. That is permanent, not a gap: dispatch mode synthesizes a flow from data that does not exist until runtime, and every subflow-bearing Agent Spec node takes a *static* subflow declared at authoring time. A peer-mode `Portal` mesh exports fine — as a `Swarm`.
+
 ## See it side-by-side
 
 [`examples/31_agent_spec_each_oracle_loop.py`](https://github.com/KonstantinMirin/neograph/blob/main/examples/31_agent_spec_each_oracle_loop.py) builds three small, independent pipelines — one per modifier (`Each`, `Oracle`, `Loop`) — and for each one prints the *real* Agent Spec `Flow` that `to_agent_spec()` emits, along with its actual line count (computed from the live JSON dump, never a hand-typed number). Run it with:

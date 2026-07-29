@@ -7,7 +7,7 @@ node | Operator(when="has_open_questions")
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self, runtime_checkable
 
@@ -229,6 +229,50 @@ def classify_modifiers(item: ConstructItem) -> tuple[ModifierCombo, dict]:
             node=getattr(item, "name", "?"),
         )
     return combo, mods
+
+
+def combo_for_modifier_names(names: Iterable[str], *, context: str = "?") -> ModifierCombo:
+    """Classify a set of modifier NAMES (not modifier instances) into a combo.
+
+    The structural-recognition twin of ``classify_modifiers``: the Agent Spec
+    loader recognizes which modifiers a Flow's node grouping encodes, and needs
+    the same frozenset -> ModifierCombo answer without a ``Node`` to inspect.
+    Reads the SAME ``_COMBO_MAP`` (no second mapping -- a re-planted copy is
+    what ``TestComboMapMonopoly`` exists to ban), and fails loud on a miss for
+    the same reason ``classify_modifiers`` does: a foreign or hand-edited spec
+    can present a combination neograph has no meaning for, and a bare KeyError
+    would surface as an internal error instead of a diagnosable one.
+    """
+    has = frozenset(names)
+    combo = _COMBO_MAP.get(has)
+    if combo is None:
+        raise ConstructError.build(
+            "Invalid modifier combination",
+            found=str(sorted(has)),
+            hint="This combination is not supported",
+            node=context,
+        )
+    return combo
+
+
+def modifier_names_for_combo(combo: ModifierCombo) -> frozenset[str]:
+    """The modifier names a combo is composed of -- the inverse of
+    ``_COMBO_MAP``, and the ONLY sanctioned way to ask "does this combo carry
+    an Each / an Oracle / a Loop?".
+
+    Exists so consumers that need MEMBERSHIP (rather than the decomposed
+    primary shape) read the table instead of hand-typing a combo list.
+    ``COMBO_DECOMPOSITION`` cannot answer this: EACH_ORACLE decomposes to
+    primary=EACH with has_operator=False, so the Oracle is invisible there.
+    """
+    for names, value in _COMBO_MAP.items():
+        if value is combo:
+            return names
+    raise ConstructError.build(  # pragma: no cover - unreachable while _COMBO_MAP is total
+        "ModifierCombo missing from _COMBO_MAP",
+        found=combo.name,
+        hint="every ModifierCombo value must appear exactly once in _COMBO_MAP",
+    )
 
 
 def primary_shape(item: ConstructItem) -> PrimaryShape:

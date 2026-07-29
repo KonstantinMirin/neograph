@@ -1111,3 +1111,154 @@ class TestBodyMergeShimNameUniqueness:
         )
         # All chars must be lowercase hex.
         assert all(c in "0123456789abcdef" for c in suffix), f"Suffix {suffix!r} must be lowercase hex"
+
+
+class TestMapOverDoesNotDropOperator:
+    """neograph-s7zt3.10 Step 0: ``@node``'s two ``map_over`` branches
+    (decorators.py:661 fused Each x Oracle, :672 plain Each) EARLY-RETURN
+    before the shared ``interrupt_when`` tail at :701, so an Operator asked
+    for on a fan-out node is SILENTLY dropped -- no error, no warning, a
+    wrong ModifierCombo.
+
+    Probed at HEAD::
+
+        @node(map_over=, interrupt_when=)              -> ModifierCombo.EACH
+        @node(map_over=, models=, merge_prompt=,
+              interrupt_when=)                         -> ModifierCombo.EACH_ORACLE
+
+    Both must classify as the *_OPERATOR combo. Operator is the ONLY modifier
+    the early-returns can drop: ``map_over``+``loop_when`` (decorators.py:403)
+    and ``portal``+``map_over`` (:416) already raise ConstructError, and the
+    programmatic surface already classifies both combos correctly (pinned
+    below as the three-surface-parity reference).
+
+    This is a silent control-flow seam in the DX layer -- the class of defect
+    the North Star forbids deferring -- and it makes any Agent Spec matrix
+    cell built with ``@node`` for these two combos VACUOUS (it would really
+    exercise EACH / EACH_ORACLE).
+    """
+
+    def test_map_over_plus_interrupt_when_classifies_as_each_operator(self):
+        from neograph.modifiers import ModifierCombo, classify_modifiers
+        from tests.fakes import register_condition
+
+        register_condition("mo_gate", lambda state: None)
+
+        @node(
+            mode="scripted",
+            outputs=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+            interrupt_when="mo_gate",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=[])
+
+        assert verify.has_modifier(Each), "sanity: map_over still attaches Each"
+        assert verify.has_modifier(Operator), (
+            "interrupt_when= must attach an Operator even when map_over= is set -- "
+            "the map_over branch early-returns before the interrupt_when tail, "
+            "silently dropping the human-approval gate"
+        )
+        assert verify.get_modifier(Operator).when == "mo_gate"
+        assert classify_modifiers(verify)[0] is ModifierCombo.EACH_OPERATOR
+
+    def test_fused_each_oracle_plus_interrupt_when_classifies_as_each_oracle_operator(self):
+        from neograph.modifiers import ModifierCombo, classify_modifiers
+        from tests.fakes import register_condition
+
+        register_condition("mo_fused_gate", lambda state: None)
+
+        @node(
+            outputs=MatchResult,
+            model="fast",
+            prompt="test",
+            map_over="make_clusters.groups",
+            map_key="label",
+            models=["fast", "reason"],
+            merge_prompt="merge-tpl",
+            interrupt_when="mo_fused_gate",
+        )
+        def fused(cluster: ClusterGroup) -> MatchResult: ...
+
+        assert fused.has_modifier(Each)
+        assert fused.has_modifier(Oracle)
+        assert fused.has_modifier(Operator), (
+            "the Each x Oracle fusion branch early-returns before the "
+            "interrupt_when tail, silently dropping the gate"
+        )
+        assert fused.get_modifier(Operator).when == "mo_fused_gate"
+        assert classify_modifiers(fused)[0] is ModifierCombo.EACH_ORACLE_OPERATOR
+
+    def test_programmatic_surface_already_classifies_both_combos(self):
+        """Three-surface parity reference: the programmatic
+        ``Node | Each | Operator`` form is ALREADY correct, so the @node
+        assertions above are bringing the DX surface up to the IR, not
+        inventing new IR behavior."""
+        from neograph.modifiers import ModifierCombo, classify_modifiers
+
+        register_scripted("mo_prog", lambda input_data, config: MatchResult(cluster_label="a", matched=[]))
+
+        each_op = (
+            Node.scripted("verify", fn="mo_prog", inputs=ClusterGroup, outputs=MatchResult)
+            | Each(over="make_clusters.groups", key="label")
+            | Operator(when="mo_gate")
+        )
+        assert classify_modifiers(each_op)[0] is ModifierCombo.EACH_OPERATOR
+
+        fused_op = (
+            Node(name="fused", mode="think", model="fast", prompt="test", inputs=ClusterGroup, outputs=MatchResult)
+            | Oracle(n=2, merge_prompt="merge-tpl")
+            | Each(over="make_clusters.groups", key="label")
+            | Operator(when="mo_gate")
+        )
+        assert classify_modifiers(fused_op)[0] is ModifierCombo.EACH_ORACLE_OPERATOR
+
+    def test_map_over_node_is_scripted_registered_for_a_declarative_construct(self):
+        """The NAMED second effect of the Step-0 fall-through (design M6).
+
+        Both ``map_over`` early-returns also sit BEFORE the eager
+        ``_register_node_scripted`` block (decorators.py:776), so at HEAD a
+        ``@node(map_over=...)`` carries ``scripted_fn=None`` while
+        ``@node(interrupt_when=...)`` carries a registered name. Dropping such
+        a node straight into a DECLARATIVE ``Construct(nodes=[...])`` -- i.e.
+        without going through ``construct_from_module`` /
+        ``construct_from_functions``, which build the shim themselves -- dies at
+        run time with::
+
+            ConfigurationError: [Node 'verify'] Scripted function 'None' not registered
+
+        Letting the branch fall through fixes that. This test exists so the
+        fix lands NAMED and asserted, never as an unnamed side effect.
+        """
+
+        @node(mode="scripted", outputs=Clusters)
+        def make_clusters() -> Clusters:
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
+                    ClusterGroup(label="beta", claim_ids=["c3"]),
+                ]
+            )
+
+        @node(
+            mode="scripted",
+            outputs=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=cluster.claim_ids)
+
+        assert verify.scripted_fn is not None, (
+            "a map_over @node must self-register its scripted shim like every "
+            "other @node mode -- the early-return skips the eager registration"
+        )
+
+        pipeline = Construct("declarative-each", nodes=[make_clusters, verify])
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "declarative-each"})
+
+        collected = result.get("verify", {})
+        assert set(collected.keys()) == {"alpha", "beta"}
+        assert collected["alpha"].matched == ["c1", "c2"]
