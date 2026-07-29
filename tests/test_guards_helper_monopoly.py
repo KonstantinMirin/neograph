@@ -209,7 +209,10 @@ class TestUnwrapHelperMonopoly:
     _HELPER_USERS = {
         "_input_shape.py": ("_unwrap_loop_value", "_unwrap_each_dict"),
         "_subconstruct.py": ("_unwrap_loop_value",),
-        "_wiring.py": ("_unwrap_loop_value",),
+        # neograph-3ffdg.2: the _unwrap_loop_value call site moved from _wiring.py
+        # to _wiring_loop.py with _construct_loop_unwrap. The monopoly claim is
+        # unchanged; it tracks where the delegation actually happens.
+        "_wiring_loop.py": ("_unwrap_loop_value",),
     }
 
     def test_no_inline_list_latest_unwrap_outside_di(self):

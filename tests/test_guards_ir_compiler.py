@@ -533,23 +533,35 @@ class TestCompilerWiringSplit:
         wiring = SRC_DIR / "_wiring.py"
         assert wiring.exists(), "_wiring.py does not exist. Create it with the extracted wiring helpers."
 
-    # signature -> the ONE module that must define it. neograph-3ffdg.1 split the
-    # Oracle/Each cluster out of _wiring.py into _wiring_oracle_each.py, so this
-    # is a per-module map rather than one flat list. The claim is unchanged in
-    # kind and strictly stronger in degree: each function has exactly one home,
-    # must be absent from compiler.py, AND must be absent from the sibling wiring
-    # module (so a future split cannot silently duplicate a definition).
+    # signature -> the ONE module that must define it. The wiring layer is being
+    # split file-by-file (neograph-3ffdg.1 took the Oracle/Each cluster, .2 took
+    # branch + the pure loop helpers), so this is a per-module map rather than one
+    # flat list. The claim is unchanged in kind and strictly stronger in degree:
+    # each function has exactly one home, must be absent from compiler.py, AND
+    # must be absent from EVERY other wiring module — so no future split can
+    # silently leave a duplicate definition behind.
+    WIRING_MODULES = (
+        "_wiring.py",
+        "_wiring_oracle_each.py",
+        "_wiring_branch.py",
+        "_wiring_loop.py",
+    )
     WIRING_FUNCTION_HOMES = {
         "def _wire_oracle": "_wiring_oracle_each.py",
         "def _wire_each": "_wiring_oracle_each.py",
         "def _add_each_oracle_fused": "_wiring_oracle_each.py",
         "def _merge_one_group": "_wiring_oracle_each.py",
-        "def _make_loop_router": "_wiring.py",
-        "def _node_loop_unwrap": "_wiring.py",
-        "def _construct_loop_unwrap": "_wiring.py",
+        "def _add_arm_nodes": "_wiring_branch.py",
+        "def _wire_arm_edges": "_wiring_branch.py",
+        "def _add_branch_to_graph": "_wiring_branch.py",
+        "def _make_loop_router": "_wiring_loop.py",
+        "def _node_loop_unwrap": "_wiring_loop.py",
+        "def _construct_loop_unwrap": "_wiring_loop.py",
+        # These two stayed in _wiring.py: they call the cross-cutting
+        # _resolve_condition, and moving them would have meant a cycle or a
+        # compiler.py call-site change that breached its size ceiling.
         "def _add_loop_back_edge": "_wiring.py",
         "def _add_subgraph_loop": "_wiring.py",
-        "def _add_branch_to_graph": "_wiring.py",
         "def _add_operator_check": "_wiring.py",
     }
 
@@ -561,23 +573,19 @@ class TestCompilerWiringSplit:
         if not wiring.exists():
             pytest.skip("_wiring.py does not exist yet")
         assert oracle_each.exists(), (
-            "_wiring_oracle_each.py does not exist. The Oracle/Each cluster was "
-            "extracted there by neograph-3ffdg.1."
+            "_wiring_oracle_each.py does not exist. The Oracle/Each cluster was extracted there by neograph-3ffdg.1."
         )
 
-        texts = {
-            "_wiring.py": wiring.read_text(),
-            "_wiring_oracle_each.py": oracle_each.read_text(),
-        }
+        texts = {m: (SRC_DIR / m).read_text() for m in self.WIRING_MODULES}
         compiler_text = (SRC_DIR / "compiler.py").read_text()
         violations = []
 
         for sig, home in self.WIRING_FUNCTION_HOMES.items():
-            other = "_wiring.py" if home == "_wiring_oracle_each.py" else "_wiring_oracle_each.py"
             if sig not in texts[home]:
                 violations.append(f"  MISSING: '{sig}' not found in {home}")
-            if sig in texts[other]:
-                violations.append(f"  DUPLICATED: '{sig}' defined in {other} as well as {home}")
+            for other in self.WIRING_MODULES:
+                if other != home and sig in texts[other]:
+                    violations.append(f"  DUPLICATED: '{sig}' defined in {other} as well as {home}")
             if sig in compiler_text:
                 violations.append(f"  DRIFTED: '{sig}' found in compiler.py (should only be in {home})")
 

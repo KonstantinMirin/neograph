@@ -171,6 +171,12 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # kernel at module level and performs no merge step, so the former
     # decorators/_llm function-local allowlist entries are retired here.
     ("_wiring.py", "neograph.compiler", frozenset({"compile"})),
+    # neograph-3ffdg.2: _add_arm_nodes moved to _wiring_branch.py and took its
+    # deferred `compile` import with it. Same cycle, same justification as the
+    # _wiring.py entry above (branch arms compile sub-constructs; compiler.py
+    # imports the wiring layer). NOT a new exemption -- the existing one followed
+    # the code, and _wiring.py still needs its own for the loop back-edge path.
+    ("_wiring_branch.py", "neograph.compiler", frozenset({"compile"})),
     # NOTE (neograph-sseh): the former _subconstruct.py -> runner function-local
     # import of _strip_internals was a compile-layer -> run-layer inversion. The
     # helper is a pure result-shaping utility with no run-layer dependency, so it
