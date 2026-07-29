@@ -2350,3 +2350,124 @@ class TestStructuredRetryBudgetParityAcrossTwins:
         budgeted = self._budgeted_arms(fn)
         assert not [a for a in budgeted if a.startswith("Raw(")], "unbudgeted Raw arm must not count as budgeted"
         assert any("Failed(" in a for a in budgeted), "budgeted Failed arm must be detected"
+
+
+class TestConfigCarrierIsTheOnlySite:
+    """neograph-s65y2: the ``config['configurable']`` carrier idiom lives ONLY in
+    ``_config_carrier.py``.
+
+    ## The invariant
+    ``_config_carrier``'s module docstring already declares it: *"Every framework
+    layer that stashes a value onto the config side-channel ... or reads the
+    framework-minted run id routes through here, so the copy-not-mutate carrier
+    idiom and the run-id read each live at ONE site."* The fresh-dict rule
+    ``{**config, 'configurable': {**configurable, K: v}}`` is a copy-not-mutate
+    contract; re-inlined per site it forks, and a site that mutates instead of
+    copying breaks idempotence for callers re-invoked per superstep.
+
+    ## The blind spot this closes
+    ``TestTwinThinness`` already bans a re-inlined carrier — but only inside a
+    TABLED sync/async TWIN PAIR. When neograph-s65y2 scanned the codebase it found
+    three violations in ``runner.py`` (``_mark_stream_custom``, ``_mint_run_id``,
+    ``_evict_run_cache``), all SINGLE non-twin functions, which that guard is
+    structurally unable to see — and ``runner.py`` did not import the carrier at
+    all. This guard covers the non-twin case, so the pattern cannot walk back in
+    through a function that happens to have no async sibling.
+    """
+
+    CARRIER_MODULE = "_config_carrier.py"
+    IDENTITY_KEYS = frozenset({"RUN_ID", "TRACE_ID"})
+
+    # Empty by construction: every merge-idiom site was migrated by s65y2, and the
+    # detector's ``**``-splat requirement means a fresh-config literal is not a
+    # violation to begin with. Kept as an explicit EMPTY set so adding an entry is
+    # a visible, reviewable act rather than a silent widening.
+    ALLOWED_INLINE_CONFIGURABLE: frozenset[str] = frozenset()
+
+    @classmethod
+    def _dict_literals_with_configurable(cls, tree) -> int:
+        """Count the carrier MERGE idiom: a dict literal that both splats an
+        existing mapping (``**config``) and sets a ``'configurable'`` key.
+
+        The ``**`` requirement is what makes this precise. Building a FRESH
+        config literal (``{"configurable": {K: v}}`` with no caller config in
+        hand, as ``_llm_render`` does for an out-of-graph render) carries no
+        copy-not-mutate hazard — there is nothing to copy. The hazard is only in
+        merging INTO a caller's config, which is exactly the splat form."""
+        n = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            splats_existing = any(k is None for k in node.keys)
+            sets_configurable = any(
+                isinstance(k, ast.Constant) and k.value == "configurable" for k in node.keys
+            )
+            if splats_existing and sets_configurable:
+                n += 1
+        return n
+
+    @classmethod
+    def _inline_identity_reads(cls, tree) -> list[str]:
+        """``<...>.get(StateKeys.RUN_ID/TRACE_ID)`` — bypasses run_id_of/trace_id_of."""
+        hits = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr != "get" or not node.args:
+                continue
+            arg = node.args[0]
+            if (
+                isinstance(arg, ast.Attribute)
+                and arg.attr in cls.IDENTITY_KEYS
+                and isinstance(arg.value, ast.Name)
+                and arg.value.id == "StateKeys"
+            ):
+                hits.append(f"StateKeys.{arg.attr} @ line {node.lineno}")
+        return hits
+
+    def test_no_inline_carrier_writes_outside_config_carrier(self):
+        offenders: list[str] = []
+        for py in sorted(SRC_DIR.rglob("*.py")):
+            if py.name == self.CARRIER_MODULE or py.name in self.ALLOWED_INLINE_CONFIGURABLE:
+                continue
+            n = self._dict_literals_with_configurable(ast.parse(py.read_text()))
+            if n:
+                offenders.append(f"{py.name}: {n} inline 'configurable' dict literal(s)")
+        assert offenders == [], (
+            "the config['configurable'] carrier idiom was re-inlined outside "
+            f"{self.CARRIER_MODULE} — call _with_configurable(config, **{{KEY: value}}) "
+            "so the copy-not-mutate contract stays un-forkable:\n" + "\n".join(f"  {o}" for o in offenders)
+        )
+
+    def test_no_inline_identity_reads_outside_config_carrier(self):
+        offenders: list[str] = []
+        for py in sorted(SRC_DIR.rglob("*.py")):
+            if py.name == self.CARRIER_MODULE:
+                continue
+            for hit in self._inline_identity_reads(ast.parse(py.read_text())):
+                offenders.append(f"{py.name}: {hit}")
+        assert offenders == [], (
+            "the framework-minted run/trace id was read inline instead of via the "
+            "canonical run_id_of() / trace_id_of() readers:\n" + "\n".join(f"  {o}" for o in offenders)
+        )
+
+    def test_carrier_module_still_defines_both_readers(self):
+        """Non-vacuity: the readers this guard redirects to must actually exist."""
+        src = (SRC_DIR / self.CARRIER_MODULE).read_text()
+        for fn in ("def _with_configurable", "def run_id_of", "def trace_id_of"):
+            assert fn in src, f"{self.CARRIER_MODULE} lost {fn!r} — the guard would redirect to nothing"
+
+    def test_detector_flags_a_reinlined_carrier(self):
+        """Slip meta-test: the pre-s65y2 shape of _mint_run_id IS detected."""
+        src = (
+            "def _mint_run_id(config):\n"
+            "    config = config or {}\n"
+            "    configurable = {**config.get('configurable', {}), StateKeys.RUN_ID: uuid4().hex}\n"
+            "    return {**config, 'configurable': configurable}\n"
+        )
+        assert self._dict_literals_with_configurable(ast.parse(src)) == 1
+
+    def test_detector_flags_an_inline_identity_read(self):
+        """Slip meta-test: the pre-s65y2 shape of _evict_run_cache IS detected."""
+        src = "def f(config):\n    return (config or {}).get('configurable', {}).get(StateKeys.RUN_ID)\n"
+        assert self._inline_identity_reads(ast.parse(src)) == ["StateKeys.RUN_ID @ line 2"]
