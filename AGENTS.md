@@ -500,6 +500,27 @@ it (xfail-style) before documenting it here.
 
 **Examples must run end-to-end.** Breaking one is a regression. When you change an API surface, run every example that doesn't require real API keys (01, 01c, 02, 03, 04, 05, 06, 08, 09, 10). The keyed examples are 07 and observable_pipeline.py — both hit real OpenRouter (observable_pipeline additionally pushes to Langfuse; run it with `--extra langfuse`), and both were verified passing end-to-end on 2026-07-09. Example 11 was converted to a FakeLLM and is keyless. Document any new failures separately.
 
+### Live Langfuse correlation check — needs REAL keys
+
+`tests/test_observe_trace_live.py` is the only test that talks to a live external
+service. It proves the half of neograph-s65y2 the offline suite structurally
+cannot: that Langfuse actually records the trace under the id neograph derived
+from `run_id` (`Langfuse.create_trace_id(seed=run_id)`, handed over as
+`trace_context`). Its control asserts the raw `run_id` still 404s — that was the
+original bug, and a 200 there would mean the two identity spaces collided.
+
+```bash
+set -a && . .env && set +a
+uv run --extra dev --extra langfuse pytest tests/test_observe_trace_live.py
+```
+
+Without `LANGFUSE_SECRET_KEY` + `LANGFUSE_PUBLIC_KEY` the module skips (2 skips
+in the default gate's count). **That skip is a documented hole, not coverage** —
+a green `make quality` says nothing about the live path. Re-run it after any
+change to `_merge_observe_callbacks`, `_identity_binds`, or the langfuse pin.
+Langfuse ingests asynchronously (~25s observed to first 200), so the test polls;
+it is slow by nature and deliberately not in the default gate.
+
 ### MCP examples (23/24/25/26) — no-key but need the `mcp-examples` extra
 
 The MCP-featuring examples exercise the **real** Model Context Protocol against a

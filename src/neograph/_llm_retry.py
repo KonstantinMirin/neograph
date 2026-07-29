@@ -473,6 +473,41 @@ def structured_retry_messages(
     return retry
 
 
+def empty_response_retry_messages(
+    messages: list,
+    raw_text: str | None,
+    output_model: type[BaseModel] | None,
+) -> list:
+    """Pure re-prompt assembly for the empty/undecodable structured arm.
+
+    neograph-yqrsz: sibling of :func:`structured_retry_messages` for the ``Raw``
+    (parsed=None, no DSML) case, which has no ``ValidationError`` to feed back —
+    that absence is what defines the arm. So the hint is built here rather than
+    via :func:`_repair_hint`: an empty response never reached validation and
+    never produced JSON to malform, making "failed validation" / "could not be
+    parsed" actively-wrong advice. Schema block and emit-only directive stay
+    identical to the sibling hints, so the re-prompts differ only in diagnosis.
+    Single-sited so the assembly cannot drift between the dispatch twins."""
+    schema_block = ""
+    if output_model is not None:
+        schema_block = f"\n\nExpected output schema:\n{describe_type(output_model, prefix='')}\n"
+    retry = list(messages)
+    if raw_text and raw_text.strip():
+        retry.append({"role": "assistant", "content": raw_text})
+    retry.append(
+        {
+            "role": "user",
+            "content": (
+                "Your previous response was empty — it contained no content at all."
+                f"{schema_block}\n"
+                "Respond with ONLY the JSON object. No markdown fences, no XML, "
+                "no explanation."
+            ),
+        }
+    )
+    return retry
+
+
 def _invoke_json_with_retry(
     llm: Any,
     messages: list,

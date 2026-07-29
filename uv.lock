@@ -1072,7 +1072,7 @@ wheels = [
 
 [[package]]
 name = "neograph"
-version = "0.7.3"
+version = "0.7.4"
 source = { editable = "." }
 dependencies = [
     { name = "json-repair" },
@@ -1123,7 +1123,7 @@ requires-dist = [
     { name = "langchain-core", specifier = ">=1.2,<2.0" },
     { name = "langchain-mcp-adapters", marker = "extra == 'mcp'", specifier = ">=0.3" },
     { name = "langchain-mcp-adapters", marker = "extra == 'mcp-examples'", specifier = ">=0.3" },
-    { name = "langfuse", marker = "extra == 'langfuse'", specifier = ">=3.0" },
+    { name = "langfuse", marker = "extra == 'langfuse'", specifier = ">=3.11" },
     { name = "langgraph", specifier = ">=1.1,<2.0" },
     { name = "langgraph-checkpoint", specifier = ">=4.0,<5.0" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28,<2" },
@@ -1143,7 +1143,7 @@ dev = [
     { name = "hypothesis", specifier = ">=6.151.12" },
     { name = "langchain", specifier = ">=1.0" },
     { name = "langchain-openai", specifier = ">=1.2.2" },
-    { name = "langfuse", specifier = ">=3.0" },
+    { name = "langfuse", specifier = ">=3.11" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "pytest-examples", specifier = ">=0.0.18,<0.1" },
