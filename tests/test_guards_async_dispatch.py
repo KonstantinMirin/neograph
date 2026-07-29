@@ -543,7 +543,9 @@ class TestOracleMergeBarrierDualPath:
     """
 
     ORACLE_PATH = SRC / "_oracle.py"
-    WIRING_PATH = SRC / "_wiring.py"
+    # group_merge_barrier lives in the Each×Oracle fusion wiring, which moved from
+    # _wiring.py to _wiring_oracle_each.py (neograph-3ffdg.1, pure file split).
+    WIRING_PATH = SRC / "_wiring_oracle_each.py"
 
     def test_make_oracle_merge_fn_returns_runnable_with_afunc(self):
         fn = _func_named(self.ORACLE_PATH.read_text(), "make_oracle_merge_fn")

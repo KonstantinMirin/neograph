@@ -74,7 +74,7 @@ ALLOWLIST: dict[str, int] = {
     "_llm_retry.py": 658,
     "_oracle.py": 650,
     "_tool_loop.py": 727,
-    "_wiring.py": 1461,
+    "_wiring.py": 1079,
     "compiler.py": 761,
     "decorators.py": 975,
     "describe_type.py": 552,

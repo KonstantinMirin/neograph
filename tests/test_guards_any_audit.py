@@ -137,13 +137,13 @@ ANY_ALLOWLIST: dict[str, str] = {
     # ── _wiring.py — Callable fn pointers ──
     # gen_fn / merge_fn / fan_fn / subgraph_fn are runtime-built closures whose
     # precise signatures are determined by the user's modifier configuration.
-    "_wiring.py:_merge_one_group:return": "user-supplied merge result; type declared by node.outputs",
-    "_wiring.py:_merge_one_group:upstream_context": "heterogeneous upstream model instances keyed by input name",
-    "_wiring.py:_merge_one_group:state": "dynamically-shaped LangGraph state object (from_state DI source)",
+    "_wiring_oracle_each.py:_merge_one_group:return": "user-supplied merge result; type declared by node.outputs",
+    "_wiring_oracle_each.py:_merge_one_group:upstream_context": "heterogeneous upstream model instances keyed by input name",
+    "_wiring_oracle_each.py:_merge_one_group:state": "dynamically-shaped LangGraph state object (from_state DI source)",
     # neograph-p3c7 — async twin of _merge_one_group; same boundaries.
-    "_wiring.py:_amerge_one_group:return": "user-supplied merge result; type declared by node.outputs",
-    "_wiring.py:_amerge_one_group:upstream_context": "heterogeneous upstream model instances keyed by input name",
-    "_wiring.py:_amerge_one_group:state": "dynamically-shaped LangGraph state object (from_state DI source)",
+    "_wiring_oracle_each.py:_amerge_one_group:return": "user-supplied merge result; type declared by node.outputs",
+    "_wiring_oracle_each.py:_amerge_one_group:upstream_context": "heterogeneous upstream model instances keyed by input name",
+    "_wiring_oracle_each.py:_amerge_one_group:state": "dynamically-shaped LangGraph state object (from_state DI source)",
     "_wiring.py:_construct_loop_unwrap:return": "user-supplied loop value; type declared by the sub-construct output",
     "_wiring.py:_add_branch_to_graph:checkpointer": "LangGraph checkpointer (BaseCheckpointSaver | None) threaded opaquely into the arm sub-construct compile; mirrors _add_subgraph's checkpointer: Any (neograph-faf8)",
     "_wiring.py:_add_arm_nodes:checkpointer": "LangGraph checkpointer (BaseCheckpointSaver | None) threaded opaquely into the arm sub-construct compile; extracted verbatim from _add_branch_to_graph:checkpointer (DRY-07 dedup, neograph-7w0d)",
