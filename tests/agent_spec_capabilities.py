@@ -36,6 +36,8 @@ Families (verified from each class's ``_get_inferred_inputs`` source):
 
 from __future__ import annotations
 
+import pathlib
+
 # -- Tier A: pure name-string classification (NO pyagentspec import) ----------
 
 NODE_FAMILIES: dict[str, str] = {
@@ -63,9 +65,9 @@ FAMILIES = frozenset({"text_scan", "structural", "echo"})
 
 # -- Derived: placeholder-prompt-emitting export constructors (neograph-tjupj) -
 
-PLACEHOLDER_PROMPT_EMITTING_CONSTRUCTORS: frozenset[str] = (
-    frozenset({n for n, f in NODE_FAMILIES.items() if f == "text_scan"}) | {"AgentNode"}
-)
+PLACEHOLDER_PROMPT_EMITTING_CONSTRUCTORS: frozenset[str] = frozenset(
+    {n for n, f in NODE_FAMILIES.items() if f == "text_scan"}
+) | {"AgentNode"}
 """pyagentspec constructor names whose neograph-EXPORT emission carries
 neograph-authored ``${var}`` prompt text and therefore MUST be preceded by a
 ``_translate_placeholders(`` call in ``src/neograph/_agent_spec.py``.
@@ -135,8 +137,41 @@ def assert_registry_complete() -> None:
         f"in NODE_FAMILIES: {sorted(missing)}. Add each to NODE_FAMILIES with its "
         "_get_inferred_inputs family (text_scan / structural / echo)."
     )
-    assert not stale, (
-        f"NODE_FAMILIES classifies name(s) pyagentspec no longer ships: {sorted(stale)}."
-    )
+    assert not stale, f"NODE_FAMILIES classifies name(s) pyagentspec no longer ships: {sorted(stale)}."
     bad_family = {k: v for k, v in NODE_FAMILIES.items() if v not in FAMILIES}
     assert not bad_family, f"NODE_FAMILIES has unknown family value(s): {bad_family}"
+
+
+# ── Agent-Spec export source cluster (neograph-3ffdg.3) ──────────────────────
+# The exporter used to be one file, and the AST guards over it read
+# ``_agent_spec.py`` directly. neograph-3ffdg.3 split it into four modules as a
+# pure file move.
+#
+# Those guards' CLAIMS are about the export surface as a whole -- "how many
+# AgentNode construction sites exist", "does _lower_node itself construct an
+# LlmNode" -- not about a filename. Scanning the concatenated cluster keeps each
+# claim exactly as strong as before: a pure move leaves every count and every
+# function body identical, so a real regression still fails.
+#
+# SINGLE source of truth: every such guard imports from here. A future split of
+# the exporter adds its module to this list and nothing else changes.
+_SRC_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
+
+AGENT_SPEC_SOURCE_FILES = [
+    _SRC_DIR / "_agent_spec.py",
+    _SRC_DIR / "_agent_spec_markers.py",
+    _SRC_DIR / "_agent_spec_placeholders.py",
+    _SRC_DIR / "_agent_spec_node_lowering.py",
+    _SRC_DIR / "_agent_spec_portal.py",
+]
+
+
+def agent_spec_source() -> str:
+    """Concatenated source of every module in the Agent Spec export cluster."""
+    missing = [p.name for p in AGENT_SPEC_SOURCE_FILES if not p.exists()]
+    assert not missing, (
+        f"Agent Spec export module(s) missing: {missing}. If a module was renamed "
+        "or merged, update AGENT_SPEC_SOURCE_FILES -- never let these guards scan "
+        "a silently shrinking surface."
+    )
+    return "\n".join(p.read_text() for p in AGENT_SPEC_SOURCE_FILES)

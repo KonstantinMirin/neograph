@@ -45,14 +45,17 @@ tight: EVERY ``_make_agent`` call must be translation-paired, no exceptions.
 from __future__ import annotations
 
 import ast
-import pathlib
 from typing import NamedTuple
 
-from tests.agent_spec_capabilities import PLACEHOLDER_PROMPT_EMITTING_CONSTRUCTORS
-
-AGENT_SPEC_FILE = (
-    pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph" / "_agent_spec.py"
+from tests.agent_spec_capabilities import (
+    PLACEHOLDER_PROMPT_EMITTING_CONSTRUCTORS,
+    agent_spec_source,
 )
+
+# neograph-3ffdg.3 split the exporter into four modules. The physical-count
+# tripwires below count construction SITES across the export surface -- invariant
+# under a pure file move -- so they scan the concatenated cluster. If a count
+# changes here, a site was genuinely added or lost.
 
 # The pairing target post-cbpyx (72fa5a1): the retired `_check_placeholder_inputs`
 # is GONE (zero src hits); `_translate_placeholders` is the translator, and
@@ -126,16 +129,14 @@ def _unpaired(sites: list[Site], translate_by_func: dict[str, list[int]]) -> lis
 
 
 # -- Parse the real file ONCE at module load ---------------------------------
-_SOURCE = AGENT_SPEC_FILE.read_text()
+_SOURCE = agent_spec_source()
 NODE_SITES, MAKE_AGENT_SITES, TRANSLATE_BY_FUNC = _parse(_SOURCE)
 
 # -- Named exemptions (req-3) -- NOT prompt-bearing, so no pairing demanded ---
 # Keyed by (constructor name, enclosing function) -- NEVER by line number
 # (line numbers drift). InputMessageNode in _lower_operator is a Portal
 # routing-CHECK node: it carries no neograph-authored ${var} prompt text.
-NODE_SITE_EXEMPTIONS: frozenset[tuple[str, str]] = frozenset(
-    {("InputMessageNode", "_lower_operator")}
-)
+NODE_SITE_EXEMPTIONS: frozenset[tuple[str, str]] = frozenset({("InputMessageNode", "_lower_operator")})
 
 # Bare Agent() at :370 inside _make_agent is DELIBERATELY EXCLUDED FROM THE SET
 # (not in PLACEHOLDER_PROMPT_EMITTING_CONSTRUCTORS): it receives an
@@ -326,10 +327,7 @@ class TestPairingCheckMetaGuard:
 
     def test_negative_unpaired_llmnode_is_flagged(self):
         # Synthetic function constructing an LlmNode with NO preceding translate.
-        buggy = (
-            "def _fake_lower():\n"
-            "    return nodes_mod.LlmNode(prompt_template=raw)\n"
-        )
+        buggy = "def _fake_lower():\n    return nodes_mod.LlmNode(prompt_template=raw)\n"
         node_sites, _make_agent, translate_by_func = _parse(buggy)
         assert len(node_sites) == 1 and node_sites[0].name == "LlmNode"
         unpaired = _unpaired(node_sites, translate_by_func)
@@ -341,16 +339,12 @@ class TestPairingCheckMetaGuard:
     def test_negative_unpaired_make_agent_is_flagged(self):
         # Synthetic function calling _make_agent with NO preceding translate --
         # the exact shape of the neograph-s7zt3.1 seam.
-        buggy = (
-            "def _fake_swarm():\n"
-            "    agent = _make_agent(member, tools_mod, [], [], member.prompt or '')\n"
-        )
+        buggy = "def _fake_swarm():\n    agent = _make_agent(member, tools_mod, [], [], member.prompt or '')\n"
         _node_sites, make_agent_sites, translate_by_func = _parse(buggy)
         assert len(make_agent_sites) == 1
         unpaired = _unpaired(make_agent_sites, translate_by_func)
         assert unpaired == make_agent_sites, (
-            "a _make_agent call with no preceding _translate_placeholders MUST be "
-            "flagged unpaired"
+            "a _make_agent call with no preceding _translate_placeholders MUST be flagged unpaired"
         )
 
     def test_positive_paired_llmnode_is_not_flagged(self):

@@ -12,24 +12,26 @@ at all) that would have silently dropped prompt/model/tools.
 from __future__ import annotations
 
 import ast
-import pathlib
 
-AGENT_SPEC_FILE = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph" / "_agent_spec.py"
+# neograph-3ffdg.3 split the exporter into four modules. These AST guards make
+# claims about the export SURFACE, not about a filename, so they scan the whole
+# cluster. The file list is single-sited in tests/agent_spec_capabilities.py.
+from tests.agent_spec_capabilities import agent_spec_source
 
 
 def _lower_node_source() -> str:
-    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    tree = ast.parse(agent_spec_source())
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "_lower_node":
-            return ast.get_source_segment(AGENT_SPEC_FILE.read_text(), node) or ""
+            return ast.get_source_segment(agent_spec_source(), node) or ""
     raise AssertionError("_lower_node not found in _agent_spec.py")
 
 
 def _to_agent_spec_source() -> str:
-    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    tree = ast.parse(agent_spec_source())
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "to_agent_spec":
-            return ast.get_source_segment(AGENT_SPEC_FILE.read_text(), node) or ""
+            return ast.get_source_segment(agent_spec_source(), node) or ""
     raise AssertionError("to_agent_spec not found in _agent_spec.py")
 
 
@@ -40,28 +42,28 @@ def _dict_form_fan_in_branch(source: str) -> str:
 
 
 def _lower_loop_source() -> str:
-    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    tree = ast.parse(agent_spec_source())
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "_lower_loop":
-            return ast.get_source_segment(AGENT_SPEC_FILE.read_text(), node) or ""
+            return ast.get_source_segment(agent_spec_source(), node) or ""
     raise AssertionError("_lower_loop not found in _agent_spec.py")
 
 
 def _lower_each_source() -> str:
-    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    tree = ast.parse(agent_spec_source())
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "_lower_each":
-            return ast.get_source_segment(AGENT_SPEC_FILE.read_text(), node) or ""
+            return ast.get_source_segment(agent_spec_source(), node) or ""
     raise AssertionError("_lower_each not found in _agent_spec.py")
 
 
 def _lower_generation_step_source() -> str:
     """The shared per-node.mode dispatch (neograph-2s2o6). Post-refactor the
     think/agent-act/scripted construction lives here, NOT in _lower_node."""
-    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    tree = ast.parse(agent_spec_source())
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "_lower_generation_step":
-            return ast.get_source_segment(AGENT_SPEC_FILE.read_text(), node) or ""
+            return ast.get_source_segment(agent_spec_source(), node) or ""
     raise AssertionError("_lower_generation_step not found in _agent_spec.py")
 
 
@@ -87,7 +89,7 @@ class TestAgentActModeLowersToAgentNode:
         are not conflated: AgentNode must appear BEFORE the final bare
         ToolNode return (which is reached only by scripted/raw modes)."""
         source = _lower_generation_step_source()
-        agent_idx = source.find("mode in (\"agent\", \"act\")")
+        agent_idx = source.find('mode in ("agent", "act")')
         agent_node_idx = source.find("AgentNode(")
         tool_node_idx = source.rfind("nodes_mod.ToolNode(")
         assert agent_idx != -1, "agent/act mode dispatch branch not found"
@@ -257,7 +259,7 @@ class TestLoopSelfEdgeResolvesDictFormDestinationTitle:
 
 
 def _func_def(name: str) -> ast.FunctionDef:
-    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    tree = ast.parse(agent_spec_source())
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return node
@@ -265,7 +267,7 @@ def _func_def(name: str) -> ast.FunctionDef:
 
 
 def _all_func_names() -> set[str]:
-    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    tree = ast.parse(agent_spec_source())
     return {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
 
 
@@ -369,15 +371,13 @@ class TestPerModeDispatchLivesInOneSharedFunction:
             "    return nodes_mod.AgentNode(name=name)\n"
         )
         delegating = ast.parse(
-            "def f():\n"
-            "    return _lower_generation_step(node, name=name, outputs=outputs, metadata={})\n"
+            "def f():\n    return _lower_generation_step(node, name=name, outputs=outputs, metadata={})\n"
         )
         assert sorted(set(_construction_calls_in(buggy, _GENERATION_NODE_CTORS))) == ["AgentNode", "LlmNode"], (
             "meta-guard: the detector must flag a body that constructs LlmNode/AgentNode"
         )
         assert _construction_calls_in(delegating, _GENERATION_NODE_CTORS) == [], (
-            "meta-guard: the detector must pass a body that only delegates to "
-            "_lower_generation_step"
+            "meta-guard: the detector must pass a body that only delegates to _lower_generation_step"
         )
 
 

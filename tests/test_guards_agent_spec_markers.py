@@ -32,7 +32,20 @@ import re
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "neograph"
-SCANNED = [SRC / "_agent_spec.py", SRC / "loader.py"]
+# neograph-3ffdg.3 moved the _MARK_* definitions to _agent_spec_markers.py and
+# split the exporter into three further modules. This list is EXTENDED, not
+# repointed: the guard catches a re-inlined "neograph/..." literal anywhere on
+# either side of the export<->import contract, so every module that could carry
+# one stays in scope. Dropping the moved-from file, or omitting the moved-to
+# files, would leave it scanning a shrinking surface and passing vacuously.
+SCANNED = [
+    SRC / "_agent_spec.py",
+    SRC / "_agent_spec_markers.py",
+    SRC / "_agent_spec_placeholders.py",
+    SRC / "_agent_spec_node_lowering.py",
+    SRC / "_agent_spec_portal.py",
+    SRC / "loader.py",
+]
 
 # A double-quoted marker literal (the disease shape -- all 23 current instances
 # are double-quoted; single-quoted occurrences are docstring/prose references,
@@ -115,9 +128,7 @@ def test_every_marker_wire_value_is_a_module_constant():
     here, since the constant value is the literal wire format."""
     import neograph._agent_spec as ags
 
-    bound_values = {
-        v for v in vars(ags).values() if isinstance(v, str) and v.startswith("neograph/")
-    }
+    bound_values = {v for v in vars(ags).values() if isinstance(v, str) and v.startswith("neograph/")}
     missing = _EXPECTED_MARKER_VALUES - bound_values
     assert not missing, (
         f"these marker wire values are not bound to any module-level constant "

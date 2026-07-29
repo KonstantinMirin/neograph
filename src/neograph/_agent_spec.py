@@ -37,11 +37,10 @@ so ``src/neograph`` core stays Agent-Spec-free by default — only calling
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeAlias, TypeGuard, assert_never, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, assert_never, cast
 
 from neograph._ir_branch import _BranchNode, iter_with_arms
 from neograph._normalize import normalize_inputs, normalize_outputs
-from neograph._placeholders import DOLLAR_RE, apply_scanner
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
 from neograph.modifiers import (
@@ -57,253 +56,57 @@ from neograph.modifiers import (
 )
 from neograph.naming import field_name_for, split_output_field
 from neograph.node import Node
-from neograph.spec_types import model_to_agent_spec_properties
-from neograph.tool import Tool
 
 if TYPE_CHECKING:
     from pyagentspec.flows.edges import ControlFlowEdge, DataFlowEdge
     from pyagentspec.flows.flow import Flow
     from pyagentspec.flows.node import Node as SpecNode
-    from pyagentspec.property import Property
 
 __all__ = ["to_agent_spec"]
 
+# --- extracted clusters (neograph-3ffdg.3), re-exported so the public import
+# --- surface of neograph._agent_spec is byte-identical to before the split.
+from neograph._agent_spec_markers import (  # noqa: E402,F401
+    _MARK_AGENT_SPEC,
+    _MARK_BRANCH,
+    _MARK_EACH_SPEC,
+    _MARK_GROUP_ID,
+    _MARK_LOOP_SPEC,
+    _MARK_MODE,
+    _MARK_MODIFIER,
+    _MARK_OPERATOR_SPEC,
+    _MARK_ORACLE_SPEC,
+    _MARK_PORTAL_OPERATOR_SPEC,
+    _MARK_PORTAL_SPEC,
+    _MARK_PROMPT_SPEC,
+    _MARK_TOOL_SPEC,
+    _MARK_VARIANT,
+    _import_agent_spec_flow_classes,
+)
+from neograph._agent_spec_node_lowering import (  # noqa: E402,F401
+    _agent_spec_marker,
+    _lower_generation_step,
+    _lower_node,
+    _make_agent,
+    _make_llm_config,
+    _make_server_tool,
+    _reject_unrepresentable_fields,
+    _tool_to_server_tool,
+)
+from neograph._agent_spec_placeholders import (  # noqa: E402,F401
+    _is_translation_eligible,
+    _node_translation,
+    _prompt_spec_marker,
+    _properties_for,
+    _translate_placeholders,
+)
+from neograph._agent_spec_portal import (  # noqa: E402,F401
+    _is_peer_mesh_member,
+    _lower_portal_mesh_to_swarm,
+)
+
 _DEFAULT_BRANCH = "default"
 _PAUSE_BRANCH = "pause"
-
-# ── Agent-Spec metadata marker keys (neograph-aa5gq Step 0) ──────────────────
-# The SINGLE source of truth for every ``neograph/*`` metadata marker key. Both
-# the export side (this module) and the import side (``loader.py``, which imports
-# these) reference these named constants — NEVER a re-inlined string literal — so
-# a typo cannot silently split the export<->import contract and downgrade a
-# marker-bearing primitive to the fail-loud/foreign path. Pinned (no re-inlined
-# literals + exact wire-value asserts) by tests/test_guards_agent_spec_markers.py.
-_MARK_MODE = "neograph/mode"
-_MARK_AGENT_SPEC = "neograph/agent_spec"
-_MARK_TOOL_SPEC = "neograph/tool_spec"
-_MARK_MODIFIER = "neograph/modifier"
-_MARK_GROUP_ID = "neograph/group_id"
-_MARK_VARIANT = "neograph/variant"
-_MARK_ORACLE_SPEC = "neograph/oracle_spec"
-_MARK_EACH_SPEC = "neograph/each_spec"
-_MARK_LOOP_SPEC = "neograph/loop_spec"
-_MARK_OPERATOR_SPEC = "neograph/operator_spec"
-_MARK_BRANCH = "neograph/branch"
-_MARK_PORTAL_SPEC = "neograph/portal_spec"
-_MARK_PORTAL_OPERATOR_SPEC = "neograph/portal_operator_spec"
-_MARK_PROMPT_SPEC = "neograph/prompt_spec"
-
-
-def _import_agent_spec_flow_classes() -> Any:
-    """Function-local import of pyagentspec's Flow/node/edge classes.
-
-    Copies ``spec_types._import_agent_spec_property_classes()``'s exact
-    import-guard shape so ``src/neograph`` core stays Agent-Spec-free by
-    default — only calling ``to_agent_spec()`` pulls in the optional
-    ``[agent-spec]`` extra.
-    """
-    try:
-        import pyagentspec.flows.edges as edges_mod
-        import pyagentspec.flows.flow as flow_mod
-        import pyagentspec.flows.nodes as nodes_mod
-        import pyagentspec.property as property_mod
-        import pyagentspec.tools as tools_mod
-    except ImportError as exc:
-        raise ConfigurationError.build(
-            "pyagentspec is not installed",
-            expected="the [agent-spec] optional extra",
-            found="ImportError on pyagentspec.flows/property/tools",
-            hint="install with: uv sync --extra agent-spec (or pip install neograph[agent-spec])",
-        ) from exc
-    return nodes_mod, flow_mod, edges_mod, property_mod, tools_mod
-
-
-def _reject_unrepresentable_fields(node: Node) -> None:
-    """Fail loud on any Node field that has no Agent Spec representation.
-
-    Per the Core Invariant, ``to_agent_spec()`` must never silently drop a
-    construct it cannot lower. Checked before any lowering attempt.
-    """
-    if node.raw_fn is not None:
-        raise ConfigurationError.build(
-            f"node {node.name!r} uses raw_fn — a Python callable with no Agent Spec representation",
-            expected="scripted/think/agent/act mode with a name-serializable body",
-            found="raw_fn set",
-            hint="raw_fn nodes cannot be exported to Agent Spec (callable-valued field, doc s6)",
-        )
-    if node.skip_when is not None or node.skip_value is not None:
-        raise ConfigurationError.build(
-            f"node {node.name!r} uses skip_when/skip_value — Python callables with no Agent Spec representation",
-            expected="a node without conditional-skip logic",
-            found="skip_when and/or skip_value set",
-            hint="skip_when/skip_value cannot be exported to Agent Spec (callable-valued field, doc s6)",
-        )
-    if node.renderer is not None:
-        raise ConfigurationError.build(
-            f"node {node.name!r} uses a custom renderer — no Agent Spec representation",
-            expected="the default rendering pipeline",
-            found="renderer set",
-            hint="a custom renderer cannot be exported to Agent Spec (callable-valued field, doc s6)",
-        )
-    if node.handoff_param is not None or node.handoff_channel is not None:
-        raise ConfigurationError.build(
-            f"node {node.name!r} is a Portal mesh member (handoff_param/handoff_channel set) — "
-            "Agent Spec has no combinator for runtime peer-to-peer Command(goto) routing",
-            expected="a node outside a Portal mesh",
-            found="handoff_param and/or handoff_channel set",
-            hint="Portal mesh members cannot be exported to Agent Spec — symmetric to the "
-            "ratified Swarm import-reject (agent-spec-ratification-2026-07-13.md)",
-        )
-    if callable(node.gate_tools_when):
-        raise ConfigurationError.build(
-            f"node {node.name!r} uses a callable gate_tools_when — no Agent Spec representation",
-            expected="a registered condition NAME (str) or no gate_tools_when",
-            found="gate_tools_when is a callable",
-            hint="only the string (registered-condition-name) form of gate_tools_when serializes",
-        )
-
-
-def _translate_placeholders(
-    prompt_text: str, input_props: list[Property], node_name: str
-) -> tuple[str, list[Property], dict[str, str]]:
-    """Translate neograph ``${path}`` placeholders to pyagentspec ``{{ flat }}``
-    form (Option F, neograph-cbpyx — amends m57mn's Option-B fail-loud guard).
-
-    neograph's ``${var}``/``${var.field}`` and pyagentspec's ``{{ var }}`` are two
-    syntaxes for the IDENTICAL flat, non-recursive text substitution. This rewrites
-    each ``${path}`` to ``{{ path_with_dots_as_underscores }}`` and returns the
-    Properties the exported ``LlmNode``/``Agent`` should declare — exactly the
-    scanned names, so pyagentspec's own placeholder inference/validation
-    (``ComponentWithIO._get_inferred_inputs`` / ``_validate_inputs``) passes by
-    construction. REUSES the ONE ``${...}`` scanner (``_placeholders.DOLLAR_RE`` +
-    ``apply_scanner``) — never a second grammar (the anti-duplication invariant).
-
-    Returns ``(rewritten_text, referenced_props, flat_to_original)``:
-      * ``rewritten_text`` — prompt with every ``${path}`` -> ``{{ flat }}``.
-      * ``referenced_props`` — one ``StringProperty(title=flat)`` per unique scanned
-        path (names only; pyagentspec infers inputs by NAME, and round-trip type
-        fidelity rides the ``neograph/prompt_spec`` marker, not these props).
-      * ``flat_to_original`` — ``{flat_name: original_dotted_path}``, consumed by the
-        input-edge / StartNode consumer sweep to route ``destination_input`` through
-        the SAME flat name (drop an edge whose source path is unreferenced).
-
-    Fail loud (``ConfigurationError``) on a ``${path}`` whose first segment is not a
-    declared input (dangling), and on two distinct paths flattening to one name
-    (collision — names both paths AND the collided flat name).
-    """
-    from pyagentspec.property import StringProperty
-
-    declared_keys = {p.title.split(".", 1)[0] for p in input_props}
-    flat_to_original: dict[str, str] = {}
-    ordered: list[str] = []
-
-    def resolve(raw: str) -> str:
-        path = raw.strip()
-        first = path.split(".", 1)[0]
-        if first not in declared_keys:
-            raise ConfigurationError.build(
-                f"node {node_name!r}'s prompt references ${{{path}}}, whose first segment "
-                f"{first!r} is not a declared input",
-                expected=f"a ${{...}} path rooted at one of the declared inputs {sorted(declared_keys)}",
-                found=f"dangling placeholder ${{{path}}}",
-                hint="every inline ${var} placeholder in an exported LLM-mode prompt must "
-                "resolve to a declared Node.input (the value has no other data path).",
-            )
-        flat = path.replace(".", "_")
-        prev = flat_to_original.get(flat)
-        if prev is not None and prev != path:
-            raise ConfigurationError.build(
-                f"node {node_name!r}'s prompt has two distinct placeholders {prev!r} and "
-                f"{path!r} that both flatten to the same name {flat!r}",
-                expected="each ${path} to flatten (. -> _) to a unique placeholder name",
-                found=f"collision: {prev!r} and {path!r} both -> {flat!r}",
-                hint="rename one of the colliding upstream inputs/fields so the flattened "
-                "pyagentspec placeholder names stay distinct.",
-            )
-        if flat not in flat_to_original:
-            flat_to_original[flat] = path
-            ordered.append(flat)
-        return f"{{{{ {flat} }}}}"
-
-    rewritten = apply_scanner(prompt_text, DOLLAR_RE, resolve)
-    referenced_props: list[Property] = [StringProperty(title=flat) for flat in ordered]
-    return rewritten, referenced_props, flat_to_original
-
-
-def _node_translation(node: Node) -> tuple[str, list[Property], dict[str, str]]:
-    """Recompute a node's placeholder translation (``rewritten_text``,
-    ``referenced_props``, ``original_to_flat``) from its prompt + declared inputs.
-
-    The SINGLE per-node translation seam every construction site AND every
-    consumer (input edges, Loop self-edge, Oracle fan-in, Each StartNode)
-    re-derives from — so ``destination_input`` names are computed by the ONE
-    translator, never re-inferred per-symptom. Idempotent: the node was already
-    translated during ``_lower_construct_item`` (any collision/dangling already
-    raised there), so re-running here cannot introduce a new raise. Returns
-    ``original_to_flat`` (dotted path -> flat name) — the inverse of
-    ``_translate_placeholders``'s ``flat_to_original`` — for edge routing.
-    """
-    _, ref_props, flat_to_original = _translate_placeholders(
-        node.prompt or "", _properties_for(node.inputs), node.name
-    )
-    original_to_flat = {path: flat for flat, path in flat_to_original.items()}
-    return node.prompt or "", ref_props, original_to_flat
-
-
-def _is_translation_eligible(item: Any) -> TypeGuard[Node]:
-    """A construct item whose exported prompt is placeholder-translated: an
-    LLM-mode (``think``/``agent``/``act``) ``Node``. Gates the consumer sweep on
-    the CONSUMING ITEM's mode — NOT the destination SpecNode class (a MapNode
-    wrapping a translated inner is still a translation target). Scripted/raw
-    nodes have no ${var} prompt, so their edges keep the untranslated dotted form.
-
-    A ``TypeGuard[Node]`` so the ``node`` arg of ``_lower_each``/``_lower_loop``
-    (now ``Node | Construct``) narrows to ``Node`` inside the guarded branch that
-    calls the Node-only ``_node_translation`` — a Construct item is never
-    translation-eligible (it carries no ${var} prompt of its own).
-    """
-    return isinstance(item, Node) and item.mode in ("think", "agent", "act")
-
-
-def _prompt_spec_marker(node: Node, flat_to_original: dict[str, str]) -> dict[str, Any]:
-    """Build the strictly JSON-native ``neograph/prompt_spec`` round-trip marker.
-
-    Carries the UNtranslated ``${var}`` text + the full original input TypeSpec so
-    ``from_agent_spec`` reconstructs the exact original ``Node`` — including inputs
-    the prompt never referenced (whose translated ``LlmNode`` drops both Property
-    and DataFlowEdge, a real topology change). MUST stay JSON-native (str / dict /
-    list only): ``p.json_schema`` is the plain JSON-Schema dict (NOT a live
-    pyagentspec ``Property`` object, which would degrade to a dict across a
-    JSON/YAML wire round trip and break the loader's un-flatten). The dotted
-    ``title`` (``"{key}.{field}"``) is stored alongside so the loader can regroup
-    by upstream key via the EXISTING ``_dict_form_inputs_from_props``.
-    """
-    return {
-        "original_text": node.prompt or "",
-        "placeholder_map": dict(flat_to_original),
-        "original_inputs": [
-            {"title": p.title, "json_schema": p.json_schema} for p in _properties_for(node.inputs)
-        ],
-    }
-
-
-def _properties_for(type_spec: Any) -> list[Property]:
-    """Convert a Node.inputs/outputs TypeSpec (None | type | dict[str, type]) to Properties.
-
-    Reuses ``spec_types.model_to_agent_spec_properties`` for every model —
-    never a second type walker, per the Core Invariant.
-    """
-    if type_spec is None:
-        return []
-    if isinstance(type_spec, dict):
-        result: list[Property] = []
-        for key, typ in type_spec.items():
-            props = model_to_agent_spec_properties(typ)
-            for p in props:
-                p.title = f"{key}.{p.title}"
-            result.extend(props)
-        return result
-    return model_to_agent_spec_properties(type_spec)
 
 
 def _item_inputs(item: Node | Construct) -> Any:
@@ -337,209 +140,6 @@ def _lower_item_body(item: Node | Construct) -> SpecNode:
         nodes_mod, _flow_mod, _edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
         return nodes_mod.FlowNode(name=item.name, subflow=to_agent_spec(item))
     return _lower_node(item)
-
-
-def _lower_generation_step(
-    node: Node,
-    *,
-    name: str,
-    outputs: list[Property],
-    metadata: dict[str, Any],
-    model_tier: str | None = None,
-    tool_description: str | None = None,
-) -> SpecNode:
-    """The SINGLE per-node.mode generation dispatch (think / agent-act / scripted-raw).
-
-    Shared by BOTH callers (neograph-2s2o6, retiring the two hand-written copies that
-    were the 'one validator, not two' anti-pattern CLAUDE.md bans elsewhere):
-    ``_lower_node`` passes ``name=node.name``/``metadata={}``; ``_lower_oracle``'s
-    variant loop passes ``name=f'{node.name}__variant_{i}'``, the oracle group/variant
-    markers as ``metadata``, and the per-variant ``model_tier`` (Oracle.models). A new
-    mode branch or a fix now lands in ONE place for every caller -- if agent/act-mode
-    Oracle variants get a lowering change, they get it for free, never a third copy.
-    """
-    nodes_mod, _flow_mod, _edges_mod, _property_mod, tools_mod = _import_agent_spec_flow_classes()
-
-    inputs = _properties_for(node.inputs)
-
-    if node.mode == "think":
-        # Option F neograph-cbpyx: translate ${path} -> {{ flat }}; the LlmNode
-        # declares ONLY the referenced flat Properties, and the neograph/prompt_spec
-        # marker carries the untranslated text + full original inputs for round trip.
-        rewritten, ref_props, flat_to_original = _translate_placeholders(node.prompt or "", inputs, name)
-        return nodes_mod.LlmNode(
-            name=name,
-            inputs=ref_props or None,
-            outputs=outputs or None,
-            llm_config=_make_llm_config(Node(name=node.name, model=model_tier or node.model)),
-            prompt_template=rewritten,
-            metadata={**metadata, _MARK_PROMPT_SPEC: _prompt_spec_marker(node, flat_to_original)},
-        )
-
-    if node.mode in ("agent", "act"):
-        # Lossless lowering (neograph-i3zsh.1): a real pyagentspec
-        # AgentNode+Agent+ServerTool composite, never the ToolNode placeholder
-        # that used to silently drop prompt/model/tools. The `neograph/agent_spec`
-        # marker carries everything the from_agent_spec() importer needs to
-        # reconstruct the node exactly -- the export->import round trip is now
-        # implemented (neograph-aa5gq, loader._reconstruct_agent_node). Option F:
-        # the Agent's system_prompt is placeholder-translated and the AgentNode
-        # declares the referenced flat Properties; the original ${var} text rides
-        # the existing neograph/agent_spec marker (marker["prompt"]). Per-variant
-        # Oracle.models tier + a unique component name ride the model_copy
-        # (agent_source); the neograph/agent_spec + prompt_spec markers keep the
-        # ORIGINAL node (model=node.model), so _reconstruct_oracle_group recovers
-        # base_node | Oracle(models=...).
-        rewritten, ref_props, flat_to_original = _translate_placeholders(node.prompt or "", inputs, name)
-        agent_source = node.model_copy(update={"name": name, "model": model_tier or node.model})
-        agent = _make_agent(agent_source, tools_mod, ref_props, outputs, rewritten)
-        return nodes_mod.AgentNode(
-            name=name,
-            inputs=ref_props or None,
-            outputs=outputs or None,
-            agent=agent,
-            metadata={
-                **metadata,
-                _MARK_MODE: node.mode,
-                _MARK_AGENT_SPEC: _agent_spec_marker(node),
-                # The neograph/prompt_spec marker carries the FULL original inputs so
-                # a translated agent/act node (whose declared inputs are the flat
-                # placeholder names) reconstructs its true input TypeSpec -- e.g. an
-                # Each fan-out receiver must round-trip to the SAME element type as
-                # the producer's list element neograph-3lk2l. marker["prompt"] on
-                # _MARK_AGENT_SPEC already carries the untranslated ${var} text.
-                _MARK_PROMPT_SPEC: _prompt_spec_marker(node, flat_to_original),
-            },
-        )
-
-    # scripted / raw already rejected raw_fn upstream; scripted_fn is name-only.
-    return nodes_mod.ToolNode(
-        name=name,
-        inputs=inputs or None,
-        outputs=outputs or None,
-        tool=_make_server_tool(node, tools_mod, inputs, outputs, description=tool_description),
-        metadata=metadata,
-    )
-
-
-def _lower_node(node: Node) -> SpecNode:
-    """Dispatch a single neograph Node to its Agent Spec primitive by mode.
-
-    Thin wrapper over the shared ``_lower_generation_step`` neograph-2s2o6: the
-    per-mode dispatch lives in ONE place. ``_lower_node`` adds only the top-level
-    ``_reject_unrepresentable_fields`` guard that the Oracle-variant path deliberately
-    omits, and passes the node's own name + empty base metadata.
-    """
-    _reject_unrepresentable_fields(node)
-    return _lower_generation_step(node, name=node.name, outputs=_properties_for(node.outputs), metadata={})
-
-
-def _make_agent(
-    node: Node, tools_mod: Any, inputs: list[Property], outputs: list[Property], system_prompt: str
-) -> Any:
-    """Build the pyagentspec ``Agent`` for an agent/act node. ``inputs`` are the
-    Option-F-translated referenced flat Properties and ``system_prompt`` is the
-    ``{{ flat }}``-rewritten text (both computed once in ``_lower_node``); the
-    original ``${var}`` text rides ``neograph/agent_spec`` marker["prompt"]."""
-    from pyagentspec.agent import Agent
-
-    # node.tools is declared list[Tool | BaseTool], but _normalize_raw_base_tools
-    # (node.py) normalizes any raw BaseTool to Tool at construction time -- same
-    # cast precedent as _agent_cycle.py:235.
-    tools = cast("list[Tool]", node.tools)
-    return Agent(
-        name=f"{node.name}-agent",
-        llm_config=_make_llm_config(node),
-        system_prompt=system_prompt,
-        tools=[_tool_to_server_tool(tool, tools_mod) for tool in tools],
-        inputs=inputs or None,
-        outputs=outputs or None,
-        human_in_the_loop=False,
-    )
-
-
-def _tool_to_server_tool(tool: Any, tools_mod: Any) -> Any:
-    """Lower one neograph ``Tool`` to a ``ServerTool``, name-only.
-
-    Mirrors ``_make_server_tool``'s ``ServerTool`` shape but is a standalone
-    helper: this is an agent/act node's ``tools=[...]`` list attaching to its
-    ``Agent``, not a scripted/think node's own ``ToolNode.tool=`` field (a
-    different Agent Spec primitive entirely). ``ServerTool`` is used
-    UNIFORMLY for every neograph ``Tool`` export (MCP-bound or not) --
-    MCP-ness is a runtime factory-registration detail
-    (``mcp_tool_factory``), never a wire-format distinction (pyagentspec has
-    no ``MCPTool`` class; doc s7/s8's 'do not own the MCP gateway'
-    positioning).
-
-    Stamps a ``neograph/tool_spec`` marker on the ServerTool itself
-    (budget/config/idempotent -- name-only fields with no plain-``ServerTool``
-    equivalent), mirroring ``ToolSpec``'s shape (``_spec_schema.py:66``) and
-    the established ``metadata['neograph/*_spec']`` marker convention. Per
-    the Core Invariant, ``tool._bound_tool`` (a live callable) is NEVER
-    referenced here -- factory binding is exclusively a runtime,
-    post-deserialization concern.
-    """
-    return tools_mod.ServerTool(
-        name=tool.name,
-        description=f"neograph tool {tool.name!r}",
-        inputs=None,
-        outputs=None,
-        metadata={
-            _MARK_TOOL_SPEC: {
-                "name": tool.name,
-                "budget": tool.budget,
-                "config": tool.config,
-                "idempotent": tool.idempotent,
-            }
-        },
-    )
-
-
-def _agent_spec_marker(node: Node) -> dict[str, Any]:
-    """Build the ``neograph/agent_spec`` reconstruction blob for an agent/act
-    node — every field the plain ``Agent``/``ServerTool`` primitives cannot
-    represent, so a future ``from_agent_spec()`` importer can rebuild the
-    exact node. Callable ``gate_tools_when`` is already rejected by
-    ``_reject_unrepresentable_fields`` before this runs; only the string form
-    reaches here.
-    """
-    # node.tools is declared list[Tool | BaseTool], but _normalize_raw_base_tools
-    # (node.py) normalizes any raw BaseTool to Tool at construction time -- same
-    # cast precedent as _agent_cycle.py:235.
-    tools = cast(list[Tool], node.tools)
-    return {
-        "mode": node.mode,
-        "prompt": node.prompt,
-        "model": node.model,
-        "tools": [
-            {"name": tool.name, "budget": tool.budget, "config": tool.config, "idempotent": tool.idempotent}
-            for tool in tools
-        ],
-        "gate_tools_when": node.gate_tools_when,
-        "context": node.context,
-    }
-
-
-def _make_llm_config(node: Node) -> Any:
-    _nodes_mod, _flow_mod, _edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
-    from pyagentspec.llms.llmconfig import LlmConfig as SpecLlmConfig
-
-    return SpecLlmConfig(name=f"{node.name}-llm", model_id=node.model or "default")
-
-
-def _make_server_tool(
-    node: Node,
-    tools_mod: Any,
-    inputs: list[Property],
-    outputs: list[Property],
-    description: str | None = None,
-) -> Any:
-    return tools_mod.ServerTool(
-        name=node.scripted_fn or node.name,
-        description=description if description is not None else f"neograph node {node.name!r} (mode={node.mode})",
-        inputs=inputs or None,
-        outputs=outputs or None,
-    )
 
 
 def _lower_oracle(
@@ -596,9 +196,7 @@ def _lower_oracle(
             # Per-variant Oracle.models rides the oracle_spec marker, not a
             # FlowNode field (the sub-flow has no single model to swap here).
             variant_nodes.append(
-                nodes_mod.FlowNode(
-                    name=variant_name, subflow=to_agent_spec(node), metadata=variant_metadata
-                )
+                nodes_mod.FlowNode(name=variant_name, subflow=to_agent_spec(node), metadata=variant_metadata)
             )
             continue
 
@@ -1096,189 +694,6 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
     )
 
 
-def _lower_portal_mesh_to_swarm(construct: Construct, members: list[Node | Construct], tools_mod: Any) -> Any:
-    """Export a Portal mode-(a) peer mesh to a top-level pyagentspec ``Swarm``
-    -- the export-direction mirror of ``loader.py``'s ``_reconstruct_swarm_mesh``
-    Swarm import.
-
-    Swarm.first_agent/relationships are typed ``AgenticComponent`` (pyagentspec
-    swarm.py/agent.py), so each member lowers to a real ``Agent`` (via the
-    SAME ``_make_agent`` helper agent/act-mode Flow nodes use), never an
-    ``LlmNode``. The entry-only knobs (``max_hops``/``on_exhaust``/``route``)
-    have no native ``Swarm`` field -- they ride a ``neograph/portal_spec``
-    metadata marker (mirrors the Oracle/Each/Loop per-group marker
-    convention), so the information is not lost even though the current
-    Swarm importer does not read it back yet.
-
-    ``construct.nodes`` is trusted here: ``_check_portal_mesh`` (construct-
-    assembly validation) has ALREADY enforced contiguity/entry-first/uniform-
-    payload/reachability for any Construct reaching export, so every ``to``
-    peer reference is guaranteed to name a real member of this same mesh.
-    """
-    entry = members[0]
-    entry_portal = entry.modifier_set.portal
-    assert entry_portal is not None  # collected as Portal-modified
-
-    # pyagentspec's Agent ties inputs Properties to {{placeholder}} names in its
-    # own system_prompt (ComponentWithIO._validate_no_extra_property), so a mesh
-    # member's prompt is Option-F-translated exactly like every other _make_agent
-    # caller (neograph-s7zt3.1): the Agent declares ONLY the referenced flat
-    # Properties, which match the rewritten {{ flat }} names by construction. A
-    # member may reference the reserved 'handoff' input (${handoff.field}) --
-    # shipping it raw would hand a foreign Swarm runtime a placeholder it can
-    # neither fill nor flag. Outputs stay [] -- the payload/routing shape rides
-    # the neograph/portal_spec marker, and the untranslated ${var} text rides a
-    # per-member neograph/prompt_spec marker on the Agent itself so the Swarm
-    # import recovers the original prompt grammar.
-    agents_by_name: dict[str, Any] = {}
-    for member in members:
-        # C1 (do0d9): a Construct mesh member lowers to its recursively-exported
-        # sub-Flow. A pyagentspec Flow IS an AgenticComponent (Flow.__mro__
-        # includes AgenticComponent), so it drops straight into
-        # Swarm.first_agent/relationships with NO Agent wrapper — the same
-        # recursive-Flow-production pattern _lower_item_body uses for a bare
-        # Construct item's FlowNode subflow. A Construct has no .prompt (its
-        # interior prompts are Option-F-translated inside the recursive
-        # to_agent_spec call) and cannot carry an Operator gate (rejected at
-        # assembly), so it never needs the prompt marker or enters `gated`.
-        if isinstance(member, Construct):
-            agents_by_name[member.name] = to_agent_spec(member)
-            continue
-        rewritten, ref_props, flat_to_original = _translate_placeholders(
-            member.prompt or "", _properties_for(member.inputs), member.name
-        )
-        agent = _make_agent(member, tools_mod, ref_props, [], rewritten)
-        agent.metadata = {
-            **(agent.metadata or {}),
-            _MARK_PROMPT_SPEC: _prompt_spec_marker(member, flat_to_original),
-        }
-        agents_by_name[member.name] = agent
-
-    relationships = [
-        (agents_by_name[member.name], agents_by_name[peer])
-        for member in members
-        for peer in (member.modifier_set.portal.to or [])  # type: ignore[union-attr]
-    ]
-
-    from pyagentspec.swarm import HandoffMode, Swarm
-
-    # C1/s7zt3.14 round-trip: carry the mesh's trigger sub-mode on Swarm.handoff so
-    # _reconstruct_swarm_mesh's _swarm_trigger reads it back. A tool-triggered Node
-    # member (Portal(trigger="tool")) -> HandoffMode.OPTIONAL (the reference
-    # adapter's tool-bound-handoff mode; OPTIONAL/ALWAYS are byte-identical there,
-    # so OPTIONAL is the canonical choice); an all-output mesh -> HandoffMode.NEVER
-    # (typed-goto routing, no bound transfer tool). A Construct member is never
-    # tool-triggered (validation), so only Node members are polled.
-    any_tool = any(
-        isinstance(m, Node) and m.modifier_set.portal is not None and m.modifier_set.portal.is_tool_triggered
-        for m in members
-    )
-    swarm = Swarm(
-        name=construct.name,
-        first_agent=agents_by_name[entry.name],
-        relationships=relationships,
-        handoff=HandoffMode.OPTIONAL if any_tool else HandoffMode.NEVER,
-        metadata={
-            _MARK_PORTAL_SPEC: {
-                "max_hops": entry_portal.max_hops,
-                "on_exhaust": entry_portal.on_exhaust,
-                "route": entry_portal.route,
-            }
-        },
-    )
-
-    # Phase 6 (neograph-s7zt3.2): a mesh member's Operator (HITL approval gate)
-    # must NOT silently vanish on export. Collect every gated member's `when` in
-    # member order (deterministic, matches every other _MARK_*_SPEC builder).
-    #
-    # Keyed by the AGENT name (`{member.name}-agent`, set by _make_agent), NOT
-    # the raw member name: _reconstruct_swarm_mesh names each imported member by
-    # its Swarm agent's `.name`, so keying by the agent name is what makes the
-    # loader's `member.name in gated` match on round-trip. (The design doc's §4
-    # said "member name"; its repro used ad-hoc agents and so never exercised
-    # _make_agent's `-agent` suffix -- the agent name is the identity that
-    # actually survives export->import.)
-    gated: dict[str, str] = {
-        agents_by_name[member.name].name: member.modifier_set.operator.when
-        for member in members
-        if member.modifier_set.operator is not None
-    }
-    if not gated:
-        return swarm  # unchanged today's-behavior path: pure PORTAL cell untouched
-
-    # Mesh-exit pause composite. Swarm has no interior per-member pause primitive
-    # (verified live, pyagentspec 26.1.2 -- Swarm.relationships is a flat
-    # AgenticComponent adjacency list, no Node graph to splice a check into), so
-    # the gate is approximated at the point control returns to the enclosing
-    # Flow, mirroring _lower_operator's existing BranchingNode + InputMessageNode
-    # shape one-for-one, with the Swarm wrapped in an AgentNode (legal:
-    # AgentNode.agent: SerializeAsAny[AgenticComponent], and Swarm IS an
-    # AgenticComponent). ALL gated members ride one shared marker dict on the
-    # single check node -- a mesh is one connected component (_check_portal_mesh),
-    # so "one shared composite" is always well-defined. This is a round-trip-
-    # lossless serialization, NOT a behaviorally-faithful foreign runtime: a
-    # foreign engine sees one exit-point BranchingNode, not neograph's own
-    # per-member interior gate (factory.make_portal_approval_fn).
-    nodes_mod, flow_mod, edges_mod, property_mod, _tools_mod = _import_agent_spec_flow_classes()
-
-    agent_node = nodes_mod.AgentNode(name=f"{construct.name}__mesh", agent=swarm)
-    check = nodes_mod.BranchingNode(
-        name=f"{construct.name}__portal_operator_check",
-        mapping={"true": _PAUSE_BRANCH, "false": _DEFAULT_BRANCH},
-        metadata={
-            _MARK_MODIFIER: "portal_operator",
-            _MARK_PORTAL_OPERATOR_SPEC: gated,
-        },
-    )
-    input_message = nodes_mod.InputMessageNode(
-        name=f"{construct.name}__portal_operator_pause",
-        outputs=[property_mod.StringProperty(title="user_input")],
-    )
-    start = nodes_mod.StartNode(name=f"{construct.name}__start")
-    end_default = nodes_mod.EndNode(name=f"{construct.name}__end_default")
-    end_paused = nodes_mod.EndNode(name=f"{construct.name}__end_paused")
-
-    return flow_mod.Flow(
-        name=construct.name,
-        start_node=start,
-        nodes=[start, agent_node, check, input_message, end_default, end_paused],
-        control_flow_connections=[
-            edges_mod.ControlFlowEdge(name=f"{construct.name}__start_to_mesh", from_node=start, to_node=agent_node),
-            edges_mod.ControlFlowEdge(name=f"{construct.name}__mesh_to_check", from_node=agent_node, to_node=check),
-            edges_mod.ControlFlowEdge(
-                name=f"{construct.name}__check_to_pause",
-                from_node=check,
-                from_branch=_PAUSE_BRANCH,
-                to_node=input_message,
-            ),
-            edges_mod.ControlFlowEdge(
-                name=f"{construct.name}__check_to_default",
-                from_node=check,
-                from_branch=_DEFAULT_BRANCH,
-                to_node=end_default,
-            ),
-            edges_mod.ControlFlowEdge(
-                name=f"{construct.name}__pause_to_end", from_node=input_message, to_node=end_paused
-            ),
-        ],
-    )
-
-
-def _is_peer_mesh_member(item: Any) -> bool:
-    """True iff ``item`` carries a PEER-mode (non-dispatch) Portal — i.e. it is
-    a Portal mesh member — using the SAME modifier-agnostic detection the IR
-    normalizer and ``_check_portal_mesh`` use, never an ``isinstance(Node)``
-    gate (A1).
-
-    ``classify_modifiers`` reads ``.modifier_set`` on Node AND Construct, so a
-    Construct mesh member (do0d9) is correctly detected as a member rather than
-    misclassified as a "non-mesh node" and false-rejecting the whole mesh.
-    """
-    _combo, mods = classify_modifiers(item)
-    portal = mods.get("portal")
-    return portal is not None and not portal.is_dispatch
-
-
 def to_agent_spec(construct: Construct) -> Flow:
     """Export a neograph ``Construct`` (IR) to an Open Agent Spec ``Flow``
     (or, for a Portal mode-(a) peer mesh, a top-level ``Swarm``).
@@ -1306,7 +721,12 @@ def to_agent_spec(construct: Construct) -> Flow:
         # (_lower_portal_mesh_to_swarm) now lowers a Construct member to its
         # recursive sub-Flow (an AgenticComponent) alongside Node members, so the
         # cast widens to the real Node | Construct member union.
-        return _lower_portal_mesh_to_swarm(construct, cast("list[Node | Construct]", mesh_members), tools_mod)
+        return _lower_portal_mesh_to_swarm(
+            construct,
+            cast("list[Node | Construct]", mesh_members),
+            tools_mod,
+            to_agent_spec,
+        )
 
     all_nodes: list[SpecNode] = []
     control_edges: list[ControlFlowEdge] = []

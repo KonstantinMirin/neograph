@@ -22,7 +22,7 @@ import structlog
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ValidationError, create_model
 
-from neograph._agent_spec import (
+from neograph._agent_spec_markers import (
     _MARK_AGENT_SPEC,
     _MARK_EACH_SPEC,
     _MARK_GROUP_ID,
@@ -215,10 +215,7 @@ def _tools_from_marker(marker_tools: list[dict[str, Any]]) -> list[Tool]:
     """Rebuild neograph ``Tool`` specs from the flat ``neograph/agent_spec``
     tools list (the EXACT inverse of ``_agent_spec._agent_spec_marker``'s
     ``tools=[{name, budget, config, idempotent}, ...]`` blob)."""
-    return [
-        Tool(t["name"], budget=t["budget"], config=t["config"], idempotent=t["idempotent"])
-        for t in marker_tools
-    ]
+    return [Tool(t["name"], budget=t["budget"], config=t["config"], idempotent=t["idempotent"]) for t in marker_tools]
 
 
 def _tools_from_foreign_agent(agent: Any) -> list[Tool]:
@@ -237,9 +234,7 @@ def _tools_from_foreign_agent(agent: Any) -> list[Tool]:
     return tools
 
 
-def _node_from_spec_agent(
-    name: str, agent: Any, marker: dict[str, Any] | None, inputs: Any, outputs: Any
-) -> Node:
+def _node_from_spec_agent(name: str, agent: Any, marker: dict[str, Any] | None, inputs: Any, outputs: Any) -> Node:
     """Build an agent/act ``Node`` from an Agent Spec agent, dispatching on
     marker presence (refinement addendum MEDIUM-2).
 
@@ -356,9 +351,7 @@ def _reconstruct_primitive_node(spec_node: Any, flow: Any, output_types: dict[st
     # node in its own single-node sub-flow) has no edges at all, even though
     # its OWN Property list still declares its input shape. Fall back to
     # that single-type reconstruction rather than silently dropping it.
-    inputs = _inputs_from_data_edges(spec_node.name, flow, output_types) or _agent_spec_props_to_type(
-        spec_node.inputs
-    )
+    inputs = _inputs_from_data_edges(spec_node.name, flow, output_types) or _agent_spec_props_to_type(spec_node.inputs)
     output_types[spec_node.name] = outputs
 
     if cls_name == "AgentNode":
@@ -394,8 +387,15 @@ def _reconstruct_primitive_node(spec_node: Any, flow: Any, output_types: dict[st
             found=cls_name,
         )
 
-    return Node(name=spec_node.name, mode=mode, inputs=inputs, outputs=outputs, prompt=prompt, model=model,
-                scripted_fn=scripted_fn)
+    return Node(
+        name=spec_node.name,
+        mode=mode,
+        inputs=inputs,
+        outputs=outputs,
+        prompt=prompt,
+        model=model,
+        scripted_fn=scripted_fn,
+    )
 
 
 def _reconstruct_oracle_group(group: list[Any], flow: Any, output_types: dict[str, Any]) -> Node | None:
@@ -450,9 +450,7 @@ def _reconstruct_oracle_group(group: list[Any], flow: Any, output_types: dict[st
         # name (the merge node) and attach Oracle below. The per-variant model tier
         # is discarded here -- it round-trips via the Oracle marker's `models`, so the
         # marker (built from the BASE node) already carries the base model.
-        base_node = _reconstruct_agent_node(base_variant, inputs, outputs).model_copy(
-            update={"name": merge_node.name}
-        )
+        base_node = _reconstruct_agent_node(base_variant, inputs, outputs).model_copy(update={"name": merge_node.name})
     else:
         if base_cls == "LlmNode":
             # Option F neograph-cbpyx: prefer the variant's neograph/prompt_spec
@@ -470,8 +468,15 @@ def _reconstruct_oracle_group(group: list[Any], flow: Any, output_types: dict[st
                 expected="LlmNode, ToolNode, or AgentNode",
                 found=base_cls,
             )
-        base_node = Node(name=merge_node.name, mode=base_mode, inputs=inputs, outputs=outputs, prompt=base_prompt,
-                          model=base_model, scripted_fn=base_scripted_fn)
+        base_node = Node(
+            name=merge_node.name,
+            mode=base_mode,
+            inputs=inputs,
+            outputs=outputs,
+            prompt=base_prompt,
+            model=base_model,
+            scripted_fn=base_scripted_fn,
+        )
 
     oracle_kwargs: dict[str, Any] = {"n": spec["n"]}
     if spec.get("models"):
@@ -664,8 +669,7 @@ def _trailing_operator(nodes: list[Any], j: int, primary_spec: Any, flow: Any) -
     if (check.metadata or {}).get(_MARK_MODIFIER) != "operator":
         return None
     if not any(
-        e.from_node.name == primary_spec.name and e.to_node.name == check.name
-        for e in flow.control_flow_connections
+        e.from_node.name == primary_spec.name and e.to_node.name == check.name for e in flow.control_flow_connections
     ):
         return None
     pause = nodes[j + 1]
@@ -751,8 +755,7 @@ def _group_flow_items(flow: Any) -> list[tuple[frozenset[str], dict[str, Any]]]:
             nxt = nodes[i + 1] if i + 1 < n else None
             if nxt is not None and (nxt.metadata or {}).get(_MARK_MODIFIER) == "loop":
                 edge_to_nxt = any(
-                    e.from_node.name == node.name and e.to_node.name == nxt.name
-                    for e in flow.control_flow_connections
+                    e.from_node.name == node.name and e.to_node.name == nxt.name for e in flow.control_flow_connections
                 )
                 back_edge = any(
                     e.from_node.name == nxt.name and e.from_branch == "continue" and e.to_node.name == node.name
@@ -1010,8 +1013,7 @@ def _reconstruct_swarm_mesh_with_operator_gates(flow: Any) -> Construct | None:
     # Structural confirmation, not marker trust: the AgentNode really leads into
     # this specific check via a real ControlFlowEdge.
     edge_ok = any(
-        e.from_node.name == agent_node.name and e.to_node.name == check.name
-        for e in flow.control_flow_connections
+        e.from_node.name == agent_node.name and e.to_node.name == check.name for e in flow.control_flow_connections
     )
     if not edge_ok:
         return None
@@ -1025,9 +1027,7 @@ def _reconstruct_swarm_mesh_with_operator_gates(flow: Any) -> Construct | None:
     # Portal), but base.nodes is typed list[ConstructItem]; the isinstance guard
     # narrows to Node for the `| Operator` compose (a _BranchNode has no `|`).
     updated_nodes = [
-        (member | Operator(when=gated[member.name]))
-        if isinstance(member, Node) and member.name in gated
-        else member
+        (member | Operator(when=gated[member.name])) if isinstance(member, Node) and member.name in gated else member
         for member in base.nodes
     ]
     return base.model_copy(update={"nodes": updated_nodes})
