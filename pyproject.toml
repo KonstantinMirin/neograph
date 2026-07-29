@@ -147,6 +147,12 @@ filterwarnings = [
 ]
 markers = [
     "perf: marks async/sync per-node overhead perf gates (neograph-w74k.2.6 Phase 1f)",
+    # Talks to a REAL external service. Deselected from the default suite by the
+    # Makefile's `test` target (-m "not live") so the dev loop stays offline,
+    # fast and deterministic — otherwise these run whenever LANGFUSE_* happen to
+    # be exported, making `make quality` network-bound. Run via `make live` or
+    # `make release-gate`.
+    "live: marks tests that require real external credentials and network",
 ]
 
 [dependency-groups]

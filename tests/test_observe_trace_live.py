@@ -36,13 +36,37 @@ from neograph import compile, construct_from_module, node
 from tests.fakes import build_test_compile_kwargs
 from tests.schemas import Claims, RawText
 
-pytestmark = pytest.mark.skipif(
-    not (os.environ.get("LANGFUSE_SECRET_KEY") and os.environ.get("LANGFUSE_PUBLIC_KEY")),
-    reason="live Langfuse keys absent — see this module's docstring for the run command",
-)
+_KEYS_PRESENT = bool(os.environ.get("LANGFUSE_SECRET_KEY") and os.environ.get("LANGFUSE_PUBLIC_KEY"))
 
-_INGEST_ATTEMPTS = 12
+# The release gate sets NEOGRAPH_REQUIRE_LIVE=1. In that context an absent-keys
+# SKIP is the exact failure mode this file exists to prevent: `make quality`
+# reported green on merged main for 0.7.4 while these two tests silently skipped,
+# and a flaky live assertion rode the tag out. A skip that reads as coverage is
+# the seam; so when live is REQUIRED, missing credentials fail collection loudly
+# rather than quietly subtracting two tests from the count.
+if os.environ.get("NEOGRAPH_REQUIRE_LIVE") and not _KEYS_PRESENT:
+    raise RuntimeError(
+        "NEOGRAPH_REQUIRE_LIVE=1 but LANGFUSE_SECRET_KEY / LANGFUSE_PUBLIC_KEY are unset. "
+        "The release gate must not pass on a silent skip. Load the credentials first:\n"
+        "    set -a && . .env && set +a && make release-gate"
+    )
+
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skipif(
+        not _KEYS_PRESENT,
+        reason="live Langfuse keys absent — see this module's docstring for the run command",
+    ),
+]
+
+# DEADLINE-based, not attempt-based: a slow API multiplies an attempt budget into
+# an unbounded wall time (12 attempts x a 120s timeout = 25 min). A release gate
+# must have a predictable ceiling, so the poll runs until a fixed deadline.
+_INGEST_DEADLINE_S = 180
 _INGEST_INTERVAL_S = 5
+# Generous per request: cloud Langfuse has been seen at 100s for a single GET
+# when throttled after repeated runs.
+_REQUEST_TIMEOUT_S = 60
 
 
 def _auth_header() -> str:
@@ -51,13 +75,22 @@ def _auth_header() -> str:
 
 
 def _api_get(path: str) -> tuple[int, dict | None]:
+    """GET a Langfuse API path. Returns (status, body); status 0 = unreachable.
+
+    A transient timeout or connection error must NOT fail the test: the API has
+    been observed taking 100s under load (repeated release-gate runs throttle
+    it), and a gate that cries wolf on one slow response is worse than no gate --
+    it trains you to ignore it. Network trouble is reported as status 0 so the
+    caller keeps polling; only the poll budget expiring is a real failure."""
     base = os.environ.get("LANGFUSE_BASE_URL", "https://cloud.langfuse.com").rstrip("/")
     req = urllib.request.Request(f"{base}{path}", headers={"Authorization": _auth_header()})
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S) as resp:
             return resp.status, json.loads(resp.read())
     except urllib.error.HTTPError as exc:
         return exc.code, None
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return 0, None
 
 
 def _get_trace(trace_id: str) -> tuple[int, dict | None]:
@@ -88,7 +121,8 @@ def _await_trace_with_nodes(trace_id: str, expected: set[str]) -> tuple[dict, se
     this run's nodes."""
     body: dict | None = None
     names: set[str] = set()
-    for _ in range(_INGEST_ATTEMPTS):
+    deadline = time.monotonic() + _INGEST_DEADLINE_S
+    while time.monotonic() < deadline:
         time.sleep(_INGEST_INTERVAL_S)
         status, fetched = _get_trace(trace_id)
         if status != 200 or not fetched:
@@ -99,12 +133,12 @@ def _await_trace_with_nodes(trace_id: str, expected: set[str]) -> tuple[dict, se
             return body, names
     if body is None:
         raise AssertionError(
-            f"trace {trace_id} never appeared after "
-            f"{_INGEST_ATTEMPTS * _INGEST_INTERVAL_S}s — trace_context was not honoured"
+            f"trace {trace_id} never appeared within {_INGEST_DEADLINE_S}s — "
+            "trace_context was not honoured (or the API was unreachable throughout)"
         )
     raise AssertionError(
         f"trace {trace_id} landed but its spans never included {sorted(expected)} "
-        f"after {_INGEST_ATTEMPTS * _INGEST_INTERVAL_S}s; saw {sorted(names)}"
+        f"within {_INGEST_DEADLINE_S}s; saw {sorted(names)}"
     )
 
 
@@ -162,5 +196,11 @@ class TestLangfuseRecordsTheDerivedTraceId:
         only thing a caller had, and it 404s. If this ever returns 200 the two
         identity spaces have collided and the derivation is not doing its job."""
         run_id, _trace_id = _run_observed_pipeline()
-        status, _ = _get_trace(run_id)
-        assert status == 404, f"expected the raw run_id to name no trace, got HTTP {status}"
+        deadline = time.monotonic() + _INGEST_DEADLINE_S
+        while time.monotonic() < deadline:
+            status, _ = _get_trace(run_id)
+            if status != 0:  # 0 = unreachable; retry rather than misread it as "not 404"
+                assert status == 404, f"expected the raw run_id to name no trace, got HTTP {status}"
+                return
+            time.sleep(_INGEST_INTERVAL_S)
+        pytest.fail(f"Langfuse API unreachable for {_INGEST_DEADLINE_S}s — control not evaluated")

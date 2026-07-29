@@ -394,10 +394,27 @@ An LLM-mode node (`think`/`agent`/`act`) never runs its body, so — unlike scri
 
 - **`main`** — stable. Only tagged releases and critical hotfix PRs.
 - **`develop`** — active development. All new work lands here. The authoritative version is `__version__` in `src/neograph/__init__.py` (do not hard-code it here — it drifts). Piarch and other downstream consumers pull from this branch via `uv add "neograph @ git+https://github.com/KonstantinMirin/neograph.git@develop"`.
-- **Release path**: when `develop` is ready, merge to `main`, tag `vX.Y.Z`, push the tag. `.github/workflows/publish.yml` triggers on `v*` tags and publishes to PyPI via Trusted Publishing (no tokens, OIDC-scoped).
-- **Version bumps**: on `develop` we increment normally. On `main` at the release tag we tag `vX.Y.Z`.
+- **Release path**: when `develop` is ready, merge to `main`, **run `make release-gate` on merged `main`**, then tag `vX.Y.Z` and push the tag. `.github/workflows/publish.yml` triggers on `v*` tags and publishes to PyPI via Trusted Publishing (no tokens, OIDC-scoped).
+- **Version bumps**: on `develop` we increment normally. On `main` at the release tag we tag `vX.Y.Z`. `__version__` and `pyproject.toml`'s `version` move together — `TestVersionSync` fails if you bump one alone.
+
+### The release gate is MANDATORY on merged `main`, before the tag
+
+```bash
+git checkout main && git merge --no-ff release/X.Y.Z -m "release: merge X.Y.Z (...)"
+set -a && . .env && set +a          # live credentials
+make release-gate                    # quality + live; refuses to pass without keys
+git tag -a vX.Y.Z -m "..." && git push origin main && git push origin vX.Y.Z
+```
+
+**`make quality` is NOT sufficient to tag.** It deselects the `live`-marked tests, so it is silent about anything that only fails against a real external service. `make release-gate` runs `quality` *and* `live`, and sets `NEOGRAPH_REQUIRE_LIVE=1` so absent credentials are a hard collection ERROR rather than a skip — the gate cannot report success without actually reaching Langfuse.
+
+**Tag the commit you gated.** Not a later one, and not the branch tip if it moved.
+
+This exists because 0.7.4 was tagged after a green `make quality` on merged `main` that had silently skipped the two live tests for want of exported keys; one of them was flaky and the tag went out with it. The build was caught at the manual-approval gate and the tag was moved before anything reached PyPI, but only by luck of the reviewer gate. The rule is now mechanical, not remembered.
 
 **Never publish directly.** The GitHub Actions workflow is the only publish path. This gives us a pypi.org Trusted Publisher gate + an optional manual-approval environment reviewer.
+
+**If a tag must be moved** (nothing published yet — check `curl -s https://pypi.org/pypi/neograph/json | jq -r .info.version`): cancel the pending run first (`gh run cancel <id>`) so it cannot be approved by accident, then `git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`, re-gate, re-tag, re-push. Once a version is on PyPI it can never be reused — at that point the only path is a new patch version.
 
 ---
 
