@@ -5,6 +5,23 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2026-07-29
+
+A hotfix release cut directly from `main`: one LLM-retry correctness fix and one observability correlation fix.
+
+### Fixed
+
+- **An empty structured-output response is now re-prompted instead of raising on the first occurrence** (`neograph-yqrsz`). The `structured` strategy retried a Pydantic `ValidationError` up to `max_retries` but *raised* on an undecodable/empty response, so the single most likely transient provider failure had **zero** retries while a less likely one got three. An empty body never reaches validation, so it surfaces as `Raw(dsml=False)` rather than `Failed(ValidationError)`, and that dispatch arm called `_raise_decoded_none` unconditionally — the `attempts`/`max_retries` counter driving the adjacent arm was never consulted. Both the sync and async twins now guard the arm on the *same* counter and re-prompt; `_raise_decoded_none` is reused unchanged as the exhaustion raiser, so fail-loud is preserved and simply no longer fires on the first flake. The re-prompt carries its own hint: an empty response never produced JSON to malform, so "failed validation" / "could not be parsed" is wrong advice to a model that returned nothing. `TestStructuredRetryBudgetParityAcrossTwins` pins that both twins consult the budget and agree on which arms are budgeted.
+
+### Added
+
+- **`trace_id` on every node log line, derived from `run_id`, so logs and Langfuse traces can be joined** (`neograph-s65y2`). With `observe=` on, neograph produced two independent 32-hex identities per run and never related them — a `run_id` from a log 404s against `GET /api/public/traces/{id}` — leaving the mechanics (durations, token counts, errors) in the logs and the content (prompts, reasoning, tool payloads) in the traces with no key to join on except the caller-supplied, non-unique `run_name`. The trace id is now `Langfuse.create_trace_id(seed=run_id)` and is handed to the handler as `trace_context`, so it is *derived* rather than independently minted: `run_id` and everything keyed on it (the per-run MCP connection cache) are untouched, and the join is computable offline from a bare log line. `trace_id` is absent — never null — when no trace of ours exists (observe off, keys missing, or the caller wired their own handler).
+
+### Changed
+
+- **`langfuse` floor raised `>=3.0` -> `>=3.11`** for the `langfuse` extra and the dev group. 3.11.0 is the first release whose LangChain `CallbackHandler` accepts `trace_context=`; 3.10 takes only `public_key`.
+- **`config['configurable']` carrier discipline enforced structurally.** `runner.py` hand-rolled the copy-not-mutate carrier idiom at four sites against `_config_carrier`'s documented one-site rule; all four now route through `_with_configurable` / `run_id_of`. `TestConfigCarrierIsTheOnlySite` bans re-inlining it — closing a blind spot in the existing thinness guard, which only inspected tabled sync/async twin pairs and could not see single functions.
+
 ## [0.7.3] - 2026-07-22
 
 A hotfix release completing the 0.7.2 stringly-`"null"` repair, cut directly from `main`.
