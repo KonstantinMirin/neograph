@@ -215,10 +215,15 @@ class TestStreamEarlyCloseEvictsRunCache:
     normal-completion eviction was covered; this pins the early-close path."""
 
     def test_sync_stream_close_after_one_chunk_evicts(self, monkeypatch):
+        import neograph._observe as _observe
         import neograph.runner as _runner
 
         evicted: list[str] = []
-        monkeypatch.setattr(_runner, "evict_run", lambda run_id: evicted.append(run_id))
+        # _evict_run_cache moved to _observe.py (neograph-3ffdg.9, pure file
+        # split), so `evict_run` must be patched where it is now looked up. The
+        # behaviour under test -- eviction firing through the generator's finally
+        # on early close -- is unchanged; only the patch target moved.
+        monkeypatch.setattr(_observe, "evict_run", lambda run_id: evicted.append(run_id))
 
         graph = compile(_trivial_pipeline(), **build_test_compile_kwargs())
         gen = _runner.stream(graph, input={"node_id": "ec-001"}, stream_mode="values")
@@ -228,10 +233,11 @@ class TestStreamEarlyCloseEvictsRunCache:
         assert evicted, "early .close() did not fire the eviction finally"
 
     async def test_astream_close_after_one_chunk_evicts(self, monkeypatch):
+        import neograph._observe as _observe
         import neograph.runner as _runner
 
         evicted: list[str] = []
-        monkeypatch.setattr(_runner, "evict_run", lambda run_id: evicted.append(run_id))
+        monkeypatch.setattr(_observe, "evict_run", lambda run_id: evicted.append(run_id))
 
         graph = compile(_trivial_pipeline(), **build_test_compile_kwargs())
         agen = _runner.astream(graph, input={"node_id": "ec-002"}, stream_mode="values")

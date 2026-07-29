@@ -72,7 +72,14 @@ MIGRATED: frozenset[str] = frozenset(
         "_state_write.py",
         "_subconstruct.py",
         "_input_shape.py",
-        "runner.py",
+        # neograph-3ffdg.9: runner.py's combo-vocabulary use (the Portal-mesh hop
+        # costing that reads primary_shape/PrimaryShape) moved wholesale into
+        # _recursion_budget.py as a pure file split. runner.py is REMOVED because
+        # it no longer imports or references any table symbol -- assertion (a)
+        # requires live use, not a dead import -- and the new module is declared in
+        # its place. The consumer inventory tracks where the vocabulary actually
+        # lives, so it follows the code.
+        "_recursion_budget.py",
         "_wiring.py",
         # neograph-tjpn4: MOVED here from PENDING, not merely dropped -- assertion
         # (c) is an EQUALITY and _agent_spec.py is still a combo-vocabulary
