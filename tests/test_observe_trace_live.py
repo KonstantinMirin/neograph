@@ -50,11 +50,9 @@ def _auth_header() -> str:
     return "Basic " + base64.b64encode(raw).decode()
 
 
-def _get_trace(trace_id: str) -> tuple[int, dict | None]:
+def _api_get(path: str) -> tuple[int, dict | None]:
     base = os.environ.get("LANGFUSE_BASE_URL", "https://cloud.langfuse.com").rstrip("/")
-    req = urllib.request.Request(
-        f"{base}/api/public/traces/{trace_id}", headers={"Authorization": _auth_header()}
-    )
+    req = urllib.request.Request(f"{base}{path}", headers={"Authorization": _auth_header()})
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return resp.status, json.loads(resp.read())
@@ -62,17 +60,51 @@ def _get_trace(trace_id: str) -> tuple[int, dict | None]:
         return exc.code, None
 
 
-def _await_trace(trace_id: str) -> dict:
-    """Poll until ingestion lands. Langfuse ingests asynchronously — observed
-    ~25s to first 200 — so a single immediate GET would false-negative."""
+def _get_trace(trace_id: str) -> tuple[int, dict | None]:
+    return _api_get(f"/api/public/traces/{trace_id}")
+
+
+def _get_observations(trace_id: str) -> list[dict]:
+    """Spans belonging to *trace_id*, via the dedicated observations API.
+
+    NOT ``trace["observations"]``: that inline field is deprecated (the trace
+    response says so in a ``_deprecation`` notice) and was observed returning
+    ``[]`` for a trace whose spans the observations endpoint reports fine. An
+    assertion on the inline field therefore fails for a reason that has nothing
+    to do with neograph.
+    """
+    status, body = _api_get(f"/api/public/observations?traceId={trace_id}")
+    return (body or {}).get("data", []) if status == 200 else []
+
+
+def _await_trace_with_nodes(trace_id: str, expected: set[str]) -> tuple[dict, set[str]]:
+    """Poll until the trace AND its spans have landed.
+
+    Langfuse ingests asynchronously and in STAGES: the trace record appears
+    before its observations do. Polling only for the trace (then reading spans
+    once) is racy — it passed twice and failed on the third run with an empty
+    span list for a trace that was fully populated seconds later. So the poll
+    condition is the thing actually being asserted: the trace exists AND carries
+    this run's nodes."""
+    body: dict | None = None
+    names: set[str] = set()
     for _ in range(_INGEST_ATTEMPTS):
         time.sleep(_INGEST_INTERVAL_S)
-        status, body = _get_trace(trace_id)
-        if status == 200 and body:
-            return body
+        status, fetched = _get_trace(trace_id)
+        if status != 200 or not fetched:
+            continue
+        body = fetched
+        names = {o.get("name") for o in _get_observations(trace_id)}
+        if expected <= names:
+            return body, names
+    if body is None:
+        raise AssertionError(
+            f"trace {trace_id} never appeared after "
+            f"{_INGEST_ATTEMPTS * _INGEST_INTERVAL_S}s — trace_context was not honoured"
+        )
     raise AssertionError(
-        f"trace {trace_id} never appeared after "
-        f"{_INGEST_ATTEMPTS * _INGEST_INTERVAL_S}s — trace_context was not honoured"
+        f"trace {trace_id} landed but its spans never included {sorted(expected)} "
+        f"after {_INGEST_ATTEMPTS * _INGEST_INTERVAL_S}s; saw {sorted(names)}"
     )
 
 
@@ -119,9 +151,11 @@ class TestLangfuseRecordsTheDerivedTraceId:
             "the join a caller would compute offline is broken"
         )
 
-        body = _await_trace(trace_id)
+        # Poll for the trace AND its spans; the assertion is that the spans under
+        # the derived id are OUR nodes, so it cannot pass on an unrelated trace.
+        body, names = _await_trace_with_nodes(trace_id, {"fetch", "gen"})
         assert body["id"] == trace_id, "Langfuse stored the trace under a DIFFERENT id"
-        assert body.get("observations"), "trace landed but carries no observations"
+        assert {"fetch", "gen"} <= names
 
     def test_the_run_id_is_not_itself_a_trace_id(self):
         """The control — and the original bug. Before this fix the run_id was the
