@@ -54,7 +54,6 @@ from __future__ import annotations
 
 import ast
 import inspect
-import os
 import secrets
 import sys
 import textwrap
@@ -78,8 +77,22 @@ from neograph._di_classify import (  # noqa: F401 — re-exported for backward c
     _resolve_merge_args,
 )
 from neograph._hints import resolve_hints
-from neograph._ir_normalize import oracle_gen_type_for
 from neograph._llm_config import LlmConfig
+
+# --- extracted clusters (neograph-3ffdg.11), re-exported so existing
+# --- `from neograph.decorators import ...` call sites keep resolving unchanged.
+from neograph._merge_fn_decorator import (  # noqa: E402,F401
+    _qualname_site,
+    _same_def_site,
+)
+from neograph._merge_fn_decorator import merge_fn as _merge_fn_impl  # noqa: E402
+from neograph._node_modifier_kwargs import (  # noqa: E402,F401
+    _apply_eager_oracle_gen_type,
+    _build_each_kwargs,
+    _build_oracle_kwargs,
+    _build_portal_kwargs,
+    _is_trivial_body,
+)
 
 # Decorator-side shim registration. The decorators emit shims for inline
 # body-merge functions (`@node(merge_fn=callable)`), inline interrupt-when
@@ -105,170 +118,10 @@ from neograph._sidecar import (  # noqa: F401 — re-exported for backward compa
     infer_oracle_gen_type,
 )
 from neograph.describe_type import type_display_name
-from neograph.di import DIBinding, DIKind
 from neograph.modifiers import Each, Loop, Operator, Oracle, Portal
 from neograph.node import Node
 from neograph.renderers import Renderer
 from neograph.tool import Tool
-
-
-def _is_trivial_body(body: list[ast.stmt]) -> bool:
-    """Check if a function body (docstring already stripped) is a placeholder.
-
-    Trivial patterns: empty (docstring-only), single `...`, `pass`,
-    bare constant, `return`, or `return None`.
-    """
-    if not body:
-        return True
-    if len(body) != 1:
-        return False
-    stmt = body[0]
-    if isinstance(stmt, ast.Pass):
-        return True
-    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
-        return True
-    if isinstance(stmt, ast.Return):
-        # `return` (no value) or `return None`
-        if stmt.value is None:
-            return True
-        if isinstance(stmt.value, ast.Constant) and stmt.value.value is None:
-            return True
-    return False
-
-
-def _apply_eager_oracle_gen_type(n: Node) -> Node:
-    """Eagerly set ``oracle_gen_type`` at decoration time so a bare Node carries
-    it before it is placed in a Construct.
-
-    Returns a copy with the field set (IR-immutability — no in-place mutation),
-    or the node unchanged when there is no inference. The inference rule lives
-    in ``neograph._ir_normalize.oracle_gen_type_for``; ``normalize_ir`` owns the
-    assembly-time write and is idempotent over this pre-population. Single
-    named operation shared by the @node Each×Oracle and Oracle-only branches.
-    """
-    gen_type = oracle_gen_type_for(n)
-    if gen_type is None:
-        return n
-    return n.model_copy(update={"oracle_gen_type": gen_type})
-
-
-def _build_oracle_kwargs(
-    *,
-    node_label: str,
-    f: Callable,
-    merge_fn: str | None,
-    merge_prompt: str | None,
-    models: list[str] | None,
-    ensemble_n: int | None,
-    merge_pre_process: Callable | None = None,
-    merge_post_process: Callable | None = None,
-    merge_fallback: Callable | None = None,
-    merge_model: str | None = None,
-) -> dict[str, Any]:
-    """Build and validate Oracle modifier kwargs from @node decorator arguments.
-
-    Shared between Each+Oracle fusion and Oracle-only paths. Handles:
-    - Body-as-merge detection + warning + shim registration
-    - All validations (requires merge strategy, both set, ensemble_n >= 2)
-    - Oracle kwargs dict construction
-    """
-    effective_merge_fn = merge_fn
-    effective_merge_prompt = merge_prompt
-
-    # Body-as-merge: models= set without merge_fn/merge_prompt
-    if models is not None and merge_fn is None and merge_prompt is None:
-        warnings.warn(
-            f"@node '{node_label}': body used as both generator and merge function. "
-            f"The first parameter receives list[OutputType] at merge time, not the "
-            f"annotated upstream type. Consider adding an explicit merge_fn or merge_prompt.",
-            UserWarning,
-            stacklevel=4,
-        )
-        body_merge_name = f"_body_merge_{node_label}_{secrets.token_hex(8)}"
-
-        def _make_body_merge(user_fn: Callable) -> Callable:
-            def body_merge(variants: list, config: Any) -> Any:
-                return user_fn(variants)
-
-            return body_merge
-
-        register_scripted(body_merge_name, _make_body_merge(f))
-        effective_merge_fn = body_merge_name
-
-    if effective_merge_fn is None and effective_merge_prompt is None:
-        raise ConstructError.build(
-            f"ensemble_n={ensemble_n} requires merge_fn or merge_prompt",
-            node=node_label,
-            hint="pass merge_fn='<name>' or merge_prompt='<template>'",
-        )
-    if effective_merge_fn is not None and effective_merge_prompt is not None:
-        raise ConstructError.build(
-            "both merge_fn and merge_prompt are set",
-            node=node_label,
-            hint="choose exactly one",
-        )
-    if ensemble_n is not None and ensemble_n < 2:
-        raise ConstructError.build(
-            "ensemble_n must be >= 2",
-            node=node_label,
-            found=str(ensemble_n),
-        )
-
-    oracle_kw: dict[str, Any] = {
-        "merge_fn": effective_merge_fn,
-        "merge_prompt": effective_merge_prompt,
-    }
-    if models is not None:
-        oracle_kw["models"] = models
-    if ensemble_n is not None:
-        oracle_kw["n"] = ensemble_n
-    if merge_pre_process is not None:
-        oracle_kw["merge_pre_process"] = merge_pre_process
-    if merge_post_process is not None:
-        oracle_kw["merge_post_process"] = merge_post_process
-    if merge_fallback is not None:
-        oracle_kw["merge_fallback"] = merge_fallback
-    if merge_model is not None:
-        # Conditional-include so Oracle's 'reason' default stays authoritative.
-        # Semantics are identical to programmatic Oracle(merge_model=...) —
-        # including silent-ignore alongside merge_fn (pure-sugar invariant:
-        # no decorator-only validation the modifier itself does not perform).
-        oracle_kw["merge_model"] = merge_model
-    return oracle_kw
-
-
-def _build_each_kwargs(
-    map_over: str | None, map_key: str | None, map_on_error: str
-) -> dict[str, Any]:
-    """Each modifier kwargs from @node decorator arguments (both the fused
-    Each×Oracle path and the plain fan-out path). Conditional-include for
-    ``on_error`` so Each's ``'raise'`` default stays authoritative."""
-    each_kw: dict[str, Any] = {"over": map_over, "key": map_key}
-    if map_on_error != "raise":
-        each_kw["on_error"] = map_on_error
-    return each_kw
-
-
-def _build_portal_kwargs(
-    portal: list[str], route: str | None, max_hops: int | None, on_exhaust: str | None
-) -> dict[str, Any]:
-    """Portal (peer-mode) modifier kwargs from @node decorator arguments.
-
-    Conditional-include for ``route`` / ``max_hops`` / ``on_exhaust`` so the
-    modifier's own defaults (``route='goto'``, ``max_hops=10``,
-    ``on_exhaust='error'``) stay authoritative AND ``model_fields_set`` matches
-    the programmatic ``| Portal(...)`` form field-for-field. That identity is
-    load-bearing, not cosmetic: ``_validation_portal`` reads
-    ``Portal.model_fields_set`` to enforce the entry-only ``max_hops`` /
-    ``on_exhaust`` knobs, so a non-entry member must NOT carry them set."""
-    km_kw: dict[str, Any] = {"to": portal}
-    if route is not None:
-        km_kw["route"] = route
-    if max_hops is not None:
-        km_kw["max_hops"] = max_hops
-    if on_exhaust is not None:
-        km_kw["on_exhaust"] = on_exhaust
-    return km_kw
 
 
 def node(
@@ -796,170 +649,6 @@ def node(
 # and infer_oracle_gen_type are re-exported via the import block above.
 
 
-def _qualname_site(f: Callable) -> str:
-    """Human-readable definition site for a function: ``module.qualname (file.py:lineno)``.
-
-    Used to name both sides of a @merge_fn collision so the error points at the
-    two competing definitions rather than just the shared registry name.
-    """
-    module = getattr(f, "__module__", None) or "<unknown>"
-    qualname = getattr(f, "__qualname__", None) or getattr(f, "__name__", repr(f))
-    label = f"{module}.{qualname}"
-    code = getattr(f, "__code__", None)
-    if code is not None:
-        label += f" ({os.path.basename(code.co_filename)}:{code.co_firstlineno})"
-    return label
-
-
-def _same_def_site(a: Callable, b: Callable) -> bool:
-    """True when two callables originate from the same ``def`` statement.
-
-    A collision is two *distinct* definitions competing for one registry name;
-    re-executing the same ``def`` is not one. This is the same object (``is``),
-    the same code object (a ``def`` re-run in a loop / hypothesis example — new
-    function object, shared code object), or the same source site with a matching
-    qualname (a module reload recompiles the code object but keeps file/line/name).
-    """
-    if a is b:
-        return True
-    ca, cb = getattr(a, "__code__", None), getattr(b, "__code__", None)
-    if ca is not None and ca is cb:
-        return True
-    if ca is None or cb is None:
-        return False
-    return (
-        getattr(a, "__qualname__", None) == getattr(b, "__qualname__", None)
-        and ca.co_filename == cb.co_filename
-        and ca.co_firstlineno == cb.co_firstlineno
-    )
-
-
-def merge_fn(
-    fn: Callable | None = None,
-    *,
-    name: str | None = None,
-) -> Any:
-    """Decorator for Oracle merge functions with FromInput/FromConfig DI.
-
-    Usage::
-
-        @merge_fn
-        def combine(
-            variants: list[Claims],
-            shared: FromConfig[SharedResources],
-            node_id: FromInput[str],
-        ) -> Claims:
-            ...
-
-        node | Oracle(n=3, merge_fn="combine")
-
-    The decorated function is auto-registered via ``register_scripted`` so
-    existing ``Oracle(merge_fn="combine")`` lookups still work. At runtime,
-    ``neograph.factory.make_oracle_merge_fn`` detects the decorator's
-    metadata and calls the function with resolved DI parameters. Functions
-    without this decorator (plain ``(variants, config) -> X`` signatures)
-    continue to work unchanged.
-
-    The first parameter of a merge function always receives the list of
-    variants produced by the Oracle generators; every subsequent parameter
-    must be annotated with ``FromInput[T]`` or ``FromConfig[T]``. Positional
-    defaults are not supported.
-    """
-    # Capture the caller's local namespace once. Same rationale as @node:
-    # both @merge_fn and @merge_fn(...) call merge_fn() from user code.
-    caller_ns = sys._getframe(1).f_locals  # noqa: SLF001
-
-    def decorator(f: Callable) -> Callable:
-        sig = inspect.signature(f)
-        params = list(sig.parameters.values())
-        if not params:
-            raise ConstructError.build(
-                "must accept at least one parameter (the variants list)",
-                node=f.__name__,
-            )
-
-        # Skip the first parameter (variants); classify the rest for DI.
-        rest_params = params[1:]
-        rest_sig = sig.replace(parameters=rest_params)
-        param_res = _classify_di_params(f, rest_sig, caller_ns=caller_ns)
-
-        # Auto-wire non-DI params from state by name.
-        # Params without FromInput/FromConfig markers that have type
-        # annotations are treated as state params — resolved from graph
-        # state at merge time, matching @node's upstream wiring pattern.
-        # Rebuild param_res in function signature order so positional args match
-        # the function's parameter order. Per-annotation resolution (7ymj): one
-        # unresolvable annotation no longer drops the OTHER params' hints and
-        # mis-types their FROM_STATE bindings.
-        extra_ns = _build_annotation_namespace(f, caller_ns=caller_ns)
-        all_hints = resolve_hints(f, localns=extra_ns, owner=getattr(f, "__name__", None))
-
-        ordered_res: ParamResolution = {}
-        for p in rest_params:
-            if p.name in param_res:
-                ordered_res[p.name] = param_res[p.name]
-            else:
-                hint = all_hints.get(p.name, p.annotation)
-                if hint is inspect.Parameter.empty:
-                    continue
-                if p.default is not inspect.Parameter.empty:
-                    ordered_res[p.name] = DIBinding(
-                        name=p.name,
-                        kind=DIKind.CONSTANT,
-                        inner_type=type(p.default),
-                        required=False,
-                        default_value=p.default,
-                    )
-                else:
-                    ordered_res[p.name] = DIBinding(
-                        name=p.name,
-                        kind=DIKind.FROM_STATE,
-                        inner_type=hint if hint is not None else type(None),
-                        required=False,
-                    )
-        param_res = ordered_res
-
-        fn_name = name or f.__name__
-        # Fail loud on a same-name collision between two *different* functions.
-        # Oracle references a merge_fn by string name, so a silent overwrite in
-        # _merge_fn_registry lets two modules with a common helper name
-        # (merge/combine) corrupt each other's Oracles with zero signal.
-        # Re-registering the identical function object — as a module reload /
-        # re-import does — stays idempotent.
-        existing = _merge_fn_registry.get(fn_name)
-        if existing is not None and not _same_def_site(existing[0], f):
-            prior = existing[0]
-            raise ConstructError.build(
-                f"merge_fn name '{fn_name}' is already registered by a different function",
-                found=f"{_qualname_site(prior)} then {_qualname_site(f)}",
-                hint=(
-                    "Two @merge_fn functions cannot share a registry name. Give one a "
-                    "distinct name via @merge_fn(name='...'), or rename the function."
-                ),
-            )
-        _merge_fn_registry[fn_name] = (f, param_res)
-        _merge_fn_caller_ns[fn_name] = caller_ns
-
-        # Auto-register via register_scripted so Oracle's existing string
-        # lookup path finds the function. The factory wrapper we return
-        # here is a legacy-compatible (variants, config) shim that falls
-        # back to calling the user function with positional args if the
-        # factory hasn't hooked into the DI path. In practice the factory
-        # always checks _merge_fn_registry first (see
-        # factory.make_oracle_merge_fn) so this shim is rarely invoked.
-        def legacy_shim(variants: Any, config: Any) -> Any:
-            return f(variants, *_resolve_di_args(param_res, config))
-
-        legacy_shim.__name__ = fn_name
-        register_scripted(fn_name, legacy_shim)
-
-        return f
-
-    if fn is not None:
-        return decorator(fn)
-    return decorator
-
-
 # Construct-building functions live in _construct_builder.py and its sibling
 # helper modules per neograph-3zai. Re-exported here for backward compatibility
 # and so __init__.py's existing imports + test imports continue to work.
@@ -973,3 +662,10 @@ from neograph._construct_graph import (  # noqa: E402, F401
     _resolve_loop_self_param,
 )
 from neograph._scripted_registry import _register_node_scripted  # noqa: E402, F401
+
+# Re-export of the @merge_fn decorator (neograph-3ffdg.11). Bound HERE, after
+# node(), because that is where the def used to live: node() takes a keyword
+# parameter also called `merge_fn` (the string name of a registered merge
+# function), and binding the module-level name before node() makes ruff read that
+# parameter as a redefinition. Same public surface, original ordering.
+merge_fn = _merge_fn_impl

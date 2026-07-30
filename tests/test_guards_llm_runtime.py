@@ -1024,7 +1024,13 @@ class TestNormalizeIrIsSoleIrFieldWriter:
     # the normalizer is its sole writer. Only the @node decoration-time eager
     # oracle_gen_type write remains.
     ALLOWED_PREPOP: dict[str, frozenset[str]] = {
-        "decorators.py": frozenset({"oracle_gen_type"}),
+        # neograph-3ffdg.11: the one sanctioned decoration-time oracle_gen_type
+        # write lives in _apply_eager_oracle_gen_type, which moved out of
+        # decorators.py into _node_modifier_kwargs.py (pure file split). The
+        # carve-out is RE-KEYED, not widened -- still exactly one module, one
+        # field. decorators.py must no longer appear here: leaving it would grant
+        # a write permission to a file that no longer performs the write.
+        "_node_modifier_kwargs.py": frozenset({"oracle_gen_type"}),
     }
 
     @classmethod
@@ -1141,9 +1147,7 @@ class TestNormalizeIrIsSoleIrFieldWriter:
         Node IR field."""
         from neograph.node import Node
 
-        assert self.IR_FIELDS == frozenset(
-            {"fan_out_param", "oracle_gen_type", "handoff_param", "handoff_channel"}
-        )
+        assert self.IR_FIELDS == frozenset({"fan_out_param", "oracle_gen_type", "handoff_param", "handoff_channel"})
         for field in self.IR_FIELDS:
             assert field in Node.model_fields, f"IR field {field!r} must exist on the Node model"
         # The trigger sub-mode is a Portal field; the tool-trigger sentinel is a
@@ -2241,13 +2245,7 @@ class TestRepairJsonGuarded:
         assert self._unguarded_repair_calls(src) == [2]
 
     def test_meta_positive_try_finally_without_except_is_detected(self):
-        src = (
-            "def parse(text):\n"
-            "    try:\n"
-            "        repaired = repair_json(text)\n"
-            "    finally:\n"
-            "        pass\n"
-        )
+        src = "def parse(text):\n    try:\n        repaired = repair_json(text)\n    finally:\n        pass\n"
         assert self._unguarded_repair_calls(src) == [3]
 
     def test_meta_negative_guarded_call_is_allowed(self):

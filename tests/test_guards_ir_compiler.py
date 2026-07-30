@@ -328,12 +328,19 @@ class TestDeadBodyDocstringStrip:
     """
 
     def test_is_trivial_body_exists(self):
-        """_is_trivial_body must exist as a named function in decorators.py."""
-        source = (SRC_DIR / "decorators.py").read_text()
+        """_is_trivial_body must exist as a named function in the modifier-kwargs module.
+
+        neograph-3ffdg.11 moved it out of decorators.py into
+        _node_modifier_kwargs.py with the rest of the @node sugar builders
+        (pure file split). The claim -- that the helper exists as a NAMED
+        function rather than being inlined back into the dead-body check -- is
+        unchanged; only its home moved.
+        """
+        source = (SRC_DIR / "_node_modifier_kwargs.py").read_text()
         tree = ast.parse(source)
         func_names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
         assert "_is_trivial_body" in func_names, (
-            "_is_trivial_body helper must exist in decorators.py to handle docstring + placeholder patterns."
+            "_is_trivial_body helper must exist in _node_modifier_kwargs.py to handle docstring + placeholder patterns."
         )
 
     def test_dead_body_check_strips_docstring(self):
