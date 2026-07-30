@@ -623,9 +623,11 @@ Two narrower line caps deliberately survive alongside the ratchet — `LINE_CAP`
 cover is well under 500), so no file is capped twice. They keep loose `>` semantics;
 tightening them was out of scope, not endorsed.
 
-The operational how-to for performing a split — the five inventory sweeps, AST-with-
-decorators slicing, the import-surface proof, the ordering of ceiling vs formatting —
-lives in the `DESIGN` field of the DEFER epic `neograph-jtawq`.
+The operational how-to for performing a split — the inventory sweeps, AST-with-decorators
+slicing, the import-surface proof, the ordering of ceiling vs formatting — lives in
+[`docs/file-split-procedure.md`](docs/file-split-procedure.md). It is a living document,
+rewritten in place rather than appended to; update it there when a split teaches something
+new.
 
 ### General test conventions
 
