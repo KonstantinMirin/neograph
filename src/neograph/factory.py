@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import inspect
-import time
+# --- stdlib names factory.py imported and RE-EXPORTED before the split; the
+# --- moved raw wrappers were their only local consumer here.
+import inspect  # noqa: E402,F401
+import time  # noqa: E402,F401
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +19,10 @@ from neograph._dispatch import _dispatch_for_mode
 from neograph._execute import _aexecute_node, _execute_node, _type_name
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import primary_output_field
+
+# --- extracted cluster (neograph-3ffdg.6), re-exported so existing
+# --- `from neograph.factory import ...` call sites keep resolving unchanged.
+from neograph._raw_dispatch import _make_araw_wrapper, _make_raw_wrapper  # noqa: E402,F401
 from neograph._state_bus import adapt_state
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import _scan_subgraph_output, make_subgraph_fn
@@ -941,67 +947,3 @@ def make_portal_dispatch_fn(
 
     wrapper = RunnableLambda(dispatch_wrapper, afunc=adispatch_wrapper)
     return named(wrapper, node.name, mode="portal-dispatch", output_type=_type_name(node.outputs))
-
-
-def _make_raw_wrapper(node: Node) -> Callable:
-    """Wrap a raw_fn dispatch with observability (node_start/node_complete).
-
-    Only used for explicit ``mode='raw'`` escape-hatch nodes. Raw nodes
-    bypass the unified _execute_node path — no DI/input/output wrapping,
-    only logging.
-    """
-    assert node.raw_fn is not None, f"node '{node.name}' has mode='raw' but no raw_fn"
-    raw_fn = node.raw_fn
-
-    def raw_node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
-        node_log = log.bind(node=node.name, mode="raw")
-        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
-        t0 = time.monotonic()
-
-        result = raw_fn(state, config)
-        if inspect.isawaitable(result):
-            # An `async def` raw body under the SYNC driver: we cannot await here,
-            # and returning the coroutine would flow un-awaited into state (silent
-            # wrong behavior). Fail loud — araw_node_wrapper awaits correctly.
-            if hasattr(result, "close"):
-                result.close()  # suppress the "never awaited" RuntimeWarning
-            raise ExecutionError.build(
-                "async node body invoked under sync run(); use arun()",
-                node=node.name,
-                hint="An `async def` raw body requires the async driver. "
-                "Call arun(graph, ...) / graph.ainvoke instead of run() / graph.invoke.",
-            )
-
-        elapsed = time.monotonic() - t0
-        node_log.info("node_complete", duration_s=round(elapsed, 3))
-        return result
-
-    # __name__ stays informational; routing is the add_node argument (y20i).
-    return raw_node_wrapper
-
-
-def _make_araw_wrapper(node: Node) -> Callable:
-    """Async twin of :func:`_make_raw_wrapper` (Phase 1b).
-
-    Same observability/timing as the sync wrapper; the only divergence is that
-    an ``async def`` raw body is awaited. Detection is at the call boundary
-    (``inspect.isawaitable``), identical to ScriptedDispatch.aexecute, so a sync
-    raw body under ``ainvoke`` is simply not awaited (LangGraph threadpools it).
-    """
-    assert node.raw_fn is not None, f"node '{node.name}' has mode='raw' but no raw_fn"
-    raw_fn = node.raw_fn
-
-    async def araw_node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
-        node_log = log.bind(node=node.name, mode="raw")
-        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
-        t0 = time.monotonic()
-
-        result = raw_fn(state, config)
-        if inspect.isawaitable(result):
-            result = await result
-
-        elapsed = time.monotonic() - t0
-        node_log.info("node_complete", duration_s=round(elapsed, 3))
-        return result
-
-    return araw_node_wrapper

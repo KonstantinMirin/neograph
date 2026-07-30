@@ -275,7 +275,10 @@ class TestAsyncTwinCoLocation:
             ("_verify_checkpoint_schema", "_averify_checkpoint_schema"),
             ("_auto_resume_from_divergence", "_aauto_resume_from_divergence"),
         ],
-        "factory.py": [("_make_raw_wrapper", "_make_araw_wrapper")],
+        # neograph-3ffdg.6 moved BOTH halves of this pair to _raw_dispatch.py
+        # (pure file split). Re-keyed, not relaxed -- the pair must still be
+        # co-located, just in their new shared home.
+        "_raw_dispatch.py": [("_make_raw_wrapper", "_make_araw_wrapper")],
     }
 
     def test_async_twins_are_co_located_with_sync_counterpart(self):

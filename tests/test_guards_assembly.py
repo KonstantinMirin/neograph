@@ -715,8 +715,14 @@ class TestAssemblyCohesionFanOut:
     FAN_OUT_CEILING = {
         # factory.py is the public-facing wrapper builder; it's allowed many importers.
         "factory.py": 12,
-        # _execute.py is the lifecycle hub; only factory should import.
-        "_execute.py": 1,
+        # _execute.py is the lifecycle hub; only the factory CLUSTER should import
+        # it. neograph-3ffdg.6 raised this 1 -> 2 because the raw-mode wrappers --
+        # already consumers of _execute.py -- moved out of factory.py into
+        # _raw_dispatch.py. The importer count did not grow; the file count under
+        # it did. The exact-set assertion in
+        # TestLifecycleSeparation.test_execute_cohesion_single_src_importer names
+        # both modules, so this ceiling cannot be spent on an unrelated importer.
+        "_execute.py": 2,
         # _subconstruct.py is imported by compiler + _wiring + factory.
         "_subconstruct.py": 3,
         # _oracle.py: re-exported via factory, imported by _execute, _subconstruct, _wiring.
@@ -1097,7 +1103,15 @@ class TestLifecycleSeparation:
             assert forbidden not in names, f"factory.py must NOT define {forbidden} — it lives in _execute.py."
 
     def test_execute_cohesion_single_src_importer(self):
-        """_execute.py's only src/neograph importer must be factory.py."""
+        """_execute.py may be imported only by the factory cluster.
+
+        neograph-3ffdg.6 split the raw-mode wrappers out of factory.py into
+        _raw_dispatch.py; they were already _execute.py's consumers, so the
+        importer set grew by the module that carried them out. Still an EXACT-set
+        assertion, not a subset one -- any third importer, or the loss of either
+        of these two, still fails. The cohesion claim is unchanged: _execute.py
+        stays private to the factory cluster rather than becoming a shared helper.
+        """
         importers: list[str] = []
         target = "neograph._execute"
         for py in sorted(SRC_DIR.glob("*.py")):
@@ -1106,7 +1120,10 @@ class TestLifecycleSeparation:
             text = py.read_text()
             if f"from {target}" in text or f"import {target}" in text:
                 importers.append(py.name)
-        assert importers == ["factory.py"], f"_execute.py should be imported by factory.py only, got: {importers}"
+        assert importers == ["_raw_dispatch.py", "factory.py"], (
+            f"_execute.py should be imported by the factory cluster only "
+            f"(factory.py + _raw_dispatch.py), got: {importers}"
+        )
 
 
 class TestInputShapeRename:
