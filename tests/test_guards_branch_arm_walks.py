@@ -85,7 +85,11 @@ _ALLOWLIST: Counter = Counter(
         # _add_branch_to_graph).
         ("compiler.py", "for item in construct.nodes:"): 1,
         # LangGraph compiled-graph node ids — NOT a Construct node list.
-        ("compiler.py", 'nodes = [n for n in lg_graph.nodes if n not in ("__start__", "__end__")]'): 1,
+        # neograph-3ffdg.8: this walk moved with describe_graph into
+        # _compile_diagnostics.py. Re-keyed by (module, content); it walks the
+        # COMPILED LangGraph's node names, not the neograph IR, so arm-awareness
+        # does not apply -- the exemption is unchanged, only its address.
+        ("_compile_diagnostics.py", 'nodes = [n for n in lg_graph.nodes if n not in ("__start__", "__end__")]'): 1,
         # compile_start telemetry — display only, no correctness impact.
         ("compiler.py", "node_names=[n.name for n in construct.nodes],"): 1,
         ("compiler.py", "for n in construct.nodes"): 1,

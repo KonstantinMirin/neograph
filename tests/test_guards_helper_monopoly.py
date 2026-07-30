@@ -388,8 +388,17 @@ class TestIrWalkHelperMonopoly:
             )
 
     def test_compiler_collectors_use_iter_nodes(self):
-        source = (SRC_DIR / "compiler.py").read_text()
-        assert _count_calls(source, "iter_nodes") >= 2, "compiler.py collectors must iterate via iter_nodes(construct)."
+        """The compile-time collectors must walk the IR via iter_nodes(construct).
+
+        neograph-3ffdg.8 moved _collect_scripted_shims and _collect_required_di
+        out of compiler.py into _compile_diagnostics.py; the claim follows them.
+        Still a floor of 2 -- one per collector -- so a collector that starts
+        hand-rolling its own walk fails here exactly as before.
+        """
+        source = (SRC_DIR / "_compile_diagnostics.py").read_text()
+        assert _count_calls(source, "iter_nodes") >= 2, (
+            "the compile-time collectors must iterate via iter_nodes(construct)."
+        )
 
     # --- meta-tests ---
 
