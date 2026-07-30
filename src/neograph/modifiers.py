@@ -7,14 +7,36 @@ node | Operator(when="has_open_questions")
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+# --- typing names modifiers.py imported and RE-EXPORTED before the split.
+from collections.abc import (
+    Callable,
+    Iterable,
+    Mapping,
+    Sequence,  # noqa: E402,F401
+)
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self, runtime_checkable  # noqa: E402,F401
 
 from pydantic import BaseModel, ConfigDict, field_validator
 from typing_extensions import TypeVar
 
 from neograph._dev_warnings import dev_warn
+
+# --- extracted clusters (neograph-3ffdg.5), re-exported so every existing
+# --- `from neograph.modifiers import ...` call site keeps resolving unchanged.
+from neograph._each import Each, EachFailure, split_each_path  # noqa: E402,F401
+from neograph._modifier_base import Modifier  # noqa: E402,F401
+from neograph._oracle_protocols import (  # noqa: E402,F401
+    MergeFallback,
+    MergePostProcess,
+    MergePreProcess,
+)
+from neograph._portal import (  # noqa: E402,F401
+    DISPATCH_ROUTE,
+    HANDOFF_END,
+    Portal,
+    _group_portal_members,
+)
 from neograph.errors import ConfigurationError, ConstructError
 
 if TYPE_CHECKING:
@@ -34,32 +56,6 @@ if TYPE_CHECKING:
 _Variant = TypeVar("_Variant", default=Any)
 _FallbackResult = TypeVar("_FallbackResult", covariant=True, default=Any)
 _PostResult = TypeVar("_PostResult", default=Any)
-
-
-@runtime_checkable
-class MergePreProcess(Protocol[_Variant]):
-    """Replaces the default ``{variants: ..., **upstream}`` input_data
-    construction for the ``merge_prompt`` path. Returns the data passed
-    verbatim to ``invoke_structured`` -- which accepts ``BaseModel | dict | str``.
-    """
-
-    def __call__(self, variants: list[_Variant]) -> BaseModel | dict[str, Any] | str: ...
-
-
-@runtime_checkable
-class MergePostProcess(Protocol[_PostResult, _Variant]):
-    """Transforms the parsed LLM merge result before it is written to state."""
-
-    def __call__(self, result: _PostResult, variants: list[_Variant]) -> _PostResult: ...
-
-
-@runtime_checkable
-class MergeFallback(Protocol[_Variant, _FallbackResult]):
-    """Catches errors from ``invoke_structured`` during merge. Returns a
-    deterministic fallback result instead of propagating the exception.
-    """
-
-    def __call__(self, variants: list[_Variant], error: Exception) -> _FallbackResult: ...
 
 
 class ModifierCombo(Enum):
@@ -307,10 +303,6 @@ def is_each_oracle_fused(mods: Mapping[str, object]) -> bool:
     back to a bare ``"oracle" in mods``.
     """
     return mods.get("each") is not None and mods.get("oracle") is not None
-
-
-class Modifier(BaseModel, frozen=True):
-    """Base class for node modifiers. Applied via Node.__or__."""
 
 
 class _PathRecorder:
@@ -619,60 +611,6 @@ class Oracle(Modifier, frozen=True):
                 object.__setattr__(self, "n", len(self.models))
 
 
-class EachFailure(BaseModel, frozen=True):
-    """Typed per-item failure written into an Each barrier under ``on_error='collect'``.
-
-    Replaces a thrown item's result in the keyed barrier dict so the barrier
-    always completes with one entry per planned key. Consumers assert
-    set-equality over planned keys and branch on ``isinstance(v, EachFailure)``.
-    """
-
-    key: str  # the Each dispatch key of the item that failed
-    error_type: str  # exception class name (e.g., "RuntimeError")
-    message: str  # str() of the caught exception
-
-
-class Each(Modifier, frozen=True):
-    """Fan-out modifier: dispatch parallel instances over a collection.
-
-    The compiler expands this into:
-    1. Router node that iterates over the collection field in state
-    2. Send() per item with the item as payload
-    3. Barrier node with defer=True that collects results
-
-    Usage:
-        match_verify = Node(...) | Each(over="clusters.clusters", key="label")
-
-    ``on_error`` controls per-item fault handling:
-    - ``'raise'`` (default): a thrown item aborts the whole fan-out run.
-    - ``'collect'``: a thrown item is caught and keyed into the barrier as a
-      typed ``EachFailure`` instead of aborting; the barrier always completes.
-    """
-
-    over: str  # dotted path to collection in state (e.g., "clusters.clusters")
-    key: str  # field on each item used as the dispatch key
-    on_error: Literal["raise", "collect"] = "raise"
-
-    @field_validator("over")
-    @classmethod
-    def _validate_over(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("Each.over must not be empty")
-        return v
-
-
-def split_each_path(over: str) -> tuple[str, tuple[str, ...]]:
-    """Parse an `Each.over` dotted path into (root_field, remaining_segments).
-
-    Single point of truth for the path grammar. Both the assembly-time
-    type walker in `construct.py` and the runtime value walker in
-    `compiler.py` consume this so future extensions to the syntax (indexing,
-    wildcards, escaping) land in one place.
-    """
-    parts = over.split(".")
-    return parts[0], tuple(parts[1:])
-
-
 class Operator(Modifier, frozen=True):
     """Human-in-the-loop modifier: pause graph for human review.
 
@@ -734,183 +672,10 @@ class Loop(Modifier, frozen=True):
             )
 
 
-HANDOFF_END = "__end__"
-
 # The `route` sentinel that selects Portal's dynamic-flow-definition (dispatch)
 # mode. The literal lives HERE ONLY — every layer discriminates the mode through
 # `Portal.is_dispatch`, never an inline `route == "decide"` string check.
-DISPATCH_ROUTE = "decide"
 """Route-field value meaning "leave the mesh" (design §2.1). Public sentinel."""
-
-
-class Portal(Modifier, frozen=True):
-    """Dynamic-handoff modifier — one modifier with two modes (design §2.1).
-
-    Mode (a) — peer routing (``to=[...]``): a node picks its successor at
-    runtime from a declared peer set. Lowers to ``Command(goto=<peer>)`` (T2).
-    Mode (b) — dynamic flow definition (``route="decide"``): the node emits the
-    spec of the next flow; neograph validates -> compiles -> dispatches it.
-
-    Usage:
-        # peer routing (typed swarm):
-        Node("billing", ...) | Portal(to=["triage", "technical"], max_hops=6)
-
-        # dynamic flow definition:
-        Node("planner", ...) | Portal(route="decide", spec_field="spec",
-                                        input_field="dispatch_input", output=Summary)
-
-    The mode is discriminated in ``model_post_init`` (mirrors ``Loop``):
-    ``to`` set => peer mode (``route`` must not be ``"decide"``);
-    ``route == "decide"`` => dispatch mode (requires ``spec_field`` /
-    ``input_field`` / ``output``; forbids the peer-mode knobs). Neither or both
-    => ``ConfigurationError``. Excludes every other modifier (Each/Oracle/Loop/
-    Operator) — Portal owns the node's outgoing edge (D-NO-OPERATOR-COMBO).
-    """
-
-    # arbitrary_types_allowed: for the ``output`` class field and the
-    # ``scripted`` / ``conditions`` callable registries (mode b).
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    # -- mode (a): peer routing --
-    to: list[str] | None = None  # declared successor names (directed, per-node)
-    route: str = "goto"  # mode (a): routing FIELD on the payload model; mode (b): literal "decide"
-    trigger: Literal["output", "tool"] = "output"  # peer mode only: how the member decides its goto
-    max_hops: int = 10  # mesh budget; settable ONLY on the entry member
-    on_exhaust: Literal["error", "exit"] = "error"
-    name: str | None = None  # mesh group name (peer mode only); None = the implicit default group
-
-    # -- mode (b): dynamic flow definition (route="decide") --
-    spec_field: str | None = None  # output-model field holding the emitted Spec dict
-    input_field: str | None = None  # output-model field holding the dispatch input dict
-    output: type[BaseModel] | str | None = None  # REQUIRED in mode (b): dispatched-flow output type
-    scripted: dict[str, Callable] | None = None  # building-block registry for the emitted flow
-    conditions: dict[str, Callable] | None = None  # condition registry for the emitted flow
-    on_invalid: Literal["raise", "route_to_error"] = "raise"  # emitted-spec validation-gate failure handling
-    error_handler: str | None = None  # sibling Node to route to when on_invalid='route_to_error'
-    max_depth: int | None = None  # REQUIRED in dispatch mode (self-extending-flow budget); forbidden in peer mode
-
-    @property
-    def is_dispatch(self) -> bool:
-        """Mode discriminator — the SINGLE SOURCE OF TRUTH for peer vs dispatch.
-
-        True for dynamic-flow-definition mode (``route == DISPATCH_ROUTE``), False
-        for peer routing. EVERY layer (validator, wiring collector, compiler walk,
-        state builder, producer registration) discriminates the mode ONLY through
-        this property — never an inline ``route == "decide"`` string check, so a new
-        call site cannot forget the rule (anti-band-aid; pinned by a structural
-        guard that bans the inline literal outside this module).
-        """
-        return self.route == DISPATCH_ROUTE
-
-    @property
-    def is_tool_triggered(self) -> bool:
-        """Peer-mode sub-mode discriminator (design portal-tool-triggered-handoff).
-
-        True when a PEER-mode member decides its handoff by emitting a
-        synthesized ``transfer_to_<peer>`` tool call from its ReAct turn
-        (``trigger == "tool"``), rather than by writing a routing field on its
-        typed output (``trigger == "output"``, the default). The direct sibling
-        of ``is_dispatch``: the SINGLE SOURCE OF TRUTH every layer (validator,
-        wiring, factory) reads to distinguish the trigger sub-mode — never an
-        inline ``trigger == "tool"`` check. Always False in dispatch mode (a
-        ``route="decide"`` Portal is not a peer member and cannot trigger a
-        tool handoff), guarded by ``not self.is_dispatch``.
-        """
-        return not self.is_dispatch and self.trigger == "tool"
-
-    def model_post_init(self, __context: Any) -> None:
-        is_peer = self.to is not None
-        is_dispatch = self.is_dispatch
-        if is_peer and is_dispatch:
-            raise ConfigurationError.build(
-                "Portal cannot be both peer mode and dispatch mode",
-                expected="to=[...] (peer routing) XOR route='decide' (dynamic flow)",
-                found="to set AND route=='decide'",
-            )
-        if not is_peer and not is_dispatch:
-            raise ConfigurationError.build(
-                "Portal requires a mode",
-                expected="to=[...] (peer routing) or route='decide' (dynamic flow)",
-                found="neither to nor route='decide' provided",
-            )
-        if is_peer:
-            if self.max_hops < 1:
-                raise ConfigurationError.build(
-                    "Portal max_hops must be >= 1",
-                    found=str(self.max_hops),
-                )
-            if "max_depth" in self.model_fields_set:
-                raise ConfigurationError.build(
-                    "Portal peer mode forbids max_depth — max_depth is a dispatch-mode-only "
-                    "self-extending-flow budget (the mirror image of max_hops/on_exhaust being "
-                    "forbidden in dispatch mode)",
-                    expected="no max_depth in peer mode",
-                    found="max_depth set",
-                )
-            if "error_handler" in self.model_fields_set:
-                raise ConfigurationError.build(
-                    "Portal peer mode forbids error_handler — it is a dispatch-mode-only knob",
-                    expected="no error_handler in peer mode",
-                    found="error_handler set",
-                )
-        else:  # dispatch mode (route == "decide")
-            missing = [f for f in ("spec_field", "input_field", "output") if getattr(self, f) is None]
-            if self.max_depth is None:
-                missing.append("max_depth")
-            if missing:
-                raise ConfigurationError.build(
-                    "Portal dispatch mode requires spec_field, input_field, output, and max_depth "
-                    "(no numeric default — every self-extending Portal must declare its own bound)",
-                    expected="spec_field=, input_field=, output=, max_depth=",
-                    found=f"missing: {missing}",
-                )
-            forbidden = [k for k in ("max_hops", "on_exhaust", "name", "trigger") if k in self.model_fields_set]
-            if forbidden:
-                raise ConfigurationError.build(
-                    "Portal dispatch mode forbids peer-mode knobs",
-                    expected="no max_hops/on_exhaust/name/trigger in dispatch mode",
-                    found=f"peer-mode knobs set: {forbidden}",
-                )
-            if self.on_invalid == "route_to_error" and self.error_handler is None:
-                raise ConfigurationError.build(
-                    "Portal on_invalid='route_to_error' requires error_handler=",
-                    expected="error_handler=<sibling Node name>",
-                    found="error_handler not set",
-                )
-            if self.on_invalid == "raise" and self.error_handler is not None:
-                raise ConfigurationError.build(
-                    "Portal error_handler is only meaningful with on_invalid='route_to_error'",
-                    expected="on_invalid='route_to_error' when error_handler is set",
-                    found=f"on_invalid={self.on_invalid!r} with error_handler set",
-                )
-
-
-def _group_portal_members(items: Sequence[ConstructItem]) -> dict[str | None, list[ConstructItem]]:
-    """Partition a construct level's PEER-mode Portal members into named mesh
-    groups (neograph-fefar, D-SINGLE-MESH's named-mesh extension).
-
-    The SINGLE source of truth for "which mesh does this member belong to" --
-    the validator (``_validation_portal._check_portal_mesh``), the IR
-    normalizer (``_ir_normalize.py``'s ``handoff_channel`` writer), and the
-    compiler's contiguous-mesh collector (``_wiring.py:_contiguous_portal_mesh``)
-    all group members via THIS function, never a re-derived inline grouping --
-    a construct that validates must lower exactly as validated.
-
-    Grouping key is ``Portal.name`` -- ``None`` is the implicit DEFAULT group
-    (unchanged pre-fefar behavior: all unnamed members are one mesh). Order is
-    preserved: each group's member list is in construct order, and groups
-    themselves appear in first-occurrence order (dict insertion order).
-
-    ``items`` must already be filtered to PEER-mode Portal members (dispatch-
-    mode Portals excluded by the caller, mirroring every other Portal-mesh
-    call site's convention).
-    """
-    groups: dict[str | None, list[ConstructItem]] = {}
-    for item in items:
-        portal = item.modifier_set.portal
-        assert portal is not None, "caller must pre-filter to Portal-modified members"
-        groups.setdefault(portal.name, []).append(item)
-    return groups
 
 
 class _SlotRule(NamedTuple):

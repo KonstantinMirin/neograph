@@ -347,7 +347,13 @@ ARBITRARY_TYPES_ALLOWLIST: frozenset[str] = frozenset(
         "construct.py",
         "node.py",
         "forward.py",
+        # neograph-3ffdg.5 split modifiers.py: it had TWO arbitrary_types_allowed
+        # uses (Oracle's and Portal's) and Portal's moved to _portal.py. Both
+        # files are listed because both still hold one justified use -- the total
+        # number of uses is unchanged at two, only their distribution changed.
+        # This is not a widening: no new use was permitted.
         "modifiers.py",
+        "_portal.py",
     }
 )
 
@@ -521,9 +527,13 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # ── modifiers.py — Pydantic field_validator + proxy attribute protocol ──
     # _PathRecorder.__getattr__ implements the attribute protocol. Pydantic
     # @field_validator boundaries catch ValueError into ValidationError.
-    "modifiers.py:345": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
-    "modifiers.py:585": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
-    "modifiers.py:660": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    # neograph-3ffdg.5 split modifiers.py. These keys are LINE-NUMBER keyed, so
+    # all three moved: two stayed in modifiers.py but renumbered when the extracted
+    # classes were removed above them, and the third (Each's field_validator) went
+    # to _each.py. Recomputed after ruff format.
+    "modifiers.py:337": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
+    "modifiers.py:577": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "_each.py:55": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
     # ── node.py — Pydantic BeforeValidator boundary ──
     # _validate_type_spec runs inside Pydantic field validation; Pydantic
     # catches TypeError and rolls it into ValidationError.

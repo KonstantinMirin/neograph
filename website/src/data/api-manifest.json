@@ -338,19 +338,19 @@
           "required": false
         },
         {
-          "annotation": "neograph.modifiers.MergePreProcess | None",
+          "annotation": "neograph._oracle_protocols.MergePreProcess | None",
           "default": "None",
           "name": "merge_pre_process",
           "required": false
         },
         {
-          "annotation": "neograph.modifiers.MergePostProcess | None",
+          "annotation": "neograph._oracle_protocols.MergePostProcess | None",
           "default": "None",
           "name": "merge_post_process",
           "required": false
         },
         {
-          "annotation": "neograph.modifiers.MergeFallback | None",
+          "annotation": "neograph._oracle_protocols.MergeFallback | None",
           "default": "None",
           "name": "merge_fallback",
           "required": false
@@ -358,7 +358,7 @@
       ],
       "kind": "pydantic_model",
       "name": "Oracle",
-      "signature": "(n: int = 3, models: list[str] | None = None, merge_prompt: str | None = None, merge_model: str = 'reason', merge_fn: str | None = None, merge_pre_process: neograph.modifiers.MergePreProcess | None = None, merge_post_process: neograph.modifiers.MergePostProcess | None = None, merge_fallback: neograph.modifiers.MergeFallback | None = None)"
+      "signature": "(n: int = 3, models: list[str] | None = None, merge_prompt: str | None = None, merge_model: str = 'reason', merge_fn: str | None = None, merge_pre_process: neograph._oracle_protocols.MergePreProcess | None = None, merge_post_process: neograph._oracle_protocols.MergePostProcess | None = None, merge_fallback: neograph._oracle_protocols.MergeFallback | None = None)"
     },
     {
       "anchor": "each",

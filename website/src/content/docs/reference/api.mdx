@@ -409,7 +409,7 @@ Operator(when: str)
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-Oracle(n: int = 3, models: list[str] | None = None, merge_prompt: str | None = None, merge_model: str = 'reason', merge_fn: str | None = None, merge_pre_process: neograph.modifiers.MergePreProcess | None = None, merge_post_process: neograph.modifiers.MergePostProcess | None = None, merge_fallback: neograph.modifiers.MergeFallback | None = None)
+Oracle(n: int = 3, models: list[str] | None = None, merge_prompt: str | None = None, merge_model: str = 'reason', merge_fn: str | None = None, merge_pre_process: neograph._oracle_protocols.MergePreProcess | None = None, merge_post_process: neograph._oracle_protocols.MergePostProcess | None = None, merge_fallback: neograph._oracle_protocols.MergeFallback | None = None)
 ```
 
 | Field | Type | Required | Default |
@@ -419,9 +419,9 @@ Oracle(n: int = 3, models: list[str] | None = None, merge_prompt: str | None = N
 | <span id="oracle-merge_prompt"></span>`merge_prompt` | `str | None` | no | `None` |
 | <span id="oracle-merge_model"></span>`merge_model` | `str` | no | `'reason'` |
 | <span id="oracle-merge_fn"></span>`merge_fn` | `str | None` | no | `None` |
-| <span id="oracle-merge_pre_process"></span>`merge_pre_process` | `neograph.modifiers.MergePreProcess | None` | no | `None` |
-| <span id="oracle-merge_post_process"></span>`merge_post_process` | `neograph.modifiers.MergePostProcess | None` | no | `None` |
-| <span id="oracle-merge_fallback"></span>`merge_fallback` | `neograph.modifiers.MergeFallback | None` | no | `None` |
+| <span id="oracle-merge_pre_process"></span>`merge_pre_process` | `neograph._oracle_protocols.MergePreProcess | None` | no | `None` |
+| <span id="oracle-merge_post_process"></span>`merge_post_process` | `neograph._oracle_protocols.MergePostProcess | None` | no | `None` |
+| <span id="oracle-merge_fallback"></span>`merge_fallback` | `neograph._oracle_protocols.MergeFallback | None` | no | `None` |
 
 ### Portal
 

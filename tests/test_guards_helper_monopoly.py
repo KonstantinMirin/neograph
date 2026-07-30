@@ -800,7 +800,9 @@ class TestResourceFetcherMonopoly:
 # the compiler's contiguous-mesh collector (_wiring.py) all delegate to it —
 # a construct that validates must lower exactly as validated, which breaks if
 # any of the three re-derives the grouping inline.
-_PORTAL_GROUPING_HOME = "modifiers.py"
+# neograph-3ffdg.5 moved Portal and its grouping helper into _portal.py.
+# The monopoly claim -- ONE home -- is unchanged; only the home moved.
+_PORTAL_GROUPING_HOME = "_portal.py"
 _PORTAL_GROUPING_IDIOM = "groups.setdefault(portal.name, []).append(item)"
 _PORTAL_GROUPING_CALLERS = ("_validation_portal.py", "_ir_normalize.py", "_wiring.py", "state.py")
 
@@ -838,10 +840,10 @@ class TestPortalMeshGroupingMonopoly:
     # --- meta-tests ---
 
     def test_meta_home_scanner_flags_second_definition(self, tmp_path):
-        (tmp_path / "modifiers.py").write_text("def _group_portal_members(items):\n    return {}\n")
+        (tmp_path / "_portal.py").write_text("def _group_portal_members(items):\n    return {}\n")
         (tmp_path / "rogue.py").write_text("def _group_portal_members(items):\n    return {}\n")
         assert _modules_defining(tmp_path, "_group_portal_members") == [
-            "modifiers.py",
+            "_portal.py",
             "rogue.py",
         ]
 
