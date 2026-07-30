@@ -1000,12 +1000,16 @@ class TestSplitOutputFieldMonopoly:
     so the oracle redirect/merge path and the @node dict-output resolver cannot
     drift from the build side.
 
-    Scoped OUT: ``naming.py`` (the parser home) and ``forward.py`` (whose
+    Scoped OUT: ``naming.py`` (the parser home) and ``_forward_proxy.py`` (whose
     ``_attr_chain_after_prefix`` strips the unrelated ``out_of_<node>`` proxy
-    prefix -- its own neograph-wpzg monopoly).
+    prefix -- its own neograph-wpzg monopoly). neograph-3ffdg.12 moved that
+    helper out of ``forward.py``, so the exemption followed it; ``forward.py``
+    was REMOVED rather than kept alongside, since it no longer contains the
+    idiom and a stale exemption would silently permit a real hand-rolled parse
+    there later.
     """
 
-    _EXEMPT_FILES = frozenset({"naming.py", "forward.py"})
+    _EXEMPT_FILES = frozenset({"naming.py", "_forward_proxy.py"})
 
     def test_split_output_field_defined_once_in_naming(self):
         homes = [

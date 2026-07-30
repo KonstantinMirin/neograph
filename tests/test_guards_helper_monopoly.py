@@ -31,8 +31,10 @@ SRC_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
 
 # helper name -> (owner file, minimum call sites excluding the def)
 MONOPOLIES = {
-    "_attr_chain_after_prefix": ("forward.py", 2),
-    "_build_condition_spec": ("forward.py", 2),
+    # neograph-3ffdg.12 split forward.py; these two helpers went to DIFFERENT new
+    # modules. Owner file follows the def; the call-count floors are unchanged.
+    "_attr_chain_after_prefix": ("_forward_proxy.py", 2),
+    "_build_condition_spec": ("_forward_trace.py", 2),
     "_emit_set_block": ("testing/scaffold.py", 4),
 }
 
@@ -306,9 +308,16 @@ class TestComparisonOperatorTableMonopoly:
         )
 
     def test_forward_imports_canonical_operators(self):
-        source = (SRC_DIR / "forward.py").read_text()
+        """The forward tracer must consume conditions.OPERATORS, never re-declare it.
+
+        neograph-3ffdg.12 moved _ConditionProxy -- the only consumer -- out of
+        forward.py into _forward_proxy.py, so the import moved with it. The claim
+        is unchanged: whichever module in the forward cluster compares values
+        must reach the canonical table rather than spell out its own.
+        """
+        source = (SRC_DIR / "_forward_proxy.py").read_text()
         assert "OPERATORS" in source and "from neograph.conditions import" in source, (
-            "forward.py must import the canonical OPERATORS from neograph.conditions."
+            "_forward_proxy.py must import the canonical OPERATORS from neograph.conditions."
         )
 
     # --- meta-tests ---
@@ -723,8 +732,7 @@ class TestResourceFetcherMonopoly:
         exempt — the scanner counts the literal hint string only.
         """
         total = sum(
-            _normalized_idiom_count(py.read_text(), _FETCHER_HINT_IDIOM)
-            for py in sorted(SRC_DIR.rglob("*.py"))
+            _normalized_idiom_count(py.read_text(), _FETCHER_HINT_IDIOM) for py in sorted(SRC_DIR.rglob("*.py"))
         )
         assert total == 1, (
             f"\nThe fetcher-signature hint appears {total}x across src/neograph/ "
@@ -747,8 +755,7 @@ class TestResourceFetcherMonopoly:
             "Delete the inline hint and delegate to _require_fetcher."
         )
         assert _count_calls(tool_source, "_require_fetcher") >= 1, (
-            "tool.py must call di._require_fetcher (fetcher-read monopoly). "
-            "_resolve_fetcher should delegate entirely."
+            "tool.py must call di._require_fetcher (fetcher-read monopoly). _resolve_fetcher should delegate entirely."
         )
 
     # --- meta-tests ---
@@ -757,23 +764,23 @@ class TestResourceFetcherMonopoly:
         """Positive: two copies of the hint literal count as 2."""
         dup = (
             "def a():\n"
-            '    hint = "an async \'fetch(uri) -> (content, mime)\' callable"\n'
+            "    hint = \"an async 'fetch(uri) -> (content, mime)' callable\"\n"
             "def b():\n"
-            '    hint = "an async \'fetch(uri) -> (content, mime)\' callable"\n'
+            "    hint = \"an async 'fetch(uri) -> (content, mime)' callable\"\n"
         )
         assert _normalized_idiom_count(dup, _FETCHER_HINT_IDIOM) == 2
 
     def test_meta_fetcher_hint_counts_single_def(self):
         """Negative: a single definition counts as 1 (the monopoly home)."""
         single = (
-            '_FETCHER_HINT = "an async \'fetch(uri) -> (content, mime)\' callable"\n'
+            "_FETCHER_HINT = \"an async 'fetch(uri) -> (content, mime)' callable\"\n"
             "def _require_fetcher(config, *, subject):\n    ...\n"
         )
         assert _normalized_idiom_count(single, _FETCHER_HINT_IDIOM) == 1
 
     def test_meta_fetcher_hint_resists_whitespace_slip(self):
         """Regex-slip: a spacing/quote variant must NOT evade the normalized scanner."""
-        spaced = 'hint =  "an async  \'fetch(uri) -> (content, mime)\'  callable"'
+        spaced = "hint =  \"an async  'fetch(uri) -> (content, mime)'  callable\""
         assert spaced.count(_FETCHER_HINT_IDIOM) == 0  # naive scan misses it
         assert _normalized_idiom_count(spaced, _FETCHER_HINT_IDIOM) == 1
 

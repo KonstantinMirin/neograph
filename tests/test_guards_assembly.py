@@ -124,7 +124,9 @@ class TestCommandConstructionMonopoly:
                 violations.append(f"  {py_file.name}:{lineno}: Command(...) constructed outside the allowlist")
         assert violations == [], (
             f"\n{len(violations)} Command(...) construction(s) outside "
-            f"{sorted(self._ALLOWED)}:\n" + "\n".join(violations) + "\n\nConfine Command to factory.py / runner.py (G1)."
+            f"{sorted(self._ALLOWED)}:\n"
+            + "\n".join(violations)
+            + "\n\nConfine Command to factory.py / runner.py (G1)."
         )
 
     def test_detector_flags_a_stray_command(self, tmp_path):
@@ -180,7 +182,7 @@ class TestPortalDispatchDiscriminationMonopoly:
             if py_file.name == "modifiers.py":
                 continue
             for lineno in self._decide_literal_comparisons(py_file):
-                violations.append(f"  {py_file.name}:{lineno}: inline `route == \"decide\"` comparison")
+                violations.append(f'  {py_file.name}:{lineno}: inline `route == "decide"` comparison')
         assert violations == [], (
             f"\n{len(violations)} inline dispatch-mode discrimination(s) outside modifiers.py:\n"
             + "\n".join(violations)
@@ -259,11 +261,7 @@ class TestPortalDispatchRoutesThroughCanonicalGate:
         """Slip check: the scanner would catch a banned bespoke-validator call."""
         src = "def make_portal_dispatch_fn():\n    return _build_construct(spec)\n"
         tree = ast.parse(src)
-        names = {
-            c.func.id
-            for c in ast.walk(tree)
-            if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
-        }
+        names = {c.func.id for c in ast.walk(tree) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
         assert self._BANNED & names == {"_build_construct"}
 
 
@@ -1846,8 +1844,26 @@ class TestLowerLayersDoNotImportForwardDX:
     modules may import each other (peer DX, not a downward edge).
     """
 
-    # The two modules AGENTS.md designates as the DX layer.
-    DX_MODULES = frozenset({"forward", "decorators"})
+    # The DX layer AGENTS.md designates -- forward.py and decorators.py -- plus the
+    # modules extracted FROM them, which are DX internals, not lower layers:
+    #   _forward_proxy / _forward_trace        (out of forward.py, neograph-3ffdg.12)
+    #   _node_modifier_kwargs / _merge_fn_decorator (out of decorators.py, .11)
+    # Listing them is a CLASSIFICATION fix, not an exemption, and it makes the
+    # guard strictly stronger in two directions: the extracted modules may hold a
+    # peer edge back to their parent (the same peer edge forward <-> decorators
+    # already has), AND no lower-layer module may import THEM either -- which
+    # would otherwise be the exact backdoor this guard's docstring records a
+    # reviewer mutation-verifying for decorators.py.
+    DX_MODULES = frozenset(
+        {
+            "forward",
+            "decorators",
+            "_forward_proxy",
+            "_forward_trace",
+            "_node_modifier_kwargs",
+            "_merge_fn_decorator",
+        }
+    )
     # The package facade re-exports the public DX symbols — allowed.
     FORWARD_IMPORT_ALLOWLIST = {"__init__"}
 
@@ -1970,11 +1986,7 @@ class TestMemberSelectionPredicateMonopoly:
                 continue
             # skip nested reporting: ast.walk(fn) sees nested defs too; only
             # attribute top-level hits to the outermost function that owns them
-            nested = {
-                inner.name
-                for inner in ast.walk(fn)
-                if isinstance(inner, ast.FunctionDef) and inner is not fn
-            }
+            nested = {inner.name for inner in ast.walk(fn) if isinstance(inner, ast.FunctionDef) and inner is not fn}
             if self.PREDICATE in nested:
                 continue
             hits = self._member_isinstance_calls(fn, self.MEMBER_TYPES)
@@ -2042,6 +2054,5 @@ class TestMemberSelectionPredicateMonopoly:
                 ):
                     offenders.append(f"{name}:{c.lineno}")
         assert not offenders, (
-            f"warnings.warn outside {self.POLICY} in "
-            f"{self.BUILDER.name}/{self.SELECT.name}: {offenders}"
+            f"warnings.warn outside {self.POLICY} in {self.BUILDER.name}/{self.SELECT.name}: {offenders}"
         )
