@@ -47,3 +47,19 @@ def run_id_of(config: RunnableConfig | None) -> str | None:
         return None
     configurable = config.get("configurable") or {}
     return configurable.get(StateKeys.RUN_ID)
+
+
+def trace_id_of(config: RunnableConfig | None) -> str | None:
+    """The observability trace id DERIVED from the run id, or None.
+
+    Canonical reader for ``StateKeys.TRACE_ID``. Set by ``_merge_observe_callbacks``
+    only on the path where the framework attached a handler it owns. Absent when
+    observe= is off, when the env gate fails, or when the caller wired their own
+    Langfuse handler — in that last case the live trace is theirs and our derived
+    id would name no trace, so callers treat None as "no trace of ours" and omit
+    the field rather than binding it as null.
+    """
+    if not config:
+        return None
+    configurable = config.get("configurable") or {}
+    return configurable.get(StateKeys.TRACE_ID)

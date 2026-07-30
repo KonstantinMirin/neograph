@@ -266,6 +266,12 @@ class TestLlmResponsibilityDiscipline:
                 "_repair_hint",
                 "build_structured_repair_message",
                 "structured_retry_messages",
+                # neograph-yqrsz: the empty/undecodable twin of the above. Same
+                # change axis (structured re-prompt assembly), but this arm holds
+                # no ValidationError to feed back, so it builds its own hint
+                # rather than routing through _repair_hint — telling a model that
+                # returned nothing that its JSON failed validation is wrong advice.
+                "empty_response_retry_messages",
                 # neograph-8uoot: truncation-aware retry. _is_truncated reads the
                 # provider's finish_reason/stop_reason; _build_continuation_msg is
                 # the emit-only continuation directive for length-truncated
@@ -355,7 +361,12 @@ class TestLlmResponsibilityDiscipline:
         # bounded validation re-prompt loop (parity with json_mode) plus a shared
         # exhaustion-raise helper. Reviewed increase; the re-prompt message
         # assembly is single-sited in _llm_retry.structured_retry_messages.
-        "_llm_dispatch.py": 285,  # m0tv format rewrap (273 actual)
+        # neograph-yqrsz: 285 -> 300. The Raw (parsed=None, non-DSML) arm gained
+        # the same bounded re-prompt the ValidationError arm already had, in both
+        # twins — an empty provider response previously raised on the FIRST
+        # occurrence with max_retries never consulted. A reviewed behavioural fix
+        # (+ its contract docstring), not accretion; net new names here: zero.
+        "_llm_dispatch.py": 300,  # 296 actual
         # neograph-ble3: tightened 365 -> 360. _DSML_PATTERN regex moved to
         # _dsml.py; recover_dsml is detection-free. Locks the deletion.
         # neograph-s1u4: 360 -> 375. _apply_null_defaults gained a guarded
@@ -374,12 +385,25 @@ class TestLlmResponsibilityDiscipline:
         # _optional_inner_types) so the STRING "null" GLM emits for Optional
         # numeric/enum fields is normalized to None inside _apply_null_defaults
         # instead of crashing the node. Reviewed increase.
-        # _llm_retry.py's budget was REMOVED here (neograph-wwhcw). It is the only
-        # file in this dict over 500 lines, so it is now governed by the repo-wide
-        # ratchet in tests/test_guards_file_size.py at an EXACT ceiling (658) --
-        # strictly tighter than the 665 budget this entry declared, which had
-        # itself drifted stale-loose by 7 lines. Two guards must not make
+        # _llm_retry.py's budget was REMOVED here (neograph-wwhcw). At the time it
+        # was the only file in this dict over 500 lines, so it moved under the
+        # repo-wide ratchet in tests/test_guards_file_size.py at an EXACT ceiling
+        # (658) -- strictly tighter than the 665 budget this entry declared, which
+        # had itself drifted stale-loose by 7 lines. Two guards must not make
         # near-identical claims about one file; the exact ceiling wins.
+        # neograph-3ffdg.15 then split the JSON-extraction and null-default
+        # clusters out (see the _json_extract.py / _null_defaults.py entries in
+        # ALLOWED_NAMES above), dropping _llm_retry.py well under 500 -- so its
+        # repo-wide allowlist entry was DELETED per that guard's anti-dead-entry
+        # rule and the plain 500 limit governs it now. Still strictly tighter than
+        # any budget this dict would declare.
+        # 0.7.4 forward-port: the 0.7.4 line of this entry read 695 (615 -> 665
+        # for neograph-zhwgh's shape-driven nested descent, then 665 -> 695 for
+        # neograph-yqrsz's empty_response_retry_messages). Deliberately NOT
+        # resurrected -- both changes are carried by the name-set assertion above
+        # (empty_response_retry_messages is registered there; zhwgh's
+        # _unwrap_optional / _descend_null_defaults moved to _null_defaults.py),
+        # and the sub-500 repo-wide rule already binds the file harder than 695.
         # The five entries that remain are all comfortably under 500, so the
         # repo-wide guard makes no claim about them: they stay as the tighter,
         # topic-scoped anti-accretion proxy behind this class's load-bearing
@@ -2271,3 +2295,229 @@ class TestRepairJsonGuarded:
         # json_repair.repair_json(...) (module-qualified) must also be caught.
         src = "def parse(text):\n    return json_repair.repair_json(text)\n"
         assert self._unguarded_repair_calls(src) == [2]
+
+
+class TestStructuredRetryBudgetParityAcrossTwins:
+    """neograph-yqrsz: every non-terminal failure arm of the structured re-prompt
+    loop must consult the loop's ``attempts``/``max_retries`` budget, and the
+    sync/async twins must agree on WHICH arms are budgeted.
+
+    ## The invariant
+    ``_call_structured`` / ``_acall_structured`` own a ``while True`` re-prompt
+    loop with a single ``attempts`` counter. An arm that raises without ever
+    consulting that counter gives its failure mode ZERO retries. That is what
+    shipped for the ``Raw`` (parsed=None, no DSML) arm: an EMPTY provider
+    response — the most likely transient failure — raised on first occurrence
+    while a *less* likely one (weak constrained decode -> ValidationError) got
+    ``max_retries``. Downstream that cost 70 of 192 runs of one A/B arm and a
+    published conclusion that was an infrastructure artifact.
+
+    ## Why parity, not a site list
+    The codebase scan (bead disposition table) found exactly TWO instances — the
+    twin pair — and six legitimately-terminal arms. So the recurrence vector is
+    not an unscanned third site; it is TWIN DIVERGENCE: one twin edited, the
+    other forgotten. This guard therefore pins (a) the specific arm stays
+    budgeted, and (b) the two twins budget the SAME set of arms.
+
+    ## Legitimately terminal (must NOT be forced to retry)
+    ``case Failed`` non-ValidationError is a provider rejection, not a
+    re-promptable modelling failure; ``case _`` is the exhaustiveness guard and
+    retrying an unknown variant would loop forever. ``case Raw(dsml=True)`` is
+    budgeted INDIRECTLY (``recover_dsml`` reads ``cfg.max_retries`` and escalates
+    to ``_invoke_json_with_retry``), so it is expected in the terminal set here —
+    this guard reads only the arm body.
+    """
+
+    DISPATCH = "_llm_dispatch.py"
+    TWINS = ("_call_structured", "_acall_structured")
+
+    @staticmethod
+    def _budgeted_arms(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+        """Arm patterns (unparsed) whose body consults attempts/max_retries."""
+        budgeted: set[str] = set()
+        for match_node in (n for n in ast.walk(fn) if isinstance(n, ast.Match)):
+            for case in match_node.cases:
+                body = ast.Module(body=case.body, type_ignores=[])
+                if any(
+                    isinstance(n, ast.Name) and n.id in {"attempts", "max_retries"} for n in ast.walk(body)
+                ):
+                    budgeted.add(ast.unparse(case.pattern))
+        return budgeted
+
+    @classmethod
+    def _twin_arms(cls, src_dir) -> dict[str, set[str]]:
+        tree = ast.parse((src_dir / cls.DISPATCH).read_text())
+        found = {
+            n.name: cls._budgeted_arms(n)
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name in cls.TWINS
+        }
+        assert set(found) == set(cls.TWINS), f"twin(s) missing from {cls.DISPATCH}: {set(cls.TWINS) - set(found)}"
+        return found
+
+    def test_non_dsml_raw_arm_consults_the_retry_budget_in_both_twins(self):
+        for name, arms in self._twin_arms(SRC_DIR).items():
+            raw_arms = [a for a in arms if a.startswith("Raw(") and "dsml=True" not in a]
+            assert raw_arms, (
+                f"{self.DISPATCH}::{name} — the Raw (parsed=None, non-DSML) arm no longer consults "
+                "attempts/max_retries. An empty/undecodable provider response would again raise on "
+                "the FIRST occurrence while the ValidationError arm keeps max_retries (neograph-yqrsz). "
+                "Fail loud only AFTER the budget is spent."
+            )
+
+    def test_both_twins_budget_the_same_arms(self):
+        arms = self._twin_arms(SRC_DIR)
+        sync, asyncy = arms["_call_structured"], arms["_acall_structured"]
+        assert sync == asyncy, (
+            "sync/async twin divergence in which structured-retry arms consult the budget — "
+            "a failure mode would be retried on one path and raise immediately on the other.\n"
+            f"  sync-only:  {sorted(sync - asyncy)}\n"
+            f"  async-only: {sorted(asyncy - sync)}"
+        )
+
+    def test_validation_arm_remains_budgeted_in_both_twins(self):
+        """The pre-existing budgeted arm (neograph-zcxd) must not regress."""
+        for name, arms in self._twin_arms(SRC_DIR).items():
+            assert any("Failed(" in a for a in arms), (
+                f"{self.DISPATCH}::{name} — the Failed(ValidationError) arm lost its retry budget."
+            )
+
+    def test_detector_flags_an_unbudgeted_arm(self):
+        """Slip meta-test: an arm that raises without touching the counter is NOT
+        reported as budgeted (non-vacuity — the guard can actually fail)."""
+        src = (
+            "def f():\n"
+            "    while True:\n"
+            "        match r:\n"
+            "            case Raw(raw_text=t):\n"
+            "                _raise_decoded_none(m, t)\n"
+            "            case Failed(error=e):\n"
+            "                if attempts >= max_retries:\n"
+            "                    raise\n"
+            "                attempts += 1\n"
+        )
+        fn = ast.parse(src).body[0]
+        budgeted = self._budgeted_arms(fn)
+        assert not [a for a in budgeted if a.startswith("Raw(")], "unbudgeted Raw arm must not count as budgeted"
+        assert any("Failed(" in a for a in budgeted), "budgeted Failed arm must be detected"
+
+
+class TestConfigCarrierIsTheOnlySite:
+    """neograph-s65y2: the ``config['configurable']`` carrier idiom lives ONLY in
+    ``_config_carrier.py``.
+
+    ## The invariant
+    ``_config_carrier``'s module docstring already declares it: *"Every framework
+    layer that stashes a value onto the config side-channel ... or reads the
+    framework-minted run id routes through here, so the copy-not-mutate carrier
+    idiom and the run-id read each live at ONE site."* The fresh-dict rule
+    ``{**config, 'configurable': {**configurable, K: v}}`` is a copy-not-mutate
+    contract; re-inlined per site it forks, and a site that mutates instead of
+    copying breaks idempotence for callers re-invoked per superstep.
+
+    ## The blind spot this closes
+    ``TestTwinThinness`` already bans a re-inlined carrier — but only inside a
+    TABLED sync/async TWIN PAIR. When neograph-s65y2 scanned the codebase it found
+    three violations in ``runner.py`` (``_mark_stream_custom``, ``_mint_run_id``,
+    ``_evict_run_cache``), all SINGLE non-twin functions, which that guard is
+    structurally unable to see — and ``runner.py`` did not import the carrier at
+    all. This guard covers the non-twin case, so the pattern cannot walk back in
+    through a function that happens to have no async sibling.
+    """
+
+    CARRIER_MODULE = "_config_carrier.py"
+    IDENTITY_KEYS = frozenset({"RUN_ID", "TRACE_ID"})
+
+    # Empty by construction: every merge-idiom site was migrated by s65y2, and the
+    # detector's ``**``-splat requirement means a fresh-config literal is not a
+    # violation to begin with. Kept as an explicit EMPTY set so adding an entry is
+    # a visible, reviewable act rather than a silent widening.
+    ALLOWED_INLINE_CONFIGURABLE: frozenset[str] = frozenset()
+
+    @classmethod
+    def _dict_literals_with_configurable(cls, tree) -> int:
+        """Count the carrier MERGE idiom: a dict literal that both splats an
+        existing mapping (``**config``) and sets a ``'configurable'`` key.
+
+        The ``**`` requirement is what makes this precise. Building a FRESH
+        config literal (``{"configurable": {K: v}}`` with no caller config in
+        hand, as ``_llm_render`` does for an out-of-graph render) carries no
+        copy-not-mutate hazard — there is nothing to copy. The hazard is only in
+        merging INTO a caller's config, which is exactly the splat form."""
+        n = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            splats_existing = any(k is None for k in node.keys)
+            sets_configurable = any(
+                isinstance(k, ast.Constant) and k.value == "configurable" for k in node.keys
+            )
+            if splats_existing and sets_configurable:
+                n += 1
+        return n
+
+    @classmethod
+    def _inline_identity_reads(cls, tree) -> list[str]:
+        """``<...>.get(StateKeys.RUN_ID/TRACE_ID)`` — bypasses run_id_of/trace_id_of."""
+        hits = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr != "get" or not node.args:
+                continue
+            arg = node.args[0]
+            if (
+                isinstance(arg, ast.Attribute)
+                and arg.attr in cls.IDENTITY_KEYS
+                and isinstance(arg.value, ast.Name)
+                and arg.value.id == "StateKeys"
+            ):
+                hits.append(f"StateKeys.{arg.attr} @ line {node.lineno}")
+        return hits
+
+    def test_no_inline_carrier_writes_outside_config_carrier(self):
+        offenders: list[str] = []
+        for py in sorted(SRC_DIR.rglob("*.py")):
+            if py.name == self.CARRIER_MODULE or py.name in self.ALLOWED_INLINE_CONFIGURABLE:
+                continue
+            n = self._dict_literals_with_configurable(ast.parse(py.read_text()))
+            if n:
+                offenders.append(f"{py.name}: {n} inline 'configurable' dict literal(s)")
+        assert offenders == [], (
+            "the config['configurable'] carrier idiom was re-inlined outside "
+            f"{self.CARRIER_MODULE} — call _with_configurable(config, **{{KEY: value}}) "
+            "so the copy-not-mutate contract stays un-forkable:\n" + "\n".join(f"  {o}" for o in offenders)
+        )
+
+    def test_no_inline_identity_reads_outside_config_carrier(self):
+        offenders: list[str] = []
+        for py in sorted(SRC_DIR.rglob("*.py")):
+            if py.name == self.CARRIER_MODULE:
+                continue
+            for hit in self._inline_identity_reads(ast.parse(py.read_text())):
+                offenders.append(f"{py.name}: {hit}")
+        assert offenders == [], (
+            "the framework-minted run/trace id was read inline instead of via the "
+            "canonical run_id_of() / trace_id_of() readers:\n" + "\n".join(f"  {o}" for o in offenders)
+        )
+
+    def test_carrier_module_still_defines_both_readers(self):
+        """Non-vacuity: the readers this guard redirects to must actually exist."""
+        src = (SRC_DIR / self.CARRIER_MODULE).read_text()
+        for fn in ("def _with_configurable", "def run_id_of", "def trace_id_of"):
+            assert fn in src, f"{self.CARRIER_MODULE} lost {fn!r} — the guard would redirect to nothing"
+
+    def test_detector_flags_a_reinlined_carrier(self):
+        """Slip meta-test: the pre-s65y2 shape of _mint_run_id IS detected."""
+        src = (
+            "def _mint_run_id(config):\n"
+            "    config = config or {}\n"
+            "    configurable = {**config.get('configurable', {}), StateKeys.RUN_ID: uuid4().hex}\n"
+            "    return {**config, 'configurable': configurable}\n"
+        )
+        assert self._dict_literals_with_configurable(ast.parse(src)) == 1
+
+    def test_detector_flags_an_inline_identity_read(self):
+        """Slip meta-test: the pre-s65y2 shape of _evict_run_cache IS detected."""
+        src = "def f(config):\n    return (config or {}).get('configurable', {}).get(StateKeys.RUN_ID)\n"
+        assert self._inline_identity_reads(ast.parse(src)) == ["StateKeys.RUN_ID @ line 2"]

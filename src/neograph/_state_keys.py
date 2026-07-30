@@ -120,6 +120,15 @@ class StateKeys:
     # STREAM_CUSTOM / DI_INPUTS config-injection pattern. Surfaced read-only to
     # nodes via config['configurable'] (the node_id/project_root DI-context path).
     RUN_ID = "_neo_run_id"
+    # TRACE_ID is the observability twin of RUN_ID, and a config['configurable']
+    # key on exactly the same terms (never in state, never in the checkpoint
+    # fingerprint). DERIVED, not minted: ``Langfuse.create_trace_id(seed=RUN_ID)``
+    # in ``_merge_observe_callbacks``, so it inherits RUN_ID's fresh-per-attempt
+    # property and the logs<->traces join is computable from a bare log line.
+    # Present ONLY when observe= actually attached a handler we own — absent when
+    # the env gate fails or the caller supplied their own handler (whose trace we
+    # did not derive), because advertising an id that names no trace would lie.
+    TRACE_ID = "_neo_trace_id"
 
     # Non-`neo_`-prefixed framework state keys (CON-01). These are DI-context
     # state-bus fields the compiler always adds (node_id, project_root) plus the

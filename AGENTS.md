@@ -395,10 +395,27 @@ An LLM-mode node (`think`/`agent`/`act`) never runs its body, so — unlike scri
 
 - **`main`** — stable. Only tagged releases and critical hotfix PRs.
 - **`develop`** — active development. All new work lands here. The authoritative version is `__version__` in `src/neograph/__init__.py` (do not hard-code it here — it drifts). Piarch and other downstream consumers pull from this branch via `uv add "neograph @ git+https://github.com/KonstantinMirin/neograph.git@develop"`.
-- **Release path**: when `develop` is ready, merge to `main`, tag `vX.Y.Z`, push the tag. `.github/workflows/publish.yml` triggers on `v*` tags and publishes to PyPI via Trusted Publishing (no tokens, OIDC-scoped).
-- **Version bumps**: on `develop` we increment normally. On `main` at the release tag we tag `vX.Y.Z`.
+- **Release path**: when `develop` is ready, merge to `main`, **run `make release-gate` on merged `main`**, then tag `vX.Y.Z` and push the tag. `.github/workflows/publish.yml` triggers on `v*` tags and publishes to PyPI via Trusted Publishing (no tokens, OIDC-scoped).
+- **Version bumps**: on `develop` we increment normally. On `main` at the release tag we tag `vX.Y.Z`. `__version__` and `pyproject.toml`'s `version` move together — `TestVersionSync` fails if you bump one alone.
+
+### The release gate is MANDATORY on merged `main`, before the tag
+
+```bash
+git checkout main && git merge --no-ff release/X.Y.Z -m "release: merge X.Y.Z (...)"
+set -a && . .env && set +a          # live credentials
+make release-gate                    # quality + live; refuses to pass without keys
+git tag -a vX.Y.Z -m "..." && git push origin main && git push origin vX.Y.Z
+```
+
+**`make quality` is NOT sufficient to tag.** It deselects the `live`-marked tests, so it is silent about anything that only fails against a real external service. `make release-gate` runs `quality` *and* `live`, and sets `NEOGRAPH_REQUIRE_LIVE=1` so absent credentials are a hard collection ERROR rather than a skip — the gate cannot report success without actually reaching Langfuse.
+
+**Tag the commit you gated.** Not a later one, and not the branch tip if it moved.
+
+This exists because 0.7.4 was tagged after a green `make quality` on merged `main` that had silently skipped the two live tests for want of exported keys; one of them was flaky and the tag went out with it. The build was caught at the manual-approval gate and the tag was moved before anything reached PyPI, but only by luck of the reviewer gate. The rule is now mechanical, not remembered.
 
 **Never publish directly.** The GitHub Actions workflow is the only publish path. This gives us a pypi.org Trusted Publisher gate + an optional manual-approval environment reviewer.
+
+**If a tag must be moved** (nothing published yet — check `curl -s https://pypi.org/pypi/neograph/json | jq -r .info.version`): cancel the pending run first (`gh run cancel <id>`) so it cannot be approved by accident, then `git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`, re-gate, re-tag, re-push. Once a version is on PyPI it can never be reused — at that point the only path is a new patch version.
 
 ---
 
@@ -626,6 +643,27 @@ lives in the `DESIGN` field of the DEFER epic `neograph-jtawq`.
 30+ runnable examples in `examples/`, most narrated as a walkthrough on neograph.pro. Most use `@node` except two that stay declarative (example 10 mixed, example 11 config injection). Example 27 is the ForwardConstruct imperative-wiring showcase (branch/self.loop/self.each/self.ensemble/self.interrupt, keyless, pinned by `tests/test_example_forward_wiring.py`). Examples 28/29 are the `Portal` dynamic-handoff showcases (peer-routing mesh + runtime flow dispatch), pinned by `tests/test_example_portal.py` / `tests/test_example_portal_dynamic_flow.py`. Sub-constructs (example 05) can now use either `@node` with `construct_from_functions(input=, output=)` or declarative `Construct(input=, output=, nodes=[...])`.
 
 **Examples must run end-to-end.** Breaking one is a regression. When you change an API surface, run every example that doesn't require real API keys (01, 01c, 02, 03, 04, 05, 06, 08, 09, 10). The keyed examples are 07 and observable_pipeline.py — both hit real OpenRouter (observable_pipeline additionally pushes to Langfuse; run it with `--extra langfuse`), and both were verified passing end-to-end on 2026-07-09. Example 11 was converted to a FakeLLM and is keyless. Document any new failures separately.
+
+### Live Langfuse correlation check — needs REAL keys
+
+`tests/test_observe_trace_live.py` is the only test that talks to a live external
+service. It proves the half of neograph-s65y2 the offline suite structurally
+cannot: that Langfuse actually records the trace under the id neograph derived
+from `run_id` (`Langfuse.create_trace_id(seed=run_id)`, handed over as
+`trace_context`). Its control asserts the raw `run_id` still 404s — that was the
+original bug, and a 200 there would mean the two identity spaces collided.
+
+```bash
+set -a && . .env && set +a
+uv run --extra dev --extra langfuse pytest tests/test_observe_trace_live.py
+```
+
+Without `LANGFUSE_SECRET_KEY` + `LANGFUSE_PUBLIC_KEY` the module skips (2 skips
+in the default gate's count). **That skip is a documented hole, not coverage** —
+a green `make quality` says nothing about the live path. Re-run it after any
+change to `_merge_observe_callbacks`, `_identity_binds`, or the langfuse pin.
+Langfuse ingests asynchronously (~25s observed to first 200), so the test polls;
+it is slow by nature and deliberately not in the default gate.
 
 ### MCP examples (23/24/25/26) — no-key but need the `mcp-examples` extra
 

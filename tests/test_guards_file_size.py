@@ -81,7 +81,7 @@ ALLOWLIST: dict[str, int] = {
     "lint.py": 633,
     "loader.py": 1181,
     "modifiers.py": 881,
-    "runner.py": 685,
+    "runner.py": 679,
     "spec_types.py": 521,
     "testing/fakes.py": 729,
     "testing/scaffold.py": 664,

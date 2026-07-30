@@ -22,6 +22,7 @@ from langgraph.types import Command
 from pydantic import ValidationError
 
 from neograph._compiled import CompiledNeograph
+from neograph._config_carrier import _with_configurable
 from neograph._state_keys import StateKeys, _strip_internals
 from neograph.errors import ConfigurationError, ExecutionError
 
@@ -96,11 +97,8 @@ def _inject_input_to_config(
     (node_id, project_root, etc.) is accessible via config["configurable"]
     without reaching into state.
     """
-    config = config or {}
-    configurable = config.get("configurable", {})
     # Input fields become configurable (input takes precedence)
-    merged = {**configurable, **input}
-    return {**config, "configurable": merged}
+    return _with_configurable(config or {}, **input)
 
 
 def _has_existing_checkpoint(graph: CompiledNeograph, config: RunnableConfig) -> bool:
@@ -177,9 +175,7 @@ def _mark_stream_custom(config: RunnableConfig | None) -> RunnableConfig:
     non-streaming driver (review L1). Builds a fresh dict — never mutates the
     caller's config in place. The flag is a config['configurable'] entry, so it
     never enters state and cannot touch the schema fingerprint."""
-    config = config or {}
-    configurable = {**config.get("configurable", {}), StateKeys.STREAM_CUSTOM: True}
-    return {**config, "configurable": configurable}
+    return _with_configurable(config or {}, **{StateKeys.STREAM_CUSTOM: True})
 
 
 def _mint_run_id(config: RunnableConfig | None) -> RunnableConfig:
@@ -194,9 +190,7 @@ def _mint_run_id(config: RunnableConfig | None) -> RunnableConfig:
     enters state and cannot touch the schema fingerprint or persist in a
     checkpoint. NOT accepted from the caller — always framework-minted via
     ``uuid4().hex`` — which is what keeps it fresh-per-attempt."""
-    config = config or {}
-    configurable = {**config.get("configurable", {}), StateKeys.RUN_ID: uuid4().hex}
-    return {**config, "configurable": configurable}
+    return _with_configurable(config or {}, **{StateKeys.RUN_ID: uuid4().hex})
 
 
 def _wants_custom(stream_mode: str | list[str]) -> bool:

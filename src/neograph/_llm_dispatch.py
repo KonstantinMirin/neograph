@@ -24,6 +24,7 @@ from neograph._llm_retry import (
     _ainvoke_json_with_retry,
     _invoke_json_with_retry,
     arecover_dsml,
+    empty_response_retry_messages,
     recover_dsml,
     structured_retry_messages,
 )
@@ -121,8 +122,14 @@ def _call_structured(
     - ``Parsed`` — return the model and its usage.
     - ``Raw(dsml=True)`` — content-level DSML recovery via ``recover_dsml`` (a
       retry concern); usage from the original response is preserved.
-    - ``Raw`` (no DSML, the ``parsed=None`` silent variant) — preserve the
-      legacy passthrough: return ``(None, usage)`` without re-prompting.
+    - ``Raw`` (no DSML, the ``parsed=None`` silent variant) — neograph-yqrsz: an
+      empty or otherwise undecodable body. Nothing reached validation, so there
+      is no ``ValidationError`` to feed back; re-prompt with an empty-response
+      hint on the SAME ``max_retries`` budget as the validation arm and raise
+      only once it is spent. Fail-loud is preserved, just not on the first
+      occurrence — an empty response is the most likely transient provider
+      failure, and it previously got zero retries while a less likely one got
+      ``max_retries``.
     - ``Failed(ValidationError)`` — the provider's constrained decode emitted
       structurally-valid JSON that failed the output model's validation (a
       weakly-enforced decode). Re-prompt the SAME structured adapter with the
@@ -158,7 +165,15 @@ def _call_structured(
                             return recovered, usage
                     _raise_markup_unrecoverable(output_model, raw_text)
                 case Raw(raw_text=raw_text, usage=_usage):
-                    _raise_decoded_none(output_model, raw_text)
+                    if attempts >= max_retries:
+                        _raise_decoded_none(output_model, raw_text)
+                    attempts += 1
+                    current_messages = empty_response_retry_messages(
+                        current_messages,
+                        raw_text,
+                        output_model,
+                    )
+                    continue
                 case Failed(error=err, raw_text=raw_text) if isinstance(err, ValidationError):
                     if attempts >= max_retries:
                         _raise_structured_retry_exhausted(output_model, err, attempts)
@@ -235,8 +250,16 @@ async def _acall_structured(
                         if recovered is not None:
                             return recovered, usage
                     _raise_markup_unrecoverable(output_model, raw_text)
-                case Raw(raw_text=raw_text, usage=_usage):
-                    _raise_decoded_none(output_model, raw_text)  # async twin
+                case Raw(raw_text=raw_text, usage=_usage):  # async twin
+                    if attempts >= max_retries:
+                        _raise_decoded_none(output_model, raw_text)
+                    attempts += 1
+                    current_messages = empty_response_retry_messages(
+                        current_messages,
+                        raw_text,
+                        output_model,
+                    )
+                    continue
                 case Failed(error=err, raw_text=raw_text) if isinstance(err, ValidationError):
                     if attempts >= max_retries:
                         _raise_structured_retry_exhausted(output_model, err, attempts)

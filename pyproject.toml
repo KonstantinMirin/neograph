@@ -32,7 +32,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-langfuse = ["langfuse>=3.0"]
+# >=3.11: first version whose langchain CallbackHandler accepts
+# trace_context=, which neograph-s65y2 uses to pin the trace id to a
+# value derived from the run id (measured by bisect; 3.10 takes only
+# public_key). create_trace_id(seed=) exists from 3.0 and is stable.
+langfuse = ["langfuse>=3.11"]
 # neograph-xdt2: the optional consumer-side MCP client DX battery ships as a
 # SECOND top-level package (src/neograph_mcp) — graduating the client stitching
 # the g4q9 examples hand-roll into a shipped, overridable helper. Same deps/pin as
@@ -149,6 +153,12 @@ filterwarnings = [
 ]
 markers = [
     "perf: marks async/sync per-node overhead perf gates (neograph-w74k.2.6 Phase 1f)",
+    # Talks to a REAL external service. Deselected from the default suite by the
+    # Makefile's `test` target (-m "not live") so the dev loop stays offline,
+    # fast and deterministic — otherwise these run whenever LANGFUSE_* happen to
+    # be exported, making `make quality` network-bound. Run via `make live` or
+    # `make release-gate`.
+    "live: marks tests that require real external credentials and network",
 ]
 
 [dependency-groups]
@@ -161,7 +171,7 @@ dev = [
     "hypothesis>=6.151.12",
     "langchain>=1.0",
     "langchain-openai>=1.2.2",
-    "langfuse>=3.0",
+    "langfuse>=3.11",
     # neograph-w74k.2.5 (Phase 1e): file-backed Sqlite savers for the async
     # checkpointer + mixed-driver resume + crash-recovery E2Es. In the default
     # dependency-group (installed by `uv sync` / `uv run pytest`) — NOT an

@@ -9,7 +9,7 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
-from neograph._config_carrier import _with_configurable, run_id_of
+from neograph._config_carrier import _with_configurable, run_id_of, trace_id_of
 from neograph._dispatch import ModeDispatch, NodeInput
 from neograph._input_shape import _extract_context, _extract_input
 from neograph._normalize import normalize_inputs
@@ -38,16 +38,29 @@ def _type_name(t: TypeSpecStatic) -> str | None:
     return type_display_name(t)
 
 
-def _run_id_binds(config: RunnableConfig) -> dict[str, str]:
-    """structlog bind kwargs carrying the per-run id, or ``{}`` when absent.
+def _identity_binds(config: RunnableConfig) -> dict[str, str]:
+    """structlog bind kwargs carrying this run's identities, or ``{}`` when absent.
 
     The framework-minted ``RUN_ID`` (config['configurable']) is a natural
     trace-correlation key. Surfaced here on the node lifecycle spans so every
     node_start/node_complete line for one run shares the same id. Omitted (not
     bound as ``None``) when the id is absent — e.g. a node invoked outside a
-    run()/arun() driver — so a direct-invoke log line stays clean."""
+    run()/arun() driver — so a direct-invoke log line stays clean.
+
+    ``TRACE_ID`` rides alongside it whenever ``observe=`` attached a handler we
+    own, making the logs joinable to the Langfuse trace by an exact id rather
+    than by ``run_name`` (caller-supplied, not unique, and it degrades silently).
+    It is DERIVED from the run id, so this adds a field without adding an
+    identity. Absent — never null — when no trace of ours exists, so a log line
+    never advertises a trace id that names nothing."""
+    binds = {}
     run_id = run_id_of(config)
-    return {"run_id": run_id} if run_id else {}
+    if run_id:
+        binds["run_id"] = run_id
+    trace_id = trace_id_of(config)
+    if trace_id:
+        binds["trace_id"] = trace_id
+    return binds
 
 
 def _inject_resource_manifest(state: BaseModel, node: Node, config: RunnableConfig) -> RunnableConfig:
@@ -94,7 +107,7 @@ def _execute_node(
     non-None, we return immediately and do NOT call _build_state_update.
     """
     field_name = field_name_for(node.name)
-    node_log = log.bind(node=node.name, mode=node.mode, **_run_id_binds(config))
+    node_log = log.bind(node=node.name, mode=node.mode, **_identity_binds(config))
     node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
 
     t0 = time.monotonic()
@@ -148,7 +161,7 @@ async def _aexecute_node(
     drift beyond these two lines (Core Invariant).
     """
     field_name = field_name_for(node.name)
-    node_log = log.bind(node=node.name, mode=node.mode, **_run_id_binds(config))
+    node_log = log.bind(node=node.name, mode=node.mode, **_identity_binds(config))
     node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
 
     t0 = time.monotonic()
