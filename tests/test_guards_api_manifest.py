@@ -94,9 +94,7 @@ def _load_gen_api_manifest():
         f"implemented (neograph-ryn4h). Expected at {SCRIPT_PATH}."
     )
     spec = importlib.util.spec_from_file_location("gen_api_manifest", SCRIPT_PATH)
-    assert spec is not None and spec.loader is not None, (
-        f"could not build a module spec for {SCRIPT_PATH}"
-    )
+    assert spec is not None and spec.loader is not None, f"could not build a module spec for {SCRIPT_PATH}"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -106,18 +104,20 @@ def _load_gen_api_manifest():
 # `kind="[a-z_]+"` | sort -u). The extractor must yield AT LEAST these -- the
 # floor catches kind=variable drift (an AST walk for string-literal kwargs
 # silently misses a variable assignment).
-_KNOWN_LINT_KIND_FLOOR = frozenset({
-    "act_mode_all_idempotent_tools",
-    "ask_human_in_mutating_node",
-    "llm_kwargs_missing",
-    "loop_condition_none_unsafe",
-    "loop_condition_unregistered",
-    "resource_hydration_kind_unmatched",
-    "template_placeholder_known_vars_only",
-    "template_placeholder_unresolvable",
-    "template_var_requires_async_driver",
-    "tool_requires_async_driver",
-})
+_KNOWN_LINT_KIND_FLOOR = frozenset(
+    {
+        "act_mode_all_idempotent_tools",
+        "ask_human_in_mutating_node",
+        "llm_kwargs_missing",
+        "loop_condition_none_unsafe",
+        "loop_condition_unregistered",
+        "resource_hydration_kind_unmatched",
+        "template_placeholder_known_vars_only",
+        "template_placeholder_unresolvable",
+        "template_var_requires_async_driver",
+        "tool_requires_async_driver",
+    }
+)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -142,14 +142,12 @@ class TestApiManifestFreshness:
         """
         gen = _load_gen_api_manifest()
         assert CORE_MANIFEST_PATH.exists(), (
-            f"core manifest not committed at {CORE_MANIFEST_PATH}. "
-            f"Run: python scripts/gen_api_manifest.py"
+            f"core manifest not committed at {CORE_MANIFEST_PATH}. Run: python scripts/gen_api_manifest.py"
         )
         on_disk = json.loads(CORE_MANIFEST_PATH.read_text())
         generated = gen.build_manifest()
         assert on_disk == generated, (
-            "api-manifest.json drifted from build_manifest(). "
-            "Regenerate with:  python scripts/gen_api_manifest.py"
+            "api-manifest.json drifted from build_manifest(). Regenerate with:  python scripts/gen_api_manifest.py"
         )
 
     def test_core_manifest_was_generated_with_sort_keys_for_byte_stability(self):
@@ -238,14 +236,10 @@ class TestApiManifestFreshness:
         manifest = gen.build_manifest()
         symbols = manifest.get("symbols") or manifest.get("api_symbols") or []
         by_name = {s["name"]: s for s in symbols}
-        assert "ForwardConstruct" in by_name, (
-            "ForwardConstruct missing from manifest symbols -- __all__ walk is broken"
-        )
+        assert "ForwardConstruct" in by_name, "ForwardConstruct missing from manifest symbols -- __all__ walk is broken"
         forward_construct = by_name["ForwardConstruct"]
         # ForwardConstruct is a Pydantic BaseModel subclass -> it has a "fields" key.
-        assert "fields" in forward_construct, (
-            "Pydantic model entry missing the 'fields' key -- schema drift"
-        )
+        assert "fields" in forward_construct, "Pydantic model entry missing the 'fields' key -- schema drift"
         assert forward_construct["fields"] == [], (
             f"ForwardConstruct must emit ZERO declared fields (pure subclass of "
             f"Construct), saw {len(forward_construct['fields'])} -- the MRO "
@@ -284,9 +278,7 @@ class TestApiManifestFreshness:
         for symbol in symbols:
             name = symbol.get("name")
             anchor = symbol.get("anchor")
-            assert name is not None and anchor is not None, (
-                f"symbol entry missing name/anchor keys: {symbol!r}"
-            )
+            assert name is not None and anchor is not None, f"symbol entry missing name/anchor keys: {symbol!r}"
             base = gen.slug(name)
             if base_counts[base] == 1:
                 assert anchor == base, (
@@ -303,8 +295,7 @@ class TestApiManifestFreshness:
                 )
             # Every anchor must be slug-stable so Starlight reproduces it exactly.
             assert gen.slug(anchor) == anchor, (
-                f"symbol {name!r} anchor {anchor!r} is not slug-stable "
-                f"(slug({anchor!r}) == {gen.slug(anchor)!r})."
+                f"symbol {name!r} anchor {anchor!r} is not slug-stable (slug({anchor!r}) == {gen.slug(anchor)!r})."
             )
             # And distinct across the whole surface (the Stage C crux).
             assert anchor not in seen_anchors, (
@@ -355,13 +346,13 @@ class TestAnchorSlugFidelity:
         #     These catch divergence from the JS package on whitespace, dashes,
         #     and the strip-punctuation character class.
         ("a_quick_brown_fox", "a_quick_brown_fox"),  # underscores preserved
-        ("hello world", "hello-world"),              # whitespace -> dash
-        ("foo.bar", "foobar"),                       # dots stripped
-        ("UPPER CASE", "upper-case"),                # case-fold + whitespace
-        ("with-dash", "with-dash"),                  # dashes preserved
-        ("with/slash", "withslash"),                 # slashes stripped
-        ("foo!bar", "foobar"),                       # punctuation stripped
-        ("foo#bar", "foobar"),                       # hash stripped
+        ("hello world", "hello-world"),  # whitespace -> dash
+        ("foo.bar", "foobar"),  # dots stripped
+        ("UPPER CASE", "upper-case"),  # case-fold + whitespace
+        ("with-dash", "with-dash"),  # dashes preserved
+        ("with/slash", "withslash"),  # slashes stripped
+        ("foo!bar", "foobar"),  # punctuation stripped
+        ("foo#bar", "foobar"),  # hash stripped
     ]
 
     @pytest.mark.parametrize("raw, expected", _SNAPSHOTS)
@@ -456,8 +447,12 @@ def _derive_literal_kind_severities() -> dict[str, set[bool]]:
     emitted at multiple sites with conflicting ``required`` (the dual case).
     DI kinds use ``kind=variable`` and are invisible to this literal walk.
     """
-    lint_path = REPO_ROOT / "src" / "neograph" / "lint.py"
-    tree = ast.parse(lint_path.read_text())
+    # The FILE LIST comes from the generator (single source, neograph-3ffdg.10
+    # split lint.py into a cluster); the WALK below stays independent, which is
+    # the point of this cross-check.
+    gen = _load_gen_api_manifest()
+    src_dir = REPO_ROOT / "src" / "neograph"
+    tree = ast.parse("\n".join((src_dir / name).read_text() for name in gen.LINT_CLUSTER_MODULES))
     out: dict[str, set[bool]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -465,17 +460,9 @@ def _derive_literal_kind_severities() -> dict[str, set[bool]]:
         kind_val: str | None = None
         required_val: bool = False  # LintIssue.required default
         for kw in node.keywords:
-            if (
-                kw.arg == "kind"
-                and isinstance(kw.value, ast.Constant)
-                and isinstance(kw.value.value, str)
-            ):
+            if kw.arg == "kind" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
                 kind_val = kw.value.value
-            elif (
-                kw.arg == "required"
-                and isinstance(kw.value, ast.Constant)
-                and isinstance(kw.value.value, bool)
-            ):
+            elif kw.arg == "required" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, bool):
                 required_val = kw.value.value
         if kind_val is not None:
             out.setdefault(kind_val, set()).add(required_val)
@@ -495,8 +482,7 @@ class TestLintIssueKindEnrichment:
 
     def _entries(self) -> list:
         assert CORE_MANIFEST_PATH.exists(), (
-            f"core manifest not committed at {CORE_MANIFEST_PATH}. "
-            f"Run: python scripts/gen_api_manifest.py"
+            f"core manifest not committed at {CORE_MANIFEST_PATH}. Run: python scripts/gen_api_manifest.py"
         )
         manifest = json.loads(CORE_MANIFEST_PATH.read_text())
         assert "lint_issue_kinds" in manifest, "manifest missing lint_issue_kinds"
@@ -517,8 +503,7 @@ class TestLintIssueKindEnrichment:
                 f"is still a bare list of name strings (not enriched)."
             )
             assert {"kind", "severity", "meaning"} <= set(entry), (
-                f"lint_issue_kinds entry {entry!r} missing one of "
-                f"kind/severity/meaning keys."
+                f"lint_issue_kinds entry {entry!r} missing one of kind/severity/meaning keys."
             )
 
     def test_kind_set_is_complete_including_the_four_di_kinds(self):
@@ -544,8 +529,7 @@ class TestLintIssueKindEnrichment:
         )
         extra = kinds - _COMPLETE_LINT_KIND_SET
         assert not extra, (
-            f"manifest lint_issue_kinds has unexpected kinds {sorted(extra)} not "
-            f"in the known 14-kind set."
+            f"manifest lint_issue_kinds has unexpected kinds {sorted(extra)} not in the known 14-kind set."
         )
 
     def test_every_entry_has_nonempty_meaning_and_allowed_severity(self):
@@ -555,9 +539,7 @@ class TestLintIssueKindEnrichment:
         FAILS today: entries are bare strings with no meaning/severity at all.
         """
         for entry in self._entries():
-            assert isinstance(entry, dict), (
-                f"entry {entry!r} is not an object -- enrichment missing."
-            )
+            assert isinstance(entry, dict), f"entry {entry!r} is not an object -- enrichment missing."
             meaning = entry.get("meaning")
             assert isinstance(meaning, str) and meaning.strip(), (
                 f"lint kind {entry.get('kind')!r} has empty/missing meaning "
@@ -585,9 +567,7 @@ class TestLintIssueKindEnrichment:
         derived = _derive_literal_kind_severities()
         by_kind = {}
         for entry in self._entries():
-            assert isinstance(entry, dict), (
-                f"entry {entry!r} is not an object -- enrichment missing."
-            )
+            assert isinstance(entry, dict), f"entry {entry!r} is not an object -- enrichment missing."
             by_kind[entry["kind"]] = entry["severity"]
 
         for kind in _COMPLETE_LINT_KIND_SET:
@@ -609,10 +589,7 @@ class TestLintIssueKindEnrichment:
                     f"code no longer emits it at both required=True and "
                     f"required=False sites (saw {derived.get(kind)}). Re-derive."
                 )
-                assert stored == "WARN/ERROR", (
-                    f"dual-severity kind {kind!r} must store 'WARN/ERROR', "
-                    f"got {stored!r}."
-                )
+                assert stored == "WARN/ERROR", f"dual-severity kind {kind!r} must store 'WARN/ERROR', got {stored!r}."
                 continue
 
             required_values = derived.get(kind)
@@ -675,7 +652,7 @@ def _extract_reference_region(mdx_text: str) -> str:
         f"api.mdx sentinel markers are out of order: START at {start}, END at "
         f"{end}. The generated region must be START ... END."
     )
-    return mdx_text[start + len(GEN_REGION_START):end]
+    return mdx_text[start + len(GEN_REGION_START) : end]
 
 
 def _reference_heading_slugs(mdx_text: str, gen) -> list[str]:
@@ -790,7 +767,8 @@ class TestReferenceSectionRendering:
         collision_anchors = sorted(
             s["anchor"]
             for s in symbols
-            if s.get("kind") != "exception" and "-" in s["anchor"]
+            if s.get("kind") != "exception"
+            and "-" in s["anchor"]
             and s["anchor"].rsplit("-", 1)[1] in gen._KIND_ANCHOR_TAG.values()
         )
         assert collision_anchors, (
@@ -861,9 +839,7 @@ class TestFieldAnchorRendering:
         symbols = manifest.get("symbols") or manifest.get("api_symbols") or []
         by_name = {s["name"]: s for s in symbols}
         node = by_name.get("Node")
-        assert node is not None and node.get("fields"), (
-            "Node model symbol with fields expected in the manifest."
-        )
+        assert node is not None and node.get("fields"), "Node model symbol with fields expected in the manifest."
         assert node["anchor"] == "node-model", (
             f"Node model anchor drifted to {node['anchor']!r}; the field-anchor "
             f"scheme derives node-model-outputs from it."
@@ -895,10 +871,7 @@ class TestFieldAnchorRendering:
         rendered = gen.render_reference_sections()
         manifest = gen.build_manifest()
         symbols = manifest.get("symbols") or manifest.get("api_symbols") or []
-        fielded = [
-            s for s in symbols
-            if s.get("kind") != "exception" and s.get("fields")
-        ]
+        fielded = [s for s in symbols if s.get("kind") != "exception" and s.get("fields")]
         assert fielded, "expected fielded symbols in the manifest -- walk broke."
         # A concrete sample must be present so the guard is not vacuously green if
         # the manifest ever loses its fielded symbols.
@@ -912,9 +885,9 @@ class TestFieldAnchorRendering:
         for sym in fielded:
             anchor = sym["anchor"]
             for field in sym["fields"]:
-                field_anchor = f'{anchor}-{field["name"]}'
+                field_anchor = f"{anchor}-{field['name']}"
                 if f'id="{field_anchor}"' not in rendered:
-                    missing.append(f'{sym["name"]}.{field["name"]} -> {field_anchor}')
+                    missing.append(f"{sym['name']}.{field['name']} -> {field_anchor}")
         assert not missing, (
             "render_reference_sections() is missing per-field anchor id(s) for "
             f"{len(missing)} field(s); first few: {missing[:8]}. Each field row "
@@ -945,7 +918,7 @@ class TestFieldAnchorRendering:
                     f"field {sym['name']}.{name!r} is not a lowercase snake "
                     f"identifier; slug(name)==name (and the derived anchor) breaks."
                 )
-                field_anchors.add(f'{sym["anchor"]}-{name}')
+                field_anchors.add(f"{sym['anchor']}-{name}")
         collisions = field_anchors & symbol_anchors
         assert not collisions, (
             f"field anchors collide with symbol anchors: {sorted(collisions)}. "
@@ -1061,9 +1034,7 @@ class TestErrorHierarchyTreeConsistency:
             for name in tree
             if name in manifest_parent and tree[name] != manifest_parent[name]
         ]
-        assert not problems, (
-            "error-tree parent links drifted from the manifest:\n" + "\n".join(problems)
-        )
+        assert not problems, "error-tree parent links drifted from the manifest:\n" + "\n".join(problems)
 
     def test_no_exception_class_is_a_markdown_heading(self):
         """No exception class appears as a markdown HEADING (fence-aware).
@@ -1087,8 +1058,14 @@ class TestErrorHierarchyTreeConsistency:
     def test_slip_tree_branch_re(self):
         """_TREE_BRANCH_RE matches ├──/└── child lines (with │ rails) and rejects
         the glyph-less root and prose."""
-        assert _TREE_BRANCH_RE.match("  ├── ConstructError (ValueError)  — x").group("rest").startswith("ConstructError")
-        assert _TREE_BRANCH_RE.match("  │     └── CheckpointSchemaError  — y").group("rest").startswith("CheckpointSchemaError")
+        assert (
+            _TREE_BRANCH_RE.match("  ├── ConstructError (ValueError)  — x").group("rest").startswith("ConstructError")
+        )
+        assert (
+            _TREE_BRANCH_RE.match("  │     └── CheckpointSchemaError  — y")
+            .group("rest")
+            .startswith("CheckpointSchemaError")
+        )
         # Root line has no branch glyph -> no match.
         assert _TREE_BRANCH_RE.match("NeographError (base)") is None
         # Prose / empty rest -> no match.
@@ -1158,7 +1135,7 @@ def _extract_lint_kind_region(mdx_text: str) -> str:
         f"api.mdx lint-kind sentinel markers are out of order: START at {start}, "
         f"END at {end}. The generated region must be START ... END."
     )
-    return mdx_text[start + len(LINT_KINDS_REGION_START):end]
+    return mdx_text[start + len(LINT_KINDS_REGION_START) : end]
 
 
 class TestLintKindTableRendering:
@@ -1259,9 +1236,7 @@ _RE_BARE_SNAKE = re.compile(r"^[a-z][a-z0-9_]+$")
 # Extracts the two `const RE_BARE_... = /<body>/;` regex literals from the
 # plugin so the cross-source pin can compare the plugin's LITERAL pattern body
 # against the Python mirror above. PROC-2: NAMED constant with a test_slip_*.
-_MJS_BARE_REGEX_LITERAL_RE = re.compile(
-    r"const\s+(?P<name>RE_BARE_[A-Z]+)\s*=\s*/(?P<body>.+?)/\s*;"
-)
+_MJS_BARE_REGEX_LITERAL_RE = re.compile(r"const\s+(?P<name>RE_BARE_[A-Z]+)\s*=\s*/(?P<body>.+?)/\s*;")
 
 # Deliberate exclusion 1 -- exception-kind symbols. All PascalCase (=>
 # SOFT-linkable by RE_BARE_PASCAL), BUT they render as uorb4's FENCED
@@ -1357,9 +1332,7 @@ class TestCrossLinkCoverageCapstone:
         neither regex) surfaces LOUDLY here instead of being silently dropped
         from the coverage set."""
         gen = _load_gen_api_manifest()
-        unlinkable = sorted(
-            s["name"] for s in self._symbols(gen) if not self._is_bare_linkable(s["name"])
-        )
+        unlinkable = sorted(s["name"] for s in self._symbols(gen) if not self._is_bare_linkable(s["name"]))
         assert unlinkable == list(INTENTIONALLY_INERT), (
             f"manifest carries publicly-unlinkable symbol name(s) {unlinkable} "
             f"matching NEITHER bare regex. Either the plugin predicate changed "
@@ -1376,14 +1349,10 @@ class TestCrossLinkCoverageCapstone:
         runtime-vs-lint lockstep). Reads the two `const RE_BARE_... = /.../;`
         literals out of the plugin and compares pattern bodies byte-for-byte."""
         assert PLUGIN_PATH.exists(), (
-            f"remark-api plugin missing at {PLUGIN_PATH} -- cannot cross-pin the "
-            f"bare-token predicate."
+            f"remark-api plugin missing at {PLUGIN_PATH} -- cannot cross-pin the bare-token predicate."
         )
         plugin_src = PLUGIN_PATH.read_text()
-        found = {
-            m.group("name"): m.group("body")
-            for m in _MJS_BARE_REGEX_LITERAL_RE.finditer(plugin_src)
-        }
+        found = {m.group("name"): m.group("body") for m in _MJS_BARE_REGEX_LITERAL_RE.finditer(plugin_src)}
         assert {"RE_BARE_PASCAL", "RE_BARE_SNAKE"} <= set(found), (
             f"could not extract both bare-token regex literals from the plugin; "
             f"found {sorted(found)}. remark-api.mjs:38-39 may have been renamed "
@@ -1431,7 +1400,7 @@ class TestCrossLinkCoverageCapstone:
             "no autolinkable heading found in api.mdx to mutate -- the coverage "
             "guard cannot be mutation-proven (headings missing entirely?)."
         )
-        mutated = "\n".join(lines[:drop_idx] + lines[drop_idx + 1:])
+        mutated = "\n".join(lines[:drop_idx] + lines[drop_idx + 1 :])
         # Sanity: the mutation removed a real anchor heading.
         assert mutated != text, "mutation did not change the text"
         with pytest.raises(AssertionError):

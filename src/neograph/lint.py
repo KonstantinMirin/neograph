@@ -9,31 +9,62 @@ Returns a list of LintIssue dataclass instances (never raises — reports all pr
 
 from __future__ import annotations
 
-import asyncio
-import string
+# --- names lint.py imported and RE-EXPORTED before the split; the moved
+# --- clusters were their only local consumers here.
+import asyncio  # noqa: E402,F401
+import string  # noqa: E402,F401
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass  # noqa: E402,F401
 from typing import Any
 
 import structlog
 
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
+
+# --- extracted clusters (neograph-3ffdg.10), re-exported so existing
+# --- `from neograph.lint import ...` call sites keep resolving unchanged.
+from neograph._lint_kind_registry import (  # noqa: E402,F401
+    LINT_KIND_META,
+    LintIssue,
+    LintKindMeta,
+)
+from neograph._lint_predict import (  # noqa: E402,F401
+    _di_resource_template_var_names,
+    _di_template_var_names,
+    _extract_format_placeholders,
+    _get_flattened_field_names,
+    _predict_input_keys,
+    _resolve_return_type,
+)
+from neograph._lint_tool_checks import (  # noqa: E402,F401
+    _TOOL_BODY_ATTRS,
+    _check_act_mode_all_idempotent,
+    _check_ask_human_in_mutating_node,
+    _check_async_only_tools,
+    _resolve_tool_object,
+    _spec_factory,
+    _tool_references_ask_human,
+)
 from neograph._llm_runtime import (
     _ACCEPT_ALL,
     _accepted_params,
     collect_llm_nodes,
     missing_runtime_kwargs,
 )
-from neograph._normalize import normalize_inputs
+from neograph._normalize import normalize_inputs  # noqa: E402,F401
 from neograph._placeholders import DOLLAR_RE
 from neograph._runtime_registry import _decoration_registry
 from neograph._sidecar import _get_param_res, get_merge_fn_metadata
 from neograph._state_keys import StateKeys
 from neograph.construct import Construct
-from neograph.di import DI_TEMPLATE_KINDS, DIBinding, DIKind
+from neograph.di import (
+    DI_TEMPLATE_KINDS,  # noqa: E402,F401
+    DIBinding,
+    DIKind,
+)
 from neograph.node import Node
-from neograph.tool import Tool, is_async_only_tool
+from neograph.tool import Tool, is_async_only_tool  # noqa: E402,F401
 
 log = structlog.get_logger()
 
@@ -50,131 +81,6 @@ _KNOWN_EXTRAS: frozenset[str] = frozenset(
 # (byte-identical dedup: lint collects names, prompt.substitute fills them, both
 # off one grammar). Aliased to preserve the existing local name.
 _PLACEHOLDER_RE = DOLLAR_RE
-
-
-@dataclass
-class LintIssue:
-    """A single lint problem — DI binding or template placeholder."""
-
-    node_name: str
-    param: str
-    kind: str
-    message: str
-    required: bool = False
-
-
-@dataclass(frozen=True)
-class LintKindMeta:
-    """Severity + one-line human meaning for a single lint kind."""
-
-    severity: str  # one of: ERROR | WARN | WARN/ERROR | varies
-    meaning: str
-
-
-# Authoritative metadata for every kind lint() can emit. Task neograph-uw54v.
-#
-# SINGLE SOURCE OF TRUTH for lint-kind severity + meaning. scripts/
-# gen_api_manifest.py reads this to build the manifest's ``lint_issue_kinds`` as
-# ``{kind, severity, meaning}`` objects; the website reference lint table
-# renders from that manifest (Stage C, neograph-cvjfm) instead of a
-# hand-authored, drift-prone copy.
-#
-# Severity discipline (refinement neograph-uqy66.52): for a kind emitted at a
-# SINGLE LintIssue(...) site with a literal ``required=``, the severity below
-# MUST equal ``'ERROR' if required else 'WARN'`` — the canonical rule at
-# __main__.py:199. The manifest generator RE-DERIVES that from the ``ast.Call``
-# at the emission site and FAILS LOUD if this registry drifts, so a future
-# ``required=`` flip cannot silently diverge. Two sanctioned exceptions that
-# have no single derived value:
-#   - ``WARN/ERROR``: ``loop_condition_none_unsafe`` is emitted at two sites with
-#     conflicting ``required=`` (ERROR for registered string conditions that
-#     always crash on None, WARN for user callables that may guard None).
-#   - ``varies``: the 4 DI kinds are emitted with ``kind=binding.kind.value`` (a
-#     variable), and severity is the per-binding runtime ``required``.
-LINT_KIND_META: dict[str, LintKindMeta] = {
-    # DI bindings — kind=variable, severity is runtime binding.required-dependent.
-    "from_input": LintKindMeta(
-        "varies",
-        "`Annotated[T, FromInput]` -- resolved from `config['configurable']`, "
-        "originally from `run(input={...})`.",
-    ),
-    "from_config": LintKindMeta(
-        "varies",
-        "`Annotated[T, FromConfig]` -- resolved from `config['configurable']`, "
-        "passed directly in `config=`.",
-    ),
-    "from_input_model": LintKindMeta(
-        "varies",
-        "Bundled `BaseModel` via `FromInput` -- each model field must exist in "
-        "config.",
-    ),
-    "from_config_model": LintKindMeta(
-        "varies",
-        "Bundled `BaseModel` via `FromConfig` -- each model field must exist in "
-        "config.",
-    ),
-    # Template placeholders.
-    "template_placeholder_unresolvable": LintKindMeta(
-        "ERROR",
-        "Prompt placeholder not found in predicted input keys or known extras.",
-    ),
-    "template_placeholder_known_vars_only": LintKindMeta(
-        "WARN",
-        "Placeholder only resolvable via `known_template_vars`, not from actual "
-        "`@node` parameter names. Advisory: verify the consumer bridge supplies "
-        "it at runtime.",
-    ),
-    "template_var_requires_async_driver": LintKindMeta(
-        "WARN",
-        "A template var is a `FromResource` DI param whose fetch is awaited, so "
-        "it resolves only under the async `arun()` driver (sync `run()` fails "
-        "loud). Drive the graph with `arun()`.",
-    ),
-    # Loop conditions.
-    "loop_condition_unregistered": LintKindMeta(
-        "ERROR",
-        "Loop `when` is a string that is not registered in the condition "
-        "registry.",
-    ),
-    "loop_condition_none_unsafe": LintKindMeta(
-        "WARN/ERROR",
-        "Loop `when` callable raises when called with `None`. ERROR for "
-        "registered string conditions (always crash), WARN for user-supplied "
-        "callables (may handle None via other means).",
-    ),
-    # Tools.
-    "tool_requires_async_driver": LintKindMeta(
-        "WARN",
-        "An `agent`/`act` node is bound to an async-only tool (e.g. an MCP tool) "
-        "that cannot run under the sync `run()` driver. Drive the graph with "
-        "`arun()`.",
-    ),
-    "ask_human_in_mutating_node": LintKindMeta(
-        "WARN",
-        "An `act`-mode (mutating) tool calls `ask_human()`; a non-idempotent "
-        "side effect before the mid-loop pause can double-fire on resume. Make "
-        "any pre-pause mutation idempotent, or move it after the pause.",
-    ),
-    "act_mode_all_idempotent_tools": LintKindMeta(
-        "WARN",
-        "`mode='act'` (mutations) but all tools are `idempotent=True` "
-        "(read-only) -- probably a misclassification; use `mode='agent'` unless "
-        "a tool is a genuinely idempotent mutation.",
-    ),
-    # Runtime configuration.
-    "resource_hydration_kind_unmatched": LintKindMeta(
-        "ERROR",
-        "A node hydrates a manifest kind via `FromResource(ref=...)` but the "
-        "construct has no upstream `agent`/`act` node that can emit a "
-        "`resource_link`, so the manifest is guaranteed empty at runtime.",
-    ),
-    "llm_kwargs_missing": LintKindMeta(
-        "WARN",
-        "LLM-mode nodes require `llm_factory` and `prompt_compiler` at "
-        "`compile()` time. Pass these kwargs to `compile()` (or configure via "
-        "`configure_llm()`, legacy).",
-    ),
-}
 
 
 def _check_binding(
@@ -720,349 +626,8 @@ def _check_loop_condition(
             )
 
 
-def _check_async_only_tools(
-    node: Node,
-    issues: list[LintIssue],
-    *,
-    tool_factories: dict[str, Callable] | None = None,
-) -> None:
-    """Flag agent/act nodes bound to an async-only (MCP) tool.
-
-    An async-only tool (StructuredTool with a coroutine and no sync func — the
-    langchain-mcp-adapters shape) cannot run under the sync ``run()`` driver;
-    it requires ``arun()``. lint() cannot know the driver statically, so it
-    warns whenever such a tool is bound. The tool object is resolved either from
-    ``Tool._bound_tool`` (raw BaseTool passed in tools=) or by instantiating the
-    registered factory.
-    """
-    if node.mode not in ("agent", "act") or not node.tools:
-        return
-
-    for spec in node.tools:
-        factory = _spec_factory(spec, tool_factories)
-        if factory is not None and asyncio.iscoroutinefunction(factory):
-            # An async tool factory requires the arun() driver. Classify it
-            # WITHOUT calling: invoking a coroutine factory here would create an
-            # un-awaited coroutine (RuntimeWarning) and misintrospect that
-            # coroutine object as the tool.
-            tool_name = str(getattr(spec, "name", None) or "?")
-            issues.append(
-                LintIssue(
-                    node_name=f"Node '{node.name}'",
-                    param=tool_name,
-                    kind="tool_requires_async_driver",
-                    required=False,
-                    message=(
-                        f"Node '{node.name}': tool '{tool_name}' has an async tool "
-                        "factory (e.g. it awaits a per-run token provider or builds "
-                        "an MCP client) and cannot run under the sync run() driver. "
-                        "Drive this graph with arun() so the async tool loop is used."
-                    ),
-                )
-            )
-            continue
-        tool_obj = _resolve_tool_object(spec, tool_factories)
-        if tool_obj is None:
-            continue
-        tool_name = str(getattr(spec, "name", None) or getattr(tool_obj, "name", "?"))
-        if is_async_only_tool(tool_obj):
-            issues.append(
-                LintIssue(
-                    node_name=f"Node '{node.name}'",
-                    param=tool_name,
-                    kind="tool_requires_async_driver",
-                    required=False,
-                    message=(
-                        f"Node '{node.name}': tool '{tool_name}' is async-only "
-                        "(e.g. an MCP tool) and cannot run under the sync run() "
-                        "driver. Drive this graph with arun() so the async tool "
-                        "loop is used."
-                    ),
-                )
-            )
-
-
 # Attribute names under which a tool object may carry its callable body. Covers
 # every shape ask_human can hide in: StructuredTool (@tool) uses .func/.coroutine,
 # a BaseTool subclass uses ._run/._arun, and a duck-typed class tool (the keystone
 # _AskTool shape) puts logic in .invoke/.ainvoke. Introspecting all of them keeps
 # the rule from silently no-opping on a shape it doesn't recognize.
-_TOOL_BODY_ATTRS = ("func", "coroutine", "_run", "_arun", "invoke", "ainvoke")
-
-
-def _tool_references_ask_human(tool_obj: Any) -> bool:
-    """True when any of a tool's callable bodies references ``ask_human`` by name.
-
-    Direct-reference heuristic: scans each body's ``__code__.co_names`` (which
-    includes imported and attribute-accessed names) for ``"ask_human"``. This is
-    exactly why ``ask_human`` is a NAMED marker — a raw ``interrupt()`` call is
-    invisible, but ``from neograph.hitl import ask_human`` shows up here. The
-    heuristic misses alias imports and indirection through helpers; a consumer
-    who alias-hides ``ask_human`` opts out of this safety net.
-    """
-    for attr in _TOOL_BODY_ATTRS:
-        fn = getattr(tool_obj, attr, None)
-        if fn is None:
-            continue
-        code = getattr(fn, "__code__", None) or getattr(getattr(fn, "__func__", None), "__code__", None)
-        if code is not None and "ask_human" in code.co_names:
-            return True
-    return False
-
-
-def _check_ask_human_in_mutating_node(
-    node: Node,
-    issues: list[LintIssue],
-    *,
-    tool_factories: dict[str, Callable] | None = None,
-) -> None:
-    """Warn when ``ask_human`` is reachable from an act-mode (mutating) node.
-
-    A non-idempotent side effect performed *before* a mid-loop pause in the same
-    node can double-fire on resume — LangGraph memoizes at node granularity, and
-    a ReAct loop runs many tool steps inside one node (the residual "Level-B"
-    case documented in docs/design/durable-execution-replay-research-2026-07-02.md).
-    ``ask_human`` makes the pause a marker the linter can see, so an act-mode
-    node carrying it is flagged.
-
-    This is a WARN (``required=False``): the legitimate ask_human-then-idempotent
-    -mutate pattern must not be blocked. The rule gates on the DECLARED
-    ``node.mode == 'act'`` (act == mutations, agent == read-only); a mutating tool
-    mislabeled ``mode='agent'`` escapes the net — an accepted limitation of
-    trusting the declared mode.
-    """
-    if node.mode != "act" or not node.tools:
-        return
-
-    for spec in node.tools:
-        tool_obj = _resolve_tool_object(spec, tool_factories)
-        if tool_obj is None:
-            continue
-        if _tool_references_ask_human(tool_obj):
-            tool_name = str(getattr(spec, "name", None) or getattr(tool_obj, "name", "?"))
-            issues.append(
-                LintIssue(
-                    node_name=f"Node '{node.name}'",
-                    param=tool_name,
-                    kind="ask_human_in_mutating_node",
-                    required=False,
-                    message=(
-                        f"Node '{node.name}': act-mode (mutating) tool '{tool_name}' "
-                        "calls ask_human(). A non-idempotent side effect before the "
-                        "mid-loop pause can double-fire on resume (node-granularity "
-                        "replay). Ensure any mutation before the ask_human() is "
-                        "idempotent, or move it after the pause."
-                    ),
-                )
-            )
-
-
-def _check_act_mode_all_idempotent(
-    node: Node,
-    issues: list[LintIssue],
-) -> None:
-    """Warn when an act-mode node's tools are ALL idempotent. See neograph-lhc6.
-
-    ``act`` declares mutations, ``agent`` declares read-only. A node whose every
-    tool is marked ``idempotent=True`` performs no non-idempotent side effect, so
-    ``mode='act'`` is almost certainly a misclassification -- it should be
-    ``agent`` (read-only). Flagging it keeps the act/agent distinction honest,
-    which the replay-safety gate (hydration re-derivation) relies on.
-
-    WARN (``required=False``): a genuinely idempotent mutation (HTTP PUT) is a
-    legitimate act-mode-of-idempotent-tools shape, so this must not block. The
-    rule fires only when EVERY tool is a ``Tool`` spec known to be idempotent; a
-    raw BaseTool or any non-idempotent spec has unknown/mutating side effects, so
-    the node cannot be concluded misclassified and the rule stays silent.
-    """
-    if node.mode != "act" or not node.tools:
-        return
-
-    if all(isinstance(spec, Tool) and spec.idempotent for spec in node.tools):
-        tool_names = ", ".join(str(spec.name) for spec in node.tools)
-        issues.append(
-            LintIssue(
-                node_name=f"Node '{node.name}'",
-                param="mode",
-                kind="act_mode_all_idempotent_tools",
-                required=False,
-                message=(
-                    f"Node '{node.name}': mode='act' (mutations) but all tools "
-                    f"({tool_names}) are idempotent=True (read-only). This is probably "
-                    "a misclassification -- use mode='agent'. If a tool is a genuinely "
-                    "idempotent mutation, this warning is expected and can be ignored."
-                ),
-            )
-        )
-
-
-def _spec_factory(spec: Any, tool_factories: dict[str, Callable] | None) -> Any:
-    """The registered factory for a Tool spec, or None when the spec carries a
-    pre-bound tool (raw BaseTool) or is not a Tool. Used to introspect a factory
-    (e.g. detect a coroutine factory) WITHOUT calling it."""
-    if isinstance(spec, Tool) and getattr(spec, "_bound_tool", None) is None:
-        return (tool_factories or {}).get(spec.name)
-    return None
-
-
-def _resolve_tool_object(spec: Any, tool_factories: dict[str, Callable] | None) -> Any:
-    """Resolve the concrete tool object for a Tool spec, or None if unavailable.
-
-    Prefers the bound tool carried on a spec synthesized from a raw BaseTool;
-    otherwise instantiates the registered factory. Never raises — lint must not
-    fail because a factory misbehaves.
-    """
-    if isinstance(spec, Tool):
-        bound = getattr(spec, "_bound_tool", None)
-        if bound is not None:
-            return bound
-        factory = (tool_factories or {}).get(spec.name)
-        if factory is None:
-            return None
-        try:
-            return factory({}, spec.config)
-        except Exception as exc:  # noqa: BLE001
-            # lint must not crash because a tool factory misbehaves; a tool it
-            # cannot instantiate simply yields no async-only finding.
-            log.debug("lint_tool_factory_failed", tool=spec.name, error=str(exc))
-            return None
-    # A raw BaseTool that slipped through un-normalized — introspect directly.
-    return spec
-
-
-def _extract_format_placeholders(text: str) -> list[str]:
-    """Extract {placeholder} names from Python str.format-style template text.
-
-    Returns a list of field names (may include dotted paths like 'claim.text').
-    Skips empty/None field names (literal braces, positional args).
-    """
-    formatter = string.Formatter()
-    names = []
-    for _, field_name, _, _ in formatter.parse(text):
-        if field_name is not None and field_name != "":
-            names.append(field_name)
-    return names
-
-
-def _di_template_var_names(node: Node) -> set[str]:
-    """The node's FromInput/FromConfig parameter names usable as template vars.
-
-    These become valid template-ref placeholders when the prompt_compiler
-    accepts ``di_inputs`` (the dispatch layer resolves them and the compiler
-    binds them by parameter name). Bundled-model kinds contribute the bundle's
-    parameter name (matching the first segment of a dotted ``{ctx.field}``).
-    """
-    param_res = _get_param_res(node)
-    return {name for name, binding in (param_res or {}).items() if binding.kind in DI_TEMPLATE_KINDS}
-
-
-def _di_resource_template_var_names(node: Node) -> set[str]:
-    """The node's FromResource parameter names usable as template vars. See neograph-3q6j.
-
-    Kept separate from ``_di_template_var_names`` because a FROM_RESOURCE var
-    resolves ONLY on the async arun() driver (its fetch is awaited): it is a VALID
-    template-ref placeholder when the compiler accepts ``di_inputs`` — the async
-    injector twin stashes the fetched value — but the lint layer flags it with an
-    async-driver WARN, in lockstep with the sync-driver fail-loud at runtime.
-    """
-    param_res = _get_param_res(node)
-    return {name for name, binding in (param_res or {}).items() if binding.kind is DIKind.FROM_RESOURCE}
-
-
-def _predict_input_keys(node: Node, *, include_flattened: bool = True) -> set[str]:
-    """Predict the dict keys that _extract_input will produce for this node.
-
-    For dict-form inputs: keys are the dict keys. When *include_flattened* is
-    True (default), also adds flattened field names from ``render_for_prompt()``
-    return annotations — these are available for template-ref prompts where
-    ``_render_with_flattening`` runs. Set *include_flattened=False* for inline
-    prompts, which skip flattening and only see raw input dict keys.
-
-    For single-type or None inputs: empty set (isinstance scan, no dict).
-    """
-    ni = normalize_inputs(node.inputs)
-    if ni.is_none:
-        return set()
-    if ni.is_dict_form:
-        keys = set(ni.by_name.keys())
-        if include_flattened:
-            for input_type in ni.by_name.values():
-                keys |= _get_flattened_field_names(input_type)
-            # Sub-construct port alias (neograph-bluv, F3.4): mirrors
-            # renderers._alias_subgraph_input_port exactly, so lint's
-            # template-ref prediction and the runtime alias cannot drift.
-            port_type = ni.by_name.get(StateKeys.SUBGRAPH_INPUT)
-            if port_type is not None:
-                keys.add(port_type.__name__)
-        return keys
-    # Single-type inputs: no dict keys predictable
-    return set()
-
-
-def _get_flattened_field_names(input_type: Any) -> set[str]:
-    """Extract field names from a type's render_for_prompt() return annotation.
-
-    If the type has ``render_for_prompt`` with a return annotation that is a
-    BaseModel subclass, returns the non-excluded field names of that model.
-    Otherwise returns an empty set.
-    """
-
-    from pydantic import BaseModel as _BM
-
-    rfp = getattr(input_type, "render_for_prompt", None)
-    if rfp is None:
-        return set()
-
-    ret_type = _resolve_return_type(rfp, input_type)
-    if ret_type is None:
-        return set()
-    if not (isinstance(ret_type, type) and issubclass(ret_type, _BM)):
-        return set()
-    return {fname for fname, finfo in ret_type.model_fields.items() if not finfo.exclude}
-
-
-def _resolve_return_type(fn: Any, owner_cls: Any) -> Any:
-    """Resolve the return type annotation of a method.
-
-    ``from __future__ import annotations`` turns annotations into strings.
-    ``typing.get_type_hints`` resolves them from ``fn.__globals__`` but fails
-    when the return type is defined in a local scope (e.g., inside a test).
-
-    Fallback: scan the caller's frame stack (up to 10 frames) for the name.
-    This mirrors the technique Pydantic and neograph's ``_di_classify.py``
-    use for forward-ref resolution.
-    """
-    import sys
-    import types
-    import typing
-
-    # Fast path: get_type_hints works for module-scoped types
-    try:
-        hints = typing.get_type_hints(fn)
-        return hints.get("return")
-    except (NameError, AttributeError, TypeError) as exc:
-        # A real frame-walking fallback follows, so this is not fatal — but the
-        # primary-path failure is otherwise invisible, turning a lint
-        # false-negative into an undiagnosable one. Leave a breadcrumb naming
-        # the function whose return hint failed to resolve.
-        log.debug(
-            "return_hint_resolution_failed",
-            fn=getattr(fn, "__qualname__", None) or repr(fn),
-            owner=getattr(owner_cls, "__qualname__", None) or repr(owner_cls),
-            error=str(exc),
-        )
-
-    # Fallback: resolve string annotation from frame locals
-    raw = getattr(fn, "__annotations__", {}).get("return")
-    if raw is None or not isinstance(raw, str):
-        return raw
-
-    # Walk caller frames to find the name (handles test-local classes)
-    frame: types.FrameType | None = sys._getframe(0)
-    for _ in range(10):
-        frame = frame.f_back if frame is not None else None
-        if frame is None:
-            break
-        if raw in frame.f_locals:
-            return frame.f_locals[raw]
-    return None

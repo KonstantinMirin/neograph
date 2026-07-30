@@ -50,6 +50,7 @@ _ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
 def _sanitize_addresses(text: str) -> str:
     return _ADDRESS.sub("0x…", text)
 
+
 # Put src/ on the path (mirrors scripts/regen_schema.py:17).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -84,9 +85,36 @@ _SPECIAL_CHARS.update(chr(cp) for cp in range(0x2E00, 0x2E80))  # ⸀-⹿
 _SPECIAL_CHARS.update(
     c
     for c in (
-        "\\", "'", '"', "!", "#", "$", "%", "&", "(", ")", "*", "+", ",",
-        ".", "/", ":", ";", "<", "=", ">", "?", "@", "[", "]", "^", "`",
-        "{", "|", "}", "~",
+        "\\",
+        "'",
+        '"',
+        "!",
+        "#",
+        "$",
+        "%",
+        "&",
+        "(",
+        ")",
+        "*",
+        "+",
+        ",",
+        ".",
+        "/",
+        ":",
+        ";",
+        "<",
+        "=",
+        ">",
+        "?",
+        "@",
+        "[",
+        "]",
+        "^",
+        "`",
+        "{",
+        "|",
+        "}",
+        "~",
     )
 )
 
@@ -206,11 +234,7 @@ def _declared_pydantic_fields(cls: type) -> list[dict[str, Any]]:
     empty list instead of duplicating its parent's fields. ``model_fields``
     already excludes PrivateAttrs (``_sidecar``/``_param_res``/``_scripted_shim``).
     """
-    inherited = {
-        field_name
-        for base in cls.__mro__[1:]
-        for field_name in getattr(base, "model_fields", {})
-    }
+    inherited = {field_name for base in cls.__mro__[1:] for field_name in getattr(base, "model_fields", {})}
     entries: list[dict[str, Any]] = []
     for name, info in cls.model_fields.items():
         if name in inherited:
@@ -250,11 +274,7 @@ def _declared_dataclass_fields(cls: type) -> list[dict[str, Any]]:
 
 def _bases_in_all(cls: type, all_names: set[str]) -> list[str]:
     """Direct base class names that are themselves public (linkable in docs)."""
-    return [
-        base.__name__
-        for base in cls.__bases__
-        if isinstance(base, type) and base.__name__ in all_names
-    ]
+    return [base.__name__ for base in cls.__bases__ if isinstance(base, type) and base.__name__ in all_names]
 
 
 def _symbol_entry(name: str, obj: Any, all_names: set[str]) -> dict[str, Any]:
@@ -335,9 +355,7 @@ def _build_symbols(module: Any, names: list[str]) -> list[dict[str, Any]]:
         obj = getattr(module, name, None)
         if obj is None:
             # Declared in __all__ but absent -- surface loudly rather than skip.
-            entries.append(
-                {"name": name, "kind": "missing", "anchor": slug(name), "doc": ""}
-            )
+            entries.append({"name": name, "kind": "missing", "anchor": slug(name), "doc": ""})
             continue
         entries.append(_symbol_entry(name, obj, all_names))
     # Two-pass anchor disambiguation: kind-namespace any colliding base slugs so
@@ -351,16 +369,12 @@ def _build_symbols(module: Any, names: list[str]) -> list[dict[str, Any]]:
 def _exception_hierarchy() -> list[dict[str, Any]]:
     """The NeographError tree, parent-linked (mirrors test_error_hierarchy.py)."""
     exc_classes = [
-        obj
-        for obj in vars(_errors_module).values()
-        if isinstance(obj, type) and issubclass(obj, NeographError)
+        obj for obj in vars(_errors_module).values() if isinstance(obj, type) and issubclass(obj, NeographError)
     ]
     hierarchy: list[dict[str, Any]] = []
     for exc in sorted(exc_classes, key=lambda c: c.__name__):
         neo_parents = [
-            base.__name__
-            for base in exc.__bases__
-            if isinstance(base, type) and issubclass(base, NeographError)
+            base.__name__ for base in exc.__bases__ if isinstance(base, type) and issubclass(base, NeographError)
         ]
         hierarchy.append(
             {
@@ -376,6 +390,19 @@ def _exception_hierarchy() -> list[dict[str, Any]]:
 _DI_KIND_NAMES: frozenset[str] = frozenset(k.value for k in DI_TEMPLATE_KINDS)
 
 
+# neograph-3ffdg.10 split lint.py; LintIssue emission sites now live across the
+# lint cluster, so every walk over them must cover the whole set -- missing one
+# makes a real kind look unemitted. SINGLE SOURCE for the file list: the guard in
+# tests/test_guards_api_manifest.py imports this tuple rather than repeating it,
+# while keeping its own independent AST walk as the cross-check.
+LINT_CLUSTER_MODULES = (
+    "lint.py",
+    "_lint_tool_checks.py",
+    "_lint_predict.py",
+    "_lint_kind_registry.py",
+)
+
+
 def _literal_kind_required_sites() -> dict[str, set[bool]]:
     """Co-derive ``{kind: {required_bool, ...}}`` from lint.py's LintIssue sites.
 
@@ -385,8 +412,14 @@ def _literal_kind_required_sites() -> dict[str, set[bool]]:
     sites with conflicting ``required`` (the sanctioned dual case). DI kinds use
     ``kind=binding.kind.value`` (a variable) and are invisible to this walk.
     """
-    lint_path = REPO_ROOT / "src" / "neograph" / "lint.py"
-    tree = ast.parse(lint_path.read_text())
+    src_dir = REPO_ROOT / "src" / "neograph"
+    sources = []
+    for name in LINT_CLUSTER_MODULES:
+        path = src_dir / name
+        if not path.exists():
+            raise ValueError(f"lint cluster module {name} is missing; update lint_modules")
+        sources.append(path.read_text())
+    tree = ast.parse("\n".join(sources))
     out: dict[str, set[bool]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -394,17 +427,9 @@ def _literal_kind_required_sites() -> dict[str, set[bool]]:
         kind_val: str | None = None
         required_val = False
         for kw in node.keywords:
-            if (
-                kw.arg == "kind"
-                and isinstance(kw.value, ast.Constant)
-                and isinstance(kw.value.value, str)
-            ):
+            if kw.arg == "kind" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
                 kind_val = kw.value.value
-            elif (
-                kw.arg == "required"
-                and isinstance(kw.value, ast.Constant)
-                and isinstance(kw.value.value, bool)
-            ):
+            elif kw.arg == "required" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, bool):
                 required_val = kw.value.value
         if kind_val is not None:
             out.setdefault(kind_val, set()).add(required_val)
@@ -457,9 +482,7 @@ def extract_lint_issue_kinds() -> list[dict[str, str]]:
                     f"(saw {required_values}); re-check LINT_KIND_META."
                 )
             if stored != "WARN/ERROR":
-                raise ValueError(
-                    f"dual-severity kind {kind!r} must be 'WARN/ERROR', got {stored!r}."
-                )
+                raise ValueError(f"dual-severity kind {kind!r} must be 'WARN/ERROR', got {stored!r}.")
             continue
         if len(required_values) != 1:
             raise ValueError(
@@ -510,7 +533,7 @@ def _reference_heading(entry: dict[str, Any]) -> str:
     anchor = entry["anchor"]
     base = slug(name)
     if anchor != base and anchor.startswith(f"{base}-"):
-        tag = anchor[len(base) + 1:]
+        tag = anchor[len(base) + 1 :]
         return f"### {name} ({tag})"
     return f"### {name}"
 
@@ -532,9 +555,7 @@ def _reference_field_table(fields: list[dict[str, Any]], anchor: str) -> list[st
         default = "" if f.get("default") is None else f"`{f['default']}`"
         required = "yes" if f.get("required") else "no"
         field_id = f"{anchor}-{f['name']}"
-        rows.append(
-            f'| <span id="{field_id}"></span>`{f["name"]}` | `{f["annotation"]}` | {required} | {default} |'
-        )
+        rows.append(f'| <span id="{field_id}"></span>`{f["name"]}` | `{f["annotation"]}` | {required} | {default} |')
     return rows
 
 
