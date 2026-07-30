@@ -18,16 +18,24 @@ from __future__ import annotations
 import ast
 import pathlib
 
-SPEC_TYPES_FILE = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph" / "spec_types.py"
+_SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
+
+# neograph-s7zt3.16 moved the Agent Spec Property bridge out of spec_types.py
+# into _agent_spec_types.py. This list is EXTENDED, not repointed: scanning only
+# the moved-TO file would leave the guard blind to a re-inlined bare-signature
+# expression reappearing in the moved-FROM one, which is exactly how a guard
+# starts passing vacuously over a shrinking surface.
+SCANNED_FILES = [_SRC / "spec_types.py", _SRC / "_agent_spec_types.py"]
 
 
 def _function_source(name: str) -> str:
-    text = SPEC_TYPES_FILE.read_text()
-    tree = ast.parse(text)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == name:
-            return ast.get_source_segment(text, node) or ""
-    raise AssertionError(f"{name} not found in spec_types.py")
+    for path in SCANNED_FILES:
+        text = path.read_text()
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                return ast.get_source_segment(text, node) or ""
+    raise AssertionError(f"{name} not found in any of {[p.name for p in SCANNED_FILES]}")
 
 
 class TestStructuralTypeNameUsesRecursiveSignature:
@@ -47,8 +55,7 @@ class TestStructuralTypeNameUsesRecursiveSignature:
             "list[SomeModel]"
         )
         assert "value_type" in source, (
-            "_property_type_signature must recurse into DictProperty.value_type "
-            "for the same reason"
+            "_property_type_signature must recurse into DictProperty.value_type for the same reason"
         )
 
     def test_meta_guard_catches_the_disease_pattern_if_reintroduced(self):

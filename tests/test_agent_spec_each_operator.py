@@ -182,19 +182,15 @@ class TestEachOperatorRoundTrip:
     def test_flow_from_dict_to_dict_round_trip_preserves_the_operator_composite(self):
         """R1: full serialization survival.
 
-        NARROWED to the structural boundary that is actually reachable today,
-        with the reason recorded rather than the assertion silently dropped.
-        The full ``_import(rebuilt)`` reimport this test originally asserted is
-        blocked by **neograph-s7zt3.16**, a PRE-EXISTING defect reproduced on a
-        clean HEAD worktree against the already-GREEN *plain* EACH cell: pyagentspec's
+        WIDENED back to the full ``_import(rebuilt)`` assertion (neograph-s7zt3.16
+        landed). This test was temporarily narrowed to structure-only because
         ``Flow.from_dict`` erases Property SUBCLASSES (``ListProperty`` -> base
-        ``Property``, json_schema intact), and ``spec_types``' bridge dispatches on the
-        class, so a ``list[Tagged]`` producer reconstructs as an opaque
-        ``AgentSpecType_<hash>`` and Each's element-identity check (neograph-3lk2l)
-        fails. It is NOT an EACH_OPERATOR defect and NOT introduced by Phase 7 --
-        every non-Each combo in this wave asserts the full reimport and passes.
-
-        WIDEN THIS BACK to ``_import(rebuilt)`` + the combo assert when s7zt3.16 lands.
+        ``Property``, json_schema intact) and the ``spec_types`` bridge dispatched
+        on the class, so a ``list[Tagged]`` producer reimported as an opaque
+        ``AgentSpecType_<hash>`` and Each's element-identity check
+        (neograph-3lk2l) rejected it. The bridge now normalizes an erased Property
+        before dispatching, so the reimport works and R3 (the combo must survive as
+        EACH_OPERATOR, not silently downgrade to EACH) is assertable again.
         """
         flow = to_agent_spec(_each_operator_pipeline())
         rebuilt = type(flow).from_dict(flow.to_dict())
@@ -210,6 +206,12 @@ class TestEachOperatorRoundTrip:
             e.from_node.name == "each_step" and e.to_node.name == "each_step__operator_check"
             for e in rebuilt.control_flow_connections
         ), "the MapNode must still chain into the gate after serialization"
+
+        # R3: the serialized-and-reimported item is still the COMPOSITE. A
+        # structure-shape assert alone cannot tell a correct import from a silent
+        # downgrade to plain EACH.
+        item = _by_name(_import(rebuilt))["each_step"]
+        assert classify_modifiers(item)[0] is ModifierCombo.EACH_OPERATOR
 
     def test_reimported_pipeline_compiles_and_runs_with_fan_out_intact(self):
         _register()
