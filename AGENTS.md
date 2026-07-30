@@ -526,39 +526,89 @@ it (xfail-style) before documenting it here.
 - The fixture author should be different from the validation author when possible — a fixture written AFTER the validation is "done" catches gaps the author's own fixtures miss.
 - Keep fixtures minimal — one Construct, one defect, ~15 lines.
 
-### The 500-line file-size ratchet (`tests/test_guards_file_size.py`)
+### The file-size ratchet (`tests/test_guards_file_size.py`)
+
+**The goal is not 500 lines.** The number is a proxy. What it is a proxy *for*: a module
+that has grown long enough to hold parts which are **conceptually separate but
+implementationally entangled** — clusters that no longer belong together, yet share
+helpers, constants and imports densely enough that nobody can tell where the seam is.
+That state is invisible until someone tries to move something, and by then the coupling
+is load-bearing.
+
+Forcing the split surgically is what surfaces the seam. Every extraction in the
+`neograph-3ffdg` wave found something the surveys had not: a helper with no callers in
+its own file, a cluster interleaved with another's target, a "self-contained" region
+with a runtime dependency on its parent. **The architecture improved because the
+procedure forced the question, not because a file got shorter.**
+
+Read that as the decision rule whenever the two conflict. A split that lands a file at
+509 with clean boundaries beats one that reaches 499 by putting a function in the wrong
+module. `_oracle.py` sits ten lines over its cap for exactly this reason:
+`_inject_oracle_config` would have closed the gap and belonged nowhere near the cluster
+it would have joined.
+
+#### What the guard enforces
 
 Every `.py` file under `src/neograph/` (recursively, so `testing/` is included) must be
-**under 500 lines** unless it has an entry in that guard's `ALLOWLIST`. The allowlist is
-a per-file **exact ceiling**, not a blanket exemption, and it obeys the same shrink-only
+under 500 lines unless it has an entry in that guard's `ALLOWLIST`. The allowlist is a
+per-file **exact ceiling**, not a blanket exemption, and obeys the same shrink-only
 discipline as this repo's other ratchets: **growth is blocked and fixed in-PR, never
 deferred.**
 
-Three rules, all enforced:
-
 - **Exact, not merely sufficient.** `ALLOWLIST[f] == len(read_text().splitlines())`. A
-  ceiling sitting above its file is a bug, not slack — it is silent headroom for future
-  growth. Both hand-rolled caps this guard replaced had already drifted stale-loose
-  before anyone noticed (`compiler.py` 775 vs 761 real; `_llm_retry.py` 665 vs 658),
-  which is exactly why there is no tolerance band.
-- **A shrink lowers the ceiling in the same commit.** Shrinking is always welcome and
-  needs no approval — but the number moves with the file. **A red
-  `test_guards_file_size` after a successful split is the expected, correct signal, not
-  a regression to route around.** The failure message prints the paste-ready replacement
-  literal.
+  ceiling sitting above its file is silent headroom for future growth. Both hand-rolled
+  caps this guard replaced had already drifted stale-loose before anyone noticed
+  (`compiler.py` 775 vs 761 real; `_llm_retry.py` 665 vs 658) — which is why there is no
+  tolerance band.
+- **A shrink lowers the ceiling in the same commit.** **A red `test_guards_file_size`
+  after a successful split is the expected, correct signal, not a regression to route
+  around.** The failure message prints the paste-ready replacement literal.
 - **A file that drops under 500 has its entry DELETED**, never lowered to a sub-500
   number — otherwise the allowlist quietly grants a private ceiling to a file the plain
-  500 rule should govern. This is how the allowlist shrinks toward empty as
-  `neograph-3ffdg`'s refactor wave lands.
+  rule should govern.
 
 A ruff-format pass legitimately changes line counts and so legitimately requires a
-number update; that is not the guard misbehaving. Keep the dict one-entry-per-line and
-sorted by posix path — parallel refactor branches then edit disjoint lines.
+number update. Keep the dict one-entry-per-line and sorted by posix path, so parallel
+branches edit disjoint lines.
 
-Two narrower line caps deliberately survive alongside it — `LINE_CAP` 330 and 400 in
-`test_guards_assembly.py`. They govern **disjoint** file sets (every file they cover is
-well under 500), so no file is capped twice. They keep loose `>` semantics; tightening
-them was out of scope, not endorsed.
+#### Two refusals that outrank the ceiling
+
+Both were exercised in the 3ffdg wave and both are binding, not precedent-by-accident.
+When a split can only be completed by doing one of these, **take the smaller extraction
+and file the remainder** — a file left over its ceiling with a written reason is a
+better outcome than either.
+
+1. **Never widen a capability monopoly to buy a split.** If moving a cluster would add a
+   module to `_ALLOWED` in guard G1 (`Command` construction), to
+   `ALLOWED_GRAPH_ONLY_MODULES` (three-layer engine verbs), or to
+   `FUNCTION_LOCAL_IMPORT_ALLOWLIST`, the split is wrong as scoped. Those ratchets exist
+   to keep a dangerous capability confined; spending one to shorten a file trades a real
+   invariant for a cosmetic metric. `factory.py` stays at 949 for this reason.
+   Distinguish three cases: **re-key** (the thing moved — point the entry at the new
+   module and remove the old), **redistribute** (N justified uses scattered across N
+   files, total unchanged — list them all and say the count), **widen** (a capability
+   reaches somewhere new — refuse).
+
+2. **Never let a "pure split" become a behaviour change.** A move may add a parameter to
+   thread a dependency the cluster genuinely needs (`export_flow`, `shim_factory`,
+   `resolve_condition` — all landed this way). It may not restructure mutual recursion,
+   change what a function computes, or require new tests to prove it still works. When
+   the only way through is three injected callables across six functions, that is a
+   design ticket, not a file split. `loader.py` stays at 1181 for this reason.
+
+The corresponding decision ladder for dependencies, in order: annotation-only reference
+→ `TYPE_CHECKING`; helper used only by the moving cluster → move it too; otherwise
+inject as a parameter; otherwise take a smaller extraction. A deferred/function-local
+import is never the answer — it requires growing an allowlist.
+
+Two narrower line caps deliberately survive alongside the ratchet — `LINE_CAP` 330 and
+400 in `test_guards_assembly.py`. They govern **disjoint** file sets (every file they
+cover is well under 500), so no file is capped twice. They keep loose `>` semantics;
+tightening them was out of scope, not endorsed.
+
+The operational how-to for performing a split — the five inventory sweeps, AST-with-
+decorators slicing, the import-surface proof, the ordering of ceiling vs formatting —
+lives in the `DESIGN` field of the DEFER epic `neograph-jtawq`.
 
 ### General test conventions
 
