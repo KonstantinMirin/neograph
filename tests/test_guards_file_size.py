@@ -76,7 +76,6 @@ ALLOWLIST: dict[str, int] = {
     "_wiring.py": 817,
     "compiler.py": 689,
     "decorators.py": 671,
-    "describe_type.py": 552,
     "di.py": 506,
     "factory.py": 949,
     "forward.py": 1022,
