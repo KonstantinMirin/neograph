@@ -244,10 +244,6 @@ class TestLlmResponsibilityDiscipline:
         ),
         "_llm_retry.py": frozenset(
             {
-                "_extract_json",
-                "_extract_balanced",
-                "_is_list_annotation",
-                "_apply_null_defaults",
                 "_parse_json_response",
                 "_build_retry_msg",
                 "_invoke_json_with_retry",
@@ -282,15 +278,26 @@ class TestLlmResponsibilityDiscipline:
                 # Optional numeric/enum fields; _is_stringly_null (guarded by
                 # _optional_inner_types so only nullable fields are touched)
                 # normalizes the sentinel to None inside _apply_null_defaults.
-                "_optional_inner_types",
-                "_is_stringly_null",
                 # neograph-zhwgh: shape-driven nested descent. _unwrap_optional
                 # peels one Optional layer; _descend_null_defaults is the single
                 # recursive classifier that reaches interiors of Optional-wrapped
                 # models/lists, dict-of-models, and list-of-optional-models so
                 # _apply_null_defaults no longer hand-enumerates container shapes.
+            }
+        ),
+        # neograph-3ffdg.15 split _llm_retry.py: the JSON-extraction and
+        # null-default clusters moved to their own modules. Their names moved with
+        # them -- this table pins each module's OWN top-level names, so listing a
+        # moved name here would demand it be defined in two places.
+        "_json_extract.py": frozenset({"_extract_balanced", "_extract_json"}),
+        "_null_defaults.py": frozenset(
+            {
+                "_is_list_annotation",
+                "_optional_inner_types",
                 "_unwrap_optional",
+                "_is_stringly_null",
                 "_descend_null_defaults",
+                "_apply_null_defaults",
             }
         ),
         "_llm_render.py": frozenset(
@@ -1587,7 +1594,8 @@ class TestDefaultFactoryCoercionIsGuarded:
 
     def test_apply_null_defaults_guards_default_factory(self):
         """Live tree: the coercion in _apply_null_defaults is TypeError-guarded."""
-        src = (SRC_DIR / "_llm_retry.py").read_text()
+        # neograph-3ffdg.15 moved _apply_null_defaults to _null_defaults.py.
+        src = (SRC_DIR / "_null_defaults.py").read_text()
         assert self._func_default_factory_is_typeerror_guarded(src, "_apply_null_defaults")
 
     def test_scanner_flags_bare_factory_call(self):

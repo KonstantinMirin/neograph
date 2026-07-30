@@ -17,254 +17,30 @@ import structlog
 from json_repair import repair_json
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ValidationError
-from pydantic_core import PydanticUndefined
+
+# --- name _llm_retry.py imported and RE-EXPORTED before the split; the
+# --- null-default cluster was its only local consumer here.
+from pydantic_core import PydanticUndefined  # noqa: E402,F401
 
 from neograph._dsml import contains_dsml
+
+# --- extracted clusters (neograph-3ffdg.15), re-exported so existing
+# --- `from neograph._llm_retry import ...` call sites keep resolving unchanged.
+from neograph._json_extract import _extract_balanced, _extract_json  # noqa: E402,F401
+from neograph._null_defaults import (  # noqa: E402,F401
+    _STRINGLY_NULL,
+    _apply_null_defaults,
+    _descend_null_defaults,
+    _is_list_annotation,
+    _is_stringly_null,
+    _optional_inner_types,
+    _unwrap_optional,
+)
 from neograph._usage import _usage_dict
 from neograph.describe_type import describe_type
 from neograph.errors import ExecutionError
 
 log = structlog.get_logger()
-
-
-def _extract_balanced(text: str, start: int, open_ch: str, close_ch: str) -> str | None:
-    """Extract a balanced JSON value starting at *start* with given delimiters."""
-    depth = 0
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == open_ch:
-            depth += 1
-        elif ch == close_ch:
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return None
-
-
-def _extract_json(text: str) -> str:
-    """Extract the first balanced JSON value (object or array) from LLM text.
-
-    Finds the first '{' or '[' and tracks depth to find the matching closer.
-    Handles markdown fences, thinking tags, prose before/after JSON.
-    When both '{' and '[' are present, picks whichever comes first.
-    """
-    brace_pos = text.find("{")
-    bracket_pos = text.find("[")
-
-    if bracket_pos != -1 and (brace_pos == -1 or bracket_pos < brace_pos):
-        result = _extract_balanced(text, bracket_pos, "[", "]")
-        if result is not None:
-            return result
-        # Array was truncated (no closing ]). Do NOT fall through to object
-        # extraction — that would return the first inner dict, causing silent
-        # empty results for list-field target models. Return the raw text and
-        # let json_repair handle truncation recovery.
-        return text.strip()
-
-    pos = 0
-    while True:
-        start = text.find("{", pos)
-        if start == -1:
-            break
-
-        # Quick check: JSON objects start with {"  or {digit or {[  or { "
-        # Prose braces like {a + b} start with a letter after {.
-        after_brace = text[start + 1 : start + 2].lstrip()
-        if after_brace and after_brace not in ('"', "'", "[", "]", "{", "}", ""):
-            pos = start + 1
-            continue
-
-        result = _extract_balanced(text, start, "{", "}")
-        if result is not None:
-            return result
-
-        pos = start + 1
-
-    first_open = brace_pos if brace_pos != -1 else bracket_pos
-    if first_open != -1:
-        close_char = "}" if first_open == brace_pos else "]"
-        last = text.rfind(close_char)
-        if last > first_open:
-            return text[first_open : last + 1]
-    return text.strip()
-
-
-def _is_list_annotation(annotation: Any) -> bool:
-    """Check if a type annotation is a list type (list[X], List[X], etc.)."""
-    import typing
-
-    origin = getattr(annotation, "__origin__", None)
-    if origin is list:
-        return True
-    if origin is typing.Union:
-        args = getattr(annotation, "__args__", ())
-        return any(_is_list_annotation(a) for a in args if a is not type(None))
-    return annotation is list
-
-
-_STRINGLY_NULL = frozenset({"null", "none", "nil", "n/a", "na"})
-
-
-def _optional_inner_types(annotation: Any) -> tuple[Any, ...] | None:
-    """Non-None member types of an Optional annotation, else None.
-
-    Returns the tuple of non-``NoneType`` members when *annotation* is a Union
-    that admits ``None`` (``int | None``, ``Optional[Enum]``, ``X | Y | None``);
-    returns ``None`` when the field is not nullable (so callers leave it alone).
-    """
-    import types
-    from typing import Union, get_args, get_origin
-
-    origin = get_origin(annotation)
-    if origin is Union or origin is getattr(types, "UnionType", ()):
-        args = get_args(annotation)
-        if type(None) in args:
-            return tuple(a for a in args if a is not type(None))
-    return None
-
-
-def _unwrap_optional(annotation: Any) -> Any:
-    """Peel a single ``X | None`` wrapper, returning ``X``; else the annotation.
-
-    ``Company | None`` -> ``Company``; ``list[Product] | None`` -> ``list[Product]``;
-    a plain ``list[Product]`` or ``Company`` is returned unchanged. An ambiguous
-    nullable union with more than one non-None member (``A | B | None``) is left
-    intact -- there is no single interior type to recurse into, so the caller's
-    ``issubclass``/``origin`` checks correctly decline it.
-
-    This is the single Optional-unwrapping seam for the nested-recursion descent:
-    without it, ``isinstance(annotation, type)`` and ``get_origin(...) is list``
-    both reject an Optional-wrapped model/list and the descent silently skips the
-    interior. See neograph-zhwgh.
-    """
-    non_none = _optional_inner_types(annotation)
-    if non_none is not None and len(non_none) == 1:
-        return non_none[0]
-    return annotation
-
-
-def _is_stringly_null(val: Any, annotation: Any) -> bool:
-    """True when *val* is a string sentinel meaning "no value" for a nullable field.
-
-    LLMs (GLM 5.2) intermittently emit the *string* ``"null"`` (or ``"none"``,
-    ``""``) for Optional numeric/enum/bool fields instead of a JSON ``null``.
-    json_repair leaves the string intact and Pydantic then rejects it
-    (``int_parsing`` / ``enum``), aborting the node. We coerce the sentinel to
-    ``None`` — but ONLY when the field is Optional, so a legitimately-typed
-    ``str`` value is never destroyed. The empty string is treated as a sentinel
-    only when the field cannot itself be a plain ``str`` (where ``""`` is valid).
-    """
-    if not isinstance(val, str):
-        return False
-    non_none = _optional_inner_types(annotation)
-    if non_none is None:
-        return False
-    low = val.strip().lower()
-    if low in _STRINGLY_NULL:
-        return True
-    return low == "" and not any(t is str for t in non_none)
-
-
-def _descend_null_defaults(val: Any, annotation: Any) -> None:
-    """Recurse :func:`_apply_null_defaults` into any BaseModel dict nested within
-    *val*, driven by *annotation*'s container shape.
-
-    ONE shape classifier instead of a per-shape branch list. It peels a single
-    ``Optional`` wrapper, then dispatches on the concrete runtime value:
-
-    - a model dict (``val`` is a dict, annotation a ``BaseModel``) -> recurse into it;
-    - a ``list[...]`` -> recurse into each element against the item annotation;
-    - a ``dict[K, V]`` -> recurse into each value against ``V``.
-
-    The recursion re-peels ``Optional`` at every level, so *every* container
-    composition -- ``list[Product] | None``, ``dict[str, Product]``,
-    ``list[Product | None]``, ``Optional[dict[str, list[Product]]]`` -- reaches
-    its leaf model dicts. This replaced a hand-enumerated (bare-model,
-    bare-list-of-model) descent that silently skipped every shape it did not
-    spell out, which is how the Optional-wrapped and dict-of-model interiors
-    kept crashing. See neograph-zhwgh. (``tuple[...]`` is intentionally out of
-    scope -- LLM structured output does not emit heterogeneous tuples.)
-    """
-    from typing import get_args, get_origin
-
-    annotation = _unwrap_optional(annotation)
-
-    if isinstance(val, dict):
-        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-            _apply_null_defaults(val, annotation)
-            return
-        if get_origin(annotation) is dict:
-            args = get_args(annotation)
-            if len(args) == 2:
-                for item in val.values():
-                    _descend_null_defaults(item, args[1])
-        return
-
-    if isinstance(val, list) and get_origin(annotation) is list:
-        args = get_args(annotation)
-        if args:
-            for item in val:
-                _descend_null_defaults(item, args[0])
-
-
-def _apply_null_defaults(data: dict, model: type[BaseModel]) -> None:
-    """Replace null values with field defaults, recursively.
-
-    Mutates *data* in place. Applies when the JSON value is None and the field
-    has either an explicit default or a default_factory. Also recurses (via
-    :func:`_descend_null_defaults`) into nested BaseModel fields nested within
-    ``list`` / ``dict`` / ``Optional`` containers to any depth. Stringly-null
-    sentinels (the string ``"null"``/``"none"``/``""``) on Optional fields are
-    first coerced to ``None`` so the same default/None disposition applies.
-    """
-    for field_name, field_info in model.model_fields.items():
-        if field_name not in data:
-            continue
-        val = data[field_name]
-
-        # GLM emits the STRING "null" for Optional numeric/enum fields; normalize
-        # it to a real None BEFORE the null-disposition branches below run.
-        if _is_stringly_null(val, field_info.annotation):
-            data[field_name] = val = None
-
-        if val is None and field_info.default is not PydanticUndefined:
-            data[field_name] = field_info.default
-            continue
-
-        # LLMs emit null for default_factory list/dict fields (their default is
-        # PydanticUndefined, so the branch above skips them). Coerce to the
-        # factory result. Zero-arg first: a data-accepting factory (Pydantic
-        # 2.10+) raises TypeError -> factory(data); a zero-arg one like list must
-        # NOT get the data dict (list(data) returns keys, not []). neograph-s1u4.
-        if val is None and field_info.default_factory is not None:
-            # default_factory is typed as a union (zero-arg | data-accepting);
-            # the try/except resolves the arity at runtime, so both calls need
-            # the call-arg ignore.
-            factory = field_info.default_factory
-            try:
-                data[field_name] = factory()  # type: ignore[call-arg]
-            except TypeError:
-                data[field_name] = factory(data)  # type: ignore[call-arg]
-            continue
-
-        # Recurse into nested model dicts wherever they sit -- directly, under an
-        # Optional wrapper, or inside a list/dict container -- so stringly-null
-        # interiors are normalized at every depth. ``val`` is a concrete
-        # dict/list here (the None branches above returned).
-        _descend_null_defaults(val, field_info.annotation)
 
 
 def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
