@@ -96,9 +96,13 @@ _ALLOWLIST: Counter = Counter(
         # iter_nodes — the leaf-flattening SoT walk, already arm-aware (tdbb).
         ("construct.py", "for item in construct.nodes:"): 1,
         # Spec-level walks — YAML spec, pre-IR; _BranchNode never appears in a spec.
-        ("loader.py", "for node_spec in spec.nodes:"): 1,
-        ("loader.py", "for ref in spec.pipeline.nodes:"): 1,
-        ("loader.py", "for prev_ref in construct_spec.nodes[:i]:"): 1,
+        # neograph-3ffdg.4: these three walk the neograph-Spec SCHEMA objects
+        # (Spec.nodes / ConstructSpec.nodes), not the neograph IR, so arm-awareness
+        # never applied. They moved with the spec-loader half into _spec_loader.py;
+        # re-keyed by (module, content), exemption unchanged.
+        ("_spec_loader.py", "for node_spec in spec.nodes:"): 1,
+        ("_spec_loader.py", "for ref in spec.pipeline.nodes:"): 1,
+        ("_spec_loader.py", "for prev_ref in construct_spec.nodes[:i]:"): 1,
         # compute_node_fingerprints — already arm-aware (tdbb, _fingerprint_item).
         ("state.py", "for item in construct.nodes:"): 1,
         # compile_state_model — the gold-standard arm-aware walk (handles
