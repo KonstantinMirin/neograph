@@ -71,7 +71,7 @@ MIN_EXPECTED_FILES = 60
 ALLOWLIST: dict[str, int] = {
     "_agent_cycle.py": 776,
     "_agent_spec.py": 981,
-    "_oracle.py": 650,
+    "_oracle.py": 509,
     "_tool_loop.py": 554,
     "_wiring.py": 817,
     "compiler.py": 689,
