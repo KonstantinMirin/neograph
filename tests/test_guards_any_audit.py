@@ -537,9 +537,11 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # ── node.py — Pydantic BeforeValidator boundary ──
     # _validate_type_spec runs inside Pydantic field validation; Pydantic
     # catches TypeError and rolls it into ValidationError.
-    "node.py:109": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "node.py:111": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "node.py:117": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    # neograph-3ffdg.18: _validate_type_spec moved to _type_spec.py; these
+    # LINE-NUMBER keys followed it. Recomputed after ruff format.
+    "_type_spec.py:35": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "_type_spec.py:37": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "_type_spec.py:43": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
 }
 
 

@@ -22,130 +22,57 @@ def custom_logic(state, config):
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
-from typing import Annotated, Any, Literal, Protocol, cast, runtime_checkable
-
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field, PlainValidator, PrivateAttr, field_validator
-from typing_extensions import TypeVar
-
-from neograph._llm_config import LlmConfig
-from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
-from neograph._state_keys import StateKeys
-from neograph.errors import ConstructError, NeographError
-from neograph.renderers import Renderer
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Node lifecycle Protocols
 # ═══════════════════════════════════════════════════════════════════════════
-
 # PEP 696 TypeVar defaults: the input/output types of these Protocols are declared
 # elsewhere (node.inputs / node.outputs); defaulting to Any preserves the prior
 # un-parameterized call sites without forcing users to subscript at every callsite.
 # typing.TypeVar gained `default=` support in Python 3.13; typing_extensions
 # backports it to 3.11+. Inputs are contravariant, outputs are covariant —
 # matches Callable's variance contract.
-_SkipIn = TypeVar("_SkipIn", contravariant=True, default=Any)
-_SkipOut = TypeVar("_SkipOut", covariant=True, default=Any)
+# --- extracted clusters (neograph-3ffdg.18), re-exported so existing
+# --- `from neograph.node import ...` call sites keep resolving unchanged.
+# --- names node.py imported and RE-EXPORTED before the split; the extracted
+# --- protocol and type-spec clusters were their only local consumers here.
+import types as _types_mod  # noqa: E402,F401
+from collections.abc import Callable
+from typing import Annotated, Any, Literal, Protocol, cast, runtime_checkable  # noqa: E402,F401
 
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainValidator,  # noqa: E402,F401
+    PrivateAttr,
+    field_validator,
+)
+from typing_extensions import TypeVar  # noqa: E402,F401
 
-@runtime_checkable
-class SkipPredicate(Protocol[_SkipIn]):
-    """Returns True to bypass the LLM call. Receives extracted ``input_data``
-    (after ``_extract_input``, before renderer dispatch).
-    """
-
-    def __call__(self, input_data: _SkipIn) -> bool: ...
-
-
-@runtime_checkable
-class SkipValueFactory(Protocol[_SkipIn, _SkipOut]):
-    """Produces the output value when ``skip_when`` fires. Receives the same
-    ``input_data`` shape as ``skip_when``. If absent, the node returns an
-    empty state update.
-    """
-
-    def __call__(self, input_data: _SkipIn) -> _SkipOut: ...
-
-
-@runtime_checkable
-class RawNodeFn(Protocol):
-    """Raw escape hatch for ``mode='raw'``. Direct LangGraph node signature."""
-
-    def __call__(self, state: BaseModel, config: RunnableConfig) -> dict[str, Any]: ...
-
-
-@runtime_checkable
-class HasName(Protocol):
-    """Anything that carries a user-facing declaration name.
-
-    Both ``Node`` and ``Construct`` satisfy this structurally (each declares
-    ``name: str``). Redirect-closure factories (`_oracle.py`) capture a
-    ``HasName`` and read ``.name`` for error/observability labels — the label
-    concern is sourced from the IR object (Information Expert), never threaded
-    as a string kwarg nor scraped from a wrapper's ``__name__``.
-    """
-
-    name: str
-
-
-def _validate_type_spec(v: Any) -> Any:
-    """Accept type objects, generic aliases, and dict-form type specs.
-
-    Rejects ints and other non-type garbage that would silently pass through
-    to compile() and produce confusing errors downstream.
-
-    Valid forms: None, concrete type, generic alias (list[X], dict[str,X],
-    Optional[X], X|None), dict[str, type|str|GenericAlias].  Dict values may
-    be strings (loader path uses type names before resolution, and the decorator
-    fallback path produces string annotations when get_type_hints fails).
-    """
-    if v is None:
-        return None
-    if isinstance(v, dict):
-        for key, val in v.items():
-            if not isinstance(key, str):
-                raise TypeError(f"dict-form type spec keys must be strings, got {type(key).__name__}")
-            if not (isinstance(val, (type, str)) or _is_type_like(val)):
-                raise TypeError(
-                    f"dict-form type spec value for '{key}' must be a type or type name, got {type(val).__name__}: {val!r}"
-                )
-        return v
-    if isinstance(v, type) or _is_type_like(v):
-        return v
-    raise TypeError(f"inputs/outputs must be a type, dict[str, type], or None — got {type(v).__name__}: {v!r}")
-
-
-def _is_type_like(v: Any) -> bool:
-    """Check if v is a generic alias (list[X], dict[str, X], Optional[X], X | None)."""
-    import types as _types
-    import typing
-
-    return (
-        hasattr(v, "__origin__")
-        or isinstance(v, (typing._GenericAlias, typing._SpecialForm))  # type: ignore[attr-defined]
-        or isinstance(v, _types.UnionType)
-    )
-
-
-# Valid forms: None | type | GenericAlias (list[X], dict[str,X], X|None) |
-# dict[str, type|str|GenericAlias].  Static annotation is Any because Python
-# has no TypeForm (PEP 747). PlainValidator is the real enforcement point.
-TypeSpec = Annotated[Any, PlainValidator(_validate_type_spec)]
-
-# Static-annotation alias for user-declared type values flowing through the
-# framework. Distinct from the Pydantic-validator-bearing TypeSpec field type,
-# which carries _validate_type_spec on top of the same union. Use this on
-# parameter and return annotations of helpers that introspect user-declared
-# types (closes the PEP 747 gap until TypeForm lands). See
-# docs/design/architecture-decisions.md §5 and §8.
-import types as _types_mod
-
-TypeSpecStatic = type | dict[str, type] | _types_mod.GenericAlias | _types_mod.UnionType | None
-
+from neograph._llm_config import LlmConfig
+from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
+from neograph._node_protocols import (  # noqa: E402,F401
+    HasName,
+    RawNodeFn,
+    SkipPredicate,
+    SkipValueFactory,
+    _SkipIn,
+    _SkipOut,
+)
+from neograph._state_keys import StateKeys
+from neograph._type_spec import (  # noqa: E402,F401
+    TypeSpec,
+    TypeSpecStatic,
+    _is_type_like,
+    _validate_type_spec,
+)
+from neograph.errors import ConstructError, NeographError
 from neograph.modifiers import Modifiable, ModifierSet
 from neograph.naming import field_name_for
+from neograph.renderers import Renderer
 from neograph.tool import Tool
 
 

@@ -626,7 +626,7 @@
           "required": false
         },
         {
-          "annotation": "neograph.node.RawNodeFn | None",
+          "annotation": "neograph._node_protocols.RawNodeFn | None",
           "default": "None",
           "name": "raw_fn",
           "required": false
@@ -662,13 +662,13 @@
           "required": false
         },
         {
-          "annotation": "neograph.node.SkipPredicate | None",
+          "annotation": "neograph._node_protocols.SkipPredicate | None",
           "default": "None",
           "name": "skip_when",
           "required": false
         },
         {
-          "annotation": "neograph.node.SkipValueFactory | None",
+          "annotation": "neograph._node_protocols.SkipValueFactory | None",
           "default": "None",
           "name": "skip_value",
           "required": false
@@ -688,7 +688,7 @@
       ],
       "kind": "pydantic_model",
       "name": "Node",
-      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal['think', 'agent', 'act', 'scripted'] = 'think', inputs: Any = None, outputs: Any = None, model: str | None = None, prompt: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, tools: list[neograph.tool.Tool | langchain_core.tools.base.BaseTool] = [], scripted_fn: str | None = None, raw_fn: neograph.node.RawNodeFn | None = None, fan_out_param: str | None = None, handoff_param: str | None = None, handoff_channel: str | None = None, renderer: neograph.renderers.Renderer | None = None, context: list[str] | None = None, skip_when: neograph.node.SkipPredicate | None = None, skip_value: neograph.node.SkipValueFactory | None = None, gate_tools_when: collections.abc.Callable | str | None = None, oracle_gen_type: type[pydantic.main.BaseModel] | None = None)"
+      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal['think', 'agent', 'act', 'scripted'] = 'think', inputs: Any = None, outputs: Any = None, model: str | None = None, prompt: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, tools: list[neograph.tool.Tool | langchain_core.tools.base.BaseTool] = [], scripted_fn: str | None = None, raw_fn: neograph._node_protocols.RawNodeFn | None = None, fan_out_param: str | None = None, handoff_param: str | None = None, handoff_channel: str | None = None, renderer: neograph.renderers.Renderer | None = None, context: list[str] | None = None, skip_when: neograph._node_protocols.SkipPredicate | None = None, skip_value: neograph._node_protocols.SkipValueFactory | None = None, gate_tools_when: collections.abc.Callable | str | None = None, oracle_gen_type: type[pydantic.main.BaseModel] | None = None)"
     },
     {
       "anchor": "tool-model",
