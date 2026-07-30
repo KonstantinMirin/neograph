@@ -69,7 +69,7 @@ MIN_EXPECTED_FILES = 60
 # One entry per line, sorted by posix path. See the module docstring for the contract; no
 # per-entry reason strings (all 21 would say the same thing).
 ALLOWLIST: dict[str, int] = {
-    "_agent_cycle.py": 1054,
+    "_agent_cycle.py": 776,
     "_agent_spec.py": 981,
     "_llm_retry.py": 658,
     "_oracle.py": 650,
