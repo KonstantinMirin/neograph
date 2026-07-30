@@ -104,7 +104,10 @@ _ALLOWLIST: Counter = Counter(
         ("_spec_loader.py", "for ref in spec.pipeline.nodes:"): 1,
         ("_spec_loader.py", "for prev_ref in construct_spec.nodes[:i]:"): 1,
         # compute_node_fingerprints — already arm-aware (tdbb, _fingerprint_item).
-        ("state.py", "for item in construct.nodes:"): 1,
+        # neograph-3ffdg.14: this walk moved with compute_node_fingerprints into
+        # _schema_fingerprint.py. Re-keyed by (module, content); it walks the IR to
+        # hash node output types, and the arm-blindness exemption is unchanged.
+        ("_schema_fingerprint.py", "for item in construct.nodes:"): 1,
         # compile_state_model — the gold-standard arm-aware walk (handles
         # branch_nodes explicitly right after these partitions).
         ("state.py", "nodes_only = [n for n in construct.nodes if isinstance(n, Node)]"): 1,
@@ -117,7 +120,12 @@ _ALLOWLIST: Counter = Counter(
         # not excluded and order is preserved for _group_portal_members' entry pick.
         # Routing through an arm-descending iterator would be WRONG (it would admit
         # arm-nested nodes that cannot be mesh members).
-        ("state.py", "for m in construct.nodes"): 1,
+        # content re-localized: ruff format rewrapped this comprehension onto one
+        # line during neograph-3ffdg.14. Same walk, same exemption.
+        (
+            "state.py",
+            "m for m in construct.nodes if primary_shape(m) is PrimaryShape.PORTAL and not _is_dispatch(m)",
+        ): 1,
         # Test-scaffold codegen introspection. The two top-level _collect_items /
         # _collect_edges walks were migrated to iter_with_arms in neograph-gfoq; the
         # remaining inner walk descends a sub-construct's own node list one level

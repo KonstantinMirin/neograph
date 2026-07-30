@@ -211,9 +211,6 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
         "neograph._runtime_registry",
         frozenset({"_decoration_registry"}),
     ),
-    # state.py — cycle: state.py owns field naming logic which naming.py wraps
-    # for legacy callers. Trivial; can be flattened anytime.
-    ("state.py", "neograph.naming", frozenset({"field_name_for"})),
     # tool.py — @tool registers the tool factory into the decoration-time
     # registry (leaf _runtime_registry, neograph-v3xx HIGH-01). Function-local
     # import inside the decorator defers the registry import to decoration time.

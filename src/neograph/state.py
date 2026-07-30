@@ -7,7 +7,7 @@ No monolithic state that grows with every derivation type.
 from __future__ import annotations
 
 import warnings
-from typing import Annotated, Any, get_args, get_origin
+from typing import Annotated, Any
 
 import structlog
 from pydantic import BaseModel, create_model
@@ -20,10 +20,26 @@ from neograph.naming import field_name_for, output_field_name
 from neograph.spec_types import lookup_type
 
 log = structlog.get_logger()
-from typing import assert_never
+# --- typing names state.py imported and RE-EXPORTED before the split; the
+# --- fingerprint cluster was their only local consumer here.
+from typing import assert_never, get_args, get_origin  # noqa: E402,F401
 
 from neograph._normalize import _declared_output, normalize_outputs
+
+# --- extracted clusters (neograph-3ffdg.14), re-exported so existing
+# --- `from neograph.state import ...` call sites keep resolving unchanged.
+from neograph._schema_fingerprint import (  # noqa: E402,F401
+    _type_signature,
+    compute_node_fingerprints,
+    compute_schema_fingerprint,
+)
 from neograph._state_keys import StateKeys
+from neograph._state_reducers import (  # noqa: E402,F401
+    _append_loop_result,
+    _concat_reducer,
+    _last_write_wins,
+    _merge_dicts,
+)
 from neograph.modifiers import (
     COMBO_DECOMPOSITION,
     SUB_CONSTRUCT_UNSUPPORTED_COMBOS,
@@ -35,67 +51,6 @@ from neograph.modifiers import (
     primary_shape,
 )
 from neograph.node import Node
-
-
-def _last_write_wins(existing: Any, new: Any) -> Any:
-    """Reducer: last write wins (default for sequential nodes)."""
-    return new
-
-
-def _append_loop_result(existing: Any, new: Any) -> list:
-    """Reducer: append each loop iteration's result to a list."""
-    if existing is None:
-        existing = []
-    return [*existing, new]
-
-
-def _concat_reducer(existing: Any, new: Any) -> list:
-    """Reducer: concatenate list-valued writes onto an accumulator.
-
-    The single list-append reducer shared by every additive channel:
-      - oracle fan-out results (``list[sub.output]``)
-      - Each×Oracle tagged (key, result) tuples
-      - agent-cycle ToolInteraction records (``tool_log``, per-turn concat)
-      - agent-cycle ResourceRef records (``resource_manifest``, per-turn concat)
-
-    A per-turn write is a ``list`` (extend); a single value is appended. These
-    four channels were byte-identical functions (neograph-yrph item 4). LangGraph
-    keys channels by FIELD NAME, not reducer identity, so one shared operator is
-    safe — the same pattern ``_last_write_wins``/``_merge_dicts`` already use
-    across many distinct channels. A structural guard bans re-planting a
-    byte-identical concat twin.
-    """
-    if existing is None:
-        existing = []
-    if isinstance(new, list):
-        return existing + new
-    return [*existing, new]
-
-
-def _merge_dicts(existing: Any, new: dict) -> dict:
-    """Reducer: merge dicts additively (for fan-out results).
-
-    On duplicate keys, keeps the existing (first) value. Logs a single
-    summary instead of per-key warnings (neograph-o0tv: noisy on resume).
-    """
-    if existing is None:
-        existing = {}
-    if not isinstance(existing, dict):
-        existing = {}
-    if not isinstance(new, dict):
-        return existing
-    merged = {**existing}
-    dupes = []
-    for key, val in new.items():
-        if key in merged:
-            dupes.append(key)
-            continue
-        merged[key] = val
-    if dupes:
-        log.debug(
-            "each_duplicate_keys", count=len(dupes), keys=dupes[:5], action="kept_existing", truncated=len(dupes) > 5
-        )
-    return merged
 
 
 def compile_state_model(
@@ -281,9 +236,7 @@ def compile_state_model(
     # construct.nodes, so _group_portal_members — which treats group_members[0] as
     # the entry — would pick a Node peer as the entry and mis-key the channel).
     portal_members: list[ConstructItem] = [
-        m
-        for m in construct.nodes
-        if primary_shape(m) is PrimaryShape.PORTAL and not _is_dispatch(m)
+        m for m in construct.nodes if primary_shape(m) is PrimaryShape.PORTAL and not _is_dispatch(m)
     ]
     for _group_name, group_members in _group_portal_members(portal_members).items():
         entry = group_members[0]
@@ -397,119 +350,6 @@ def build_output_schema_model(state_model: type[BaseModel]) -> type[BaseModel]:
             category=UserWarning,
         )
         return create_model(f"{state_model.__name__}Output", **fields)
-
-
-def _type_signature(typ: Any) -> str:
-    """Structural signature of a type, used by both fingerprint computations.
-
-    Qualname alone is too coarse: two structurally-different models that share a
-    ``__qualname__`` (or the same class after a field-level edit) collide into a
-    false negative, so the schema/node fingerprints never change and the
-    checkpoint auto-rewind never triggers (neograph-v63o / review 080726 PAT-03).
-
-    This folds one level of field detail into the signature — the same
-    ``(field_name, str(annotation))`` detail ``compute_schema_fingerprint``
-    records — so a same-name field add/remove/retype changes the signature:
-
-    - Pydantic model  -> ``module.Qualname`` + sorted ``(field, str(annotation))``
-      pairs. Nested models contribute their ``str(annotation)`` (not their own
-      structure) to stay cycle-safe, matching the schema fingerprint's depth.
-    - Generic (``list[X]``, ``dict[K,V]``, Each's ``dict[str, X]``) -> unwrapped
-      so a field change on the wrapped model ``X`` is still visible.
-    - Anything else -> ``str(typ)`` (already carries module + qualname).
-    """
-    args = get_args(typ)
-    if args:
-        origin = get_origin(typ)
-        origin_name = getattr(origin, "__qualname__", str(origin))
-        return f"{origin_name}[{','.join(_type_signature(a) for a in args)}]"
-    if isinstance(typ, type) and issubclass(typ, BaseModel):
-        fields = sorted((fname, str(finfo.annotation)) for fname, finfo in typ.model_fields.items())
-        return f"{typ.__module__}.{typ.__qualname__}{fields!r}"
-    return str(typ)
-
-
-def compute_node_fingerprints(construct: Any) -> dict[str, str]:
-    """Compute per-node output type fingerprints for checkpoint invalidation.
-
-    Returns {field_name: sha256_prefix} for each node in the construct.
-    Used to identify which specific nodes changed between runs.
-    """
-    import hashlib
-
-    def _fp(name: str, typ: Any) -> str:
-        # The fingerprint contract: sha256('{name}:{type_signature}')[:12]. The
-        # :12 width and '{name}:{sig}' layout are load-bearing — schema and node
-        # fingerprints move in lockstep, neograph-v63o, so the two branches
-        # (dict-form per-key + singular) MUST share one definition, neograph-2yi7q.
-        return hashlib.sha256(f"{name}:{_type_signature(typ)}".encode()).hexdigest()[:12]
-
-    from neograph.naming import field_name_for
-
-    result: dict[str, str] = {}
-
-    def _fingerprint_item(item: Any) -> None:
-        """Fingerprint one Node (per output key) or Construct (its output).
-
-        Shared between top-level items and branch-arm items so an arm node's
-        output type is invalidated on change exactly like a top-level node's.
-        Kept as its own walk rather than routed through ``iter_nodes`` to
-        preserve the top-level-only granularity: a sub-construct is
-        fingerprinted by its declared output, not by its internal nodes.
-        """
-        # _declared_output abstracts the Node.outputs (plural) / Construct.output
-        # (singular) split — Node dict-form is fingerprinted per key, a Construct's
-        # single declared output as one field. No hand-rolled hasattr discrimination.
-        declared = _declared_output(item)
-        if declared is None:
-            return
-        fname = field_name_for(item.name)
-        no = normalize_outputs(declared)
-        if no.is_dict_form:
-            # Dict-form outputs: fingerprint each key
-            for key, typ in no.all_keys.items():
-                full_name = output_field_name(fname, key)
-                result[full_name] = _fp(full_name, typ)
-        else:
-            typ = no.primary
-            result[fname] = _fp(fname, typ)
-
-    for item in construct.nodes:
-        if isinstance(item, _BranchNode):
-            meta = item._neo_branch_meta
-            for arm_item in meta.true_arm_nodes + meta.false_arm_nodes:
-                _fingerprint_item(arm_item)
-        else:
-            _fingerprint_item(item)
-    return result
-
-
-def compute_schema_fingerprint(state_model: type[BaseModel]) -> str:
-    """Compute a stable fingerprint from the state model's non-framework fields.
-
-    The fingerprint changes when node output types change (field added/removed,
-    type changed, class renamed). Framework fields (neo_*, node_id, project_root,
-    human_feedback) are excluded — they change with modifier config, not schema.
-    """
-    import hashlib
-
-    _FRAMEWORK_PREFIXES = (
-        StateKeys.FRAMEWORK_PREFIX,
-        StateKeys.NODE_ID,
-        StateKeys.PROJECT_ROOT,
-        StateKeys.HUMAN_FEEDBACK,
-    )
-    items = []
-    for fname, finfo in state_model.model_fields.items():
-        if any(fname.startswith(p) or fname == p for p in _FRAMEWORK_PREFIXES):
-            continue
-        # _type_signature (not bare str(annotation)) so a same-qualname field
-        # change opens the gate -- otherwise the enriched node fingerprint below
-        # is never reached; see neograph-v63o. Keeps both fingerprints in lockstep.
-        items.append((fname, _type_signature(finfo.annotation)))
-    items.sort()
-    raw = repr(items).encode()
-    return hashlib.sha256(raw).hexdigest()[:16]
 
 
 def _add_agent_channels(node: Node, fields: dict[str, Any]) -> None:
