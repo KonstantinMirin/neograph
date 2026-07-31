@@ -16,11 +16,14 @@ other ``src/neograph/*.py`` file does ``isinstance(<expr>.outputs, dict)`` or
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
 from neograph._ir_protocols import ConstructItem
+from neograph.errors import ConfigurationError
 from neograph.naming import output_field_name
 from neograph.node import Node, TypeSpecStatic
+
+_ItemT = TypeVar("_ItemT", bound=ConstructItem)
 
 
 @dataclass(frozen=True)
@@ -135,3 +138,35 @@ def _declared_output(item: ConstructItem) -> TypeSpecStatic:
     ``getattr(item, 'output', None)`` selector.
     """
     return item.outputs if isinstance(item, Node) else getattr(item, "output", None)
+
+
+def _with_declared_io(item: _ItemT, **fields: object) -> _ItemT:
+    """Apply NODE-level ``inputs``/``outputs`` surgery, as a no-op on a Construct.
+
+    The write counterpart of ``_declared_output``, and it exists for the same
+    reason: to keep the Node-vs-Construct decision in ONE place instead of
+    re-inlining ``isinstance`` at every ``model_copy`` site.
+
+    Why a Construct is a NO-OP rather than a route-to-``input``/``output``: a
+    Node's ``inputs`` is a fan-in MAPPING derived from the caller's data edges,
+    whereas a Construct's ``input``/``output`` is a single boundary PORT already
+    restored from the exported sub-flow. They are not the same thing, so writing
+    one into the other would be wrong, not merely redundant.
+
+    This is fail-loud by construction. Pydantic's ``model_copy(update=...)`` does
+    NOT validate: on a Construct it silently attaches a phantom ``outputs``
+    attribute that is not in ``model_fields`` at all, so a missed skip produces a
+    quietly malformed item instead of an error. Unknown keys are therefore
+    rejected here rather than trusted to the model.
+    """
+    unknown = set(fields) - {"inputs", "outputs"}
+    if unknown:
+        raise ConfigurationError.build(
+            "_with_declared_io writes only Node-level inputs/outputs",
+            expected="'inputs' and/or 'outputs'",
+            found=f"{sorted(unknown)}",
+            hint="set a Construct's boundary via input=/output= at reconstruction, not through this helper",
+        )
+    if not isinstance(item, Node) or not fields:
+        return item
+    return item.model_copy(update=fields)

@@ -145,8 +145,12 @@ _ALLOWLIST: Counter = Counter(
         # apply to. Count stays 1 across the Each x Oracle fusion work
         # (neograph-s7zt3.10): the fusion recognizer does NOT add a second walk,
         # it calls the same `_subflow_inner_nodes` helper this line lives in.
+        # RE-KEYED (neograph-s7zt3.11): `_subflow_inner_nodes` moved to
+        # _agent_spec_group_import.py when loader.py was split back under its
+        # ceiling. The old loader.py key is REMOVED, not kept alongside -- leaving
+        # it would grant a permission to a file that no longer does the thing.
         (
-            "loader.py",
+            "_agent_spec_group_import.py",
             'inner_nodes = [n for n in map_node.subflow.nodes if type(n).__name__ not in ("StartNode", "EndNode")]',
         ): 1,
         # from_agent_spec's PORTAL_OPERATOR mesh-exit composite recognition

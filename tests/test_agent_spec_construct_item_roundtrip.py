@@ -209,7 +209,14 @@ def _oracle_operator() -> Construct:
 
 def _loop_matching_boundary() -> Construct:
     """LOOP at input == output == Plain. See the module docstring: the DIFFERING
-    boundary is out of scope (neograph-rh5fb, fails at EXPORT)."""
+    boundary is out of scope (neograph-rh5fb, fails at EXPORT).
+
+    ``when`` is a REGISTERED CONDITION NAME, the canonical form: ``Loop.when`` is
+    declared ``str | Callable`` where the str form is a registry key, and that is
+    what ``compile()`` resolves. Importing it used to raise ValueError because
+    the reconstructor parsed any string ``when`` as an expression -- fixed with
+    this row (neograph-ijyjr).
+    """
     return _parent(
         _sub(Plain, Plain, fn="p8_inner_same") | Loop(when="p8_never", max_iterations=3),
         "p8_seed_plain",

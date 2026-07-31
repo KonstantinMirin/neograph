@@ -29,20 +29,15 @@ from pydantic import (
 )
 
 from neograph._agent_spec_markers import (
-    _MARK_AGENT_SPEC,
-    _MARK_EACH_SPEC,
     _MARK_GROUP_ID,
-    _MARK_LOOP_SPEC,
     _MARK_MODIFIER,
     _MARK_OPERATOR_SPEC,
-    _MARK_ORACLE_SPEC,
     _MARK_PORTAL_OPERATOR_SPEC,
     _MARK_PORTAL_SPEC,
     _MARK_PROMPT_SPEC,
-    _MARK_TOOL_SPEC,
 )
 from neograph._normalize import (
-    normalize_outputs,
+    _with_declared_io,
     primary_output_field,  # noqa: E402,F401
 )
 
@@ -66,15 +61,11 @@ from neograph._spec_schema import (  # noqa: E402,F401
     ToolSpec,
 )
 from neograph._state_keys import StateKeys  # noqa: E402,F401
-from neograph.conditions import parse_condition
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
 from neograph.modifiers import (
     COMBO_DECOMPOSITION,
-    Each,
-    Loop,
     Operator,
-    Oracle,
     Portal,
     PrimaryShape,
     combo_for_modifier_names,
@@ -83,13 +74,8 @@ from neograph.modifiers import (
 from neograph.naming import field_name_for  # noqa: E402,F401
 from neograph.node import Node
 from neograph.spec_types import (
-    _import_agent_spec_property_classes,
-    _structural_type_name,
-    agent_spec_properties_to_types,
     load_project_types,  # noqa: E402,F401
-    lookup_type,
 )
-from neograph.tool import Tool
 
 log = structlog.get_logger()
 
@@ -114,564 +100,7 @@ def _import_agent_spec_import_classes() -> Any:
     return nodes_mod
 
 
-def _agent_spec_props_to_type(props: Any) -> Any:
-    """Register + look up a Pydantic model from a list of Agent Spec
-    ``Property`` objects, or ``None`` if there are none.
-
-    Reuses ``spec_types.agent_spec_properties_to_types`` (the neograph-nkjv9
-    import-direction bridge) -- never a second Property walker. The
-    registration NAME is derived structurally (``spec_types._structural_type_name``,
-    the SAME canonical helper the nested-object reconstruction branch uses),
-    not from the node's own name -- so a type appearing in two different
-    places (e.g. a self-loop's own output feeding back as one of its own
-    inputs) reconstructs to ONE shared class, not two incompatible ones.
-    """
-    if not props:
-        return None
-
-    name = _structural_type_name(props)
-    agent_spec_properties_to_types(props, name)
-    return lookup_type(name)
-
-
-def _inputs_from_data_edges(dest_name: str, flow: Any, output_types: dict[str, Any]) -> dict[str, Any] | None:
-    """Build a dict-form ``Node.inputs`` mapping from a Flow's
-    ``DataFlowEdge``s targeting *dest_name*, keyed by upstream item name.
-
-    Only edges whose source is a already-reconstructed TOP-LEVEL item (i.e.
-    present in *output_types*) are considered -- this naturally excludes a
-    modifier group's own INTERNAL edges (e.g. an Oracle group's variant ->
-    merge fan-in), since variant/check/pause nodes never get an
-    ``output_types`` entry of their own.
-    """
-    edges = [e for e in (flow.data_flow_connections or []) if e.destination_node.name == dest_name]
-    if not edges:
-        return None
-    inputs: dict[str, Any] = {}
-    for edge in edges:
-        source_name = edge.source_node.name
-        if source_name in output_types:
-            inputs[source_name] = output_types[source_name]
-    return inputs or None
-
-
-def _dict_form_inputs_from_props(props: Any) -> dict[str, Any] | None:
-    """Reconstruct a dict-form ``Node.inputs`` from dotted-prefixed input
-    Properties, the inverse of ``_agent_spec._properties_for``'s dict-form
-    ``p.title = f"{key}.{p.title}"`` prefixing.
-
-    ``to_agent_spec`` flattens a dict-form ``inputs={'k': SomeModel}`` into one
-    Property per field titled ``"k.field"``. A FLAT reconstruction
-    (``_agent_spec_props_to_type``) would build a single model with dotted field
-    names (``{'k.field': ...}``) whose structural type hash does NOT match the
-    producer's — the neograph-3lk2l / qtfof.4 type-identity loss. Grouping the
-    Properties back by their ``k`` prefix and reconstructing each group's model
-    from the UN-prefixed field Properties restores the original per-key type, so
-    the Each fan-out receiver reconstructs to the SAME structural class as the
-    producer's list element. Returns ``None`` when no Property is dotted (leave
-    the caller's default single-type reconstruction in charge)."""
-    if not props:
-        return None
-    groups: dict[str, list[Any]] = {}
-    for p in props:
-        if "." not in p.title:
-            return None
-        key, _, rest = p.title.partition(".")
-        groups.setdefault(key, []).append(p.model_copy(update={"title": rest}))
-    return {key: _agent_spec_props_to_type(group) for key, group in groups.items()} or None
-
-
-def _augment_inputs_from_prompt_marker(
-    inputs: Any, marker: dict[str, Any], output_types: dict[str, Any]
-) -> dict[str, Any] | None:
-    """Restore the ORIGINAL dict-form ``Node.inputs`` from a ``neograph/prompt_spec``
-    marker's JSON-native ``original_inputs`` (Option F, neograph-cbpyx).
-
-    An Option-F-translated ``LlmNode``/variant declares only the referenced FLAT
-    Properties, so its own ``inputs`` (and its DataFlowEdges) have lost every input
-    the prompt never referenced. Starting from the edge-derived ``inputs`` (which
-    already carry the CORRECT producer types for referenced inputs -- the SAME
-    structural type object the producer registered), this ADDS every original input
-    key the edges missed. A dict-form input KEY is the upstream NODE name, so a
-    missing key's type is taken from that producer's already-reconstructed output
-    (``output_types[key]``) -- guaranteeing type-identity with the producer for the
-    fan-in validator, and staying stable across a JSON wire round trip (both sides
-    reconstruct from the SAME producer node). Only when no same-named producer
-    exists does it fall back to rebuilding the type from the marker's JSON-native
-    ``json_schema`` (a bare ``Property`` that ``spec_types._property_to_field_type``
-    resolves via ``json_schema``), regrouped by the EXISTING
-    ``_dict_form_inputs_from_props``."""
-    entries = marker.get("original_inputs")
-    if not entries:
-        return inputs if isinstance(inputs, dict) else None
-
-    ordered_keys: list[str] = []
-    for e in entries:
-        key = e["title"].split(".", 1)[0]
-        if key not in ordered_keys:
-            ordered_keys.append(key)
-
-    result: dict[str, Any] = dict(inputs) if isinstance(inputs, dict) else {}
-    for key in ordered_keys:
-        if key in result:
-            continue
-        if key in output_types and output_types[key] is not None:
-            result[key] = output_types[key]
-            continue
-        pas = _import_agent_spec_property_classes()
-        group = [
-            pas.Property.model_construct(
-                title=e["title"].partition(".")[2],
-                json_schema=e["json_schema"],
-                type=e["json_schema"].get("type"),
-                description=None,
-                default=None,
-            )
-            for e in entries
-            if e["title"].split(".", 1)[0] == key
-        ]
-        result[key] = _agent_spec_props_to_type(group)
-    return result or None
-
-
-def _tools_from_marker(marker_tools: list[dict[str, Any]]) -> list[Tool]:
-    """Rebuild neograph ``Tool`` specs from the flat ``neograph/agent_spec``
-    tools list (the EXACT inverse of ``_agent_spec._agent_spec_marker``'s
-    ``tools=[{name, budget, config, idempotent}, ...]`` blob)."""
-    return [Tool(t["name"], budget=t["budget"], config=t["config"], idempotent=t["idempotent"]) for t in marker_tools]
-
-
-def _tools_from_foreign_agent(agent: Any) -> list[Tool]:
-    """Best-effort rebuild of ``Tool`` specs from a foreign ``Agent``'s
-    ``tools`` (each a ``ServerTool``). A ServerTool that still carries a
-    ``neograph/tool_spec`` marker restores budget/config/idempotent; a truly
-    foreign one is reconstructed name-only. Returns an empty list (never None --
-    ``Node.tools`` rejects None) when the agent declares no tools."""
-    tools: list[Tool] = []
-    for st in getattr(agent, "tools", None) or []:
-        ts = (getattr(st, "metadata", None) or {}).get(_MARK_TOOL_SPEC)
-        if ts:
-            tools.append(Tool(ts["name"], budget=ts["budget"], config=ts["config"], idempotent=ts["idempotent"]))
-        else:
-            tools.append(Tool(st.name))
-    return tools
-
-
-def _node_from_spec_agent(name: str, agent: Any, marker: dict[str, Any] | None, inputs: Any, outputs: Any) -> Node:
-    """Build an agent/act ``Node`` from an Agent Spec agent, dispatching on
-    marker presence (refinement addendum MEDIUM-2).
-
-    * ``marker`` present (a neograph-exported ``AgentNode``) -> LOSSLESS gap-1
-      inversion: mode/prompt/model/tools (incl. each Tool's
-      budget/config/idempotent)/gate_tools_when/context all restored from the
-      ``neograph/agent_spec`` blob.
-    * ``marker`` absent (a FOREIGN ``Agent``, e.g. a Swarm member) -> best-effort
-      gap-3 reconstruction: mode='agent' (read-only, conservative) built from
-      the plain ``Agent``'s ``system_prompt`` / ``llm_config.model_id`` /
-      ``tools``.
-
-    Shared by BOTH the AgentNode branch (gaps 1/3) and the Swarm member builder
-    (gap 2) -- a raw ``metadata[_MARK_AGENT_SPEC]`` read in the Swarm path would
-    ``KeyError`` on foreign agents that carry no marker.
-    """
-    if marker is not None:
-        return Node(
-            name=name,
-            mode=marker["mode"],
-            inputs=inputs,
-            outputs=outputs,
-            prompt=marker["prompt"],
-            model=marker["model"],
-            tools=_tools_from_marker(marker["tools"]),
-            gate_tools_when=marker["gate_tools_when"],
-            context=marker["context"],
-        )
-
-    llm_config = getattr(agent, "llm_config", None)
-    return Node(
-        name=name,
-        mode="agent",
-        inputs=inputs,
-        outputs=outputs,
-        prompt=getattr(agent, "system_prompt", None) or None,
-        model=getattr(llm_config, "model_id", None),
-        tools=_tools_from_foreign_agent(agent),
-    )
-
-
 # Per-family endpoint attribute names for the client-initiated remote-agent
-# best-effort branch -- verified against the installed
-# pyagentspec SDK, NOT a blind two-field getattr shared across families.
-# RemoteAgent itself is abstract (no endpoint fields of its own) and has no
-# instantiable concrete form beyond the two families below.
-_REMOTE_AGENT_ENDPOINT_ATTRS: dict[str, tuple[str, ...]] = {
-    "A2AAgent": ("agent_url", "connection_config"),
-    "OciAgent": ("agent_endpoint_id", "client_config"),
-}
-
-
-def _reconstruct_agent_node(spec_node: Any, inputs: Any, outputs: Any) -> Node:
-    """Reconstruct a neograph Node from an ``AgentNode`` (gaps 1 & 3).
-
-    Dispatches on the ``neograph/agent_spec`` marker and the wrapped agent's
-    runtime type:
-
-    * marker present -> LOSSLESS agent/act reconstruction (gap 1).
-    * marker absent, ``.agent`` is a plain ``Agent`` -> best-effort agent-mode
-      (gap 3, foreign agent).
-    * marker absent, ``.agent`` is a client-initiated
-      ``RemoteAgent``/``A2AAgent``/``OciAgent`` -> name-bound scripted stand-in
-      + WARNING (gap 3, ratification §3b): never a silent drop, never fail-loud.
-    * anything else (e.g. a ServerTool-as-agent, an orchestrator-side surface)
-      -> FAIL LOUD (the principled line, ratification §3b).
-    """
-    marker = (getattr(spec_node, "metadata", None) or {}).get(_MARK_AGENT_SPEC)
-    agent = spec_node.agent
-    agent_type = type(agent).__name__
-
-    if marker is not None or agent_type == "Agent":
-        return _node_from_spec_agent(spec_node.name, agent, marker, inputs, outputs)
-
-    if agent_type in ("RemoteAgent", "A2AAgent", "OciAgent"):
-        warnings.warn(
-            f"AgentNode {spec_node.name!r} wraps a client-initiated {agent_type} with no "
-            "neograph agent-spec marker -- importing best-effort as a name-bound scripted "
-            f"Node (scripted_fn={spec_node.name!r}); the runtime binds the endpoint at compile "
-            "time. This is a downgrade of the remote-agent semantics, not a lossless import.",
-            stacklevel=2,
-        )
-        node = Node(
-            name=spec_node.name,
-            mode="scripted",
-            inputs=inputs,
-            outputs=outputs,
-            scripted_fn=spec_node.name,
-        )
-        attr_names = _REMOTE_AGENT_ENDPOINT_ATTRS.get(agent_type, ())
-        node._remote_agent_endpoint = (agent_type, {name: getattr(agent, name) for name in attr_names})
-        return node
-
-    raise ConfigurationError.build(
-        f"Flow node {spec_node.name!r} is an AgentNode wrapping a {agent_type!r} with no "
-        "neograph agent-spec marker -- no best-effort lowering",
-        expected="a neograph-exported Agent (marker), a plain Agent, or a client-initiated "
-        "RemoteAgent/A2AAgent/OciAgent",
-        found=f"AgentNode.agent is a {agent_type}",
-        hint="orchestrator-side agents (e.g. a ServerTool-as-agent) have no client-initiated "
-        "handoff semantics to lower -- this fails loud rather than silently downgrade "
-        "(ratification agent-spec-ratification-2026-07-13.md §3b)",
-    )
-
-
-def _reconstruct_primitive_node(spec_node: Any, flow: Any, output_types: dict[str, Any]) -> Node:
-    """Reconstruct a bare (unmodified) neograph Node from an Agent Spec
-    primitive node -- the inverse of ``_agent_spec._lower_node``."""
-    cls_name = type(spec_node).__name__
-
-    outputs = _agent_spec_props_to_type(spec_node.outputs)
-    # DataFlowEdges name the PRODUCER (dict-form, keyed by upstream name) --
-    # but a self-contained node with no external upstream (e.g. Each's inner
-    # node in its own single-node sub-flow) has no edges at all, even though
-    # its OWN Property list still declares its input shape. Fall back to
-    # that single-type reconstruction rather than silently dropping it.
-    inputs = _inputs_from_data_edges(spec_node.name, flow, output_types) or _agent_spec_props_to_type(spec_node.inputs)
-    output_types[spec_node.name] = outputs
-
-    if cls_name == "AgentNode":
-        # gap 1 (lossless marker inversion) + gap 3 (foreign/remote best-effort).
-        # Option F neograph-cbpyx: a translated agent/act node declares only the
-        # flat placeholder inputs, so restore the ORIGINAL input TypeSpec from the
-        # neograph/prompt_spec marker (an Each fan-out receiver must round-trip to
-        # the producer's list element type -- neograph-3lk2l).
-        prompt_marker = (getattr(spec_node, "metadata", None) or {}).get(_MARK_PROMPT_SPEC)
-        if prompt_marker is not None:
-            inputs = _augment_inputs_from_prompt_marker(inputs, prompt_marker, output_types)
-        return _reconstruct_agent_node(spec_node, inputs, outputs)
-
-    if cls_name == "LlmNode":
-        # Option F neograph-cbpyx: prefer the neograph/prompt_spec marker -- it
-        # carries the UNtranslated ${var} prompt and the FULL original inputs
-        # (incl. any the prompt never referenced, whose flat LlmNode dropped both
-        # Property and DataFlowEdge). Fall back to the translated prompt_template /
-        # data-edge inputs for a pre-Option-F or foreign LlmNode with no marker.
-        marker = (getattr(spec_node, "metadata", None) or {}).get(_MARK_PROMPT_SPEC)
-        if marker is not None:
-            prompt = marker["original_text"]
-            inputs = _augment_inputs_from_prompt_marker(inputs, marker, output_types)
-        else:
-            prompt = spec_node.prompt_template
-        mode, model, scripted_fn = "think", spec_node.llm_config.model_id, None
-    elif cls_name == "ToolNode":
-        mode, prompt, model, scripted_fn = "scripted", None, None, spec_node.tool.name
-    else:
-        raise ConfigurationError.build(
-            f"Flow node {spec_node.name!r} has unsupported type {cls_name!r} for primitive import",
-            expected="LlmNode, ToolNode, AgentNode, or FlowNode",
-            found=cls_name,
-        )
-
-    return Node(
-        name=spec_node.name,
-        mode=mode,
-        inputs=inputs,
-        outputs=outputs,
-        prompt=prompt,
-        model=model,
-        scripted_fn=scripted_fn,
-    )
-
-
-def _reconstruct_oracle_group(group: list[Any], flow: Any, output_types: dict[str, Any]) -> Node | None:
-    """Reconstruct an Oracle-modified Node from its exported variant+merge
-    group -- the inverse of ``_agent_spec._lower_oracle``.
-
-    Returns ``None`` (and WARNs) if the marker's ``n`` no longer matches the
-    ACTUAL number of variant nodes present -- a stale/hand-edited marker
-    must never be blindly trusted into a silently-wrong reconstruction
-    (per the Core Invariant's per-group re-lower-and-diff discipline). The
-    caller falls back to importing every node in the group as a bare
-    primitive.
-    """
-
-    merge_node = group[-1]
-    variant_nodes = group[:-1]
-    spec = merge_node.metadata[_MARK_ORACLE_SPEC]
-
-    if len(variant_nodes) != spec["n"]:
-        warnings.warn(
-            f"Oracle group {merge_node.name!r}: marker declares n={spec['n']!r} but "
-            f"{len(variant_nodes)} variant node(s) are actually present -- the marker is "
-            "stale (hand-edited Flow). Falling back to primitive-level import for this group.",
-            stacklevel=2,
-        )
-        return None
-
-    # neograph-m57mn Option A: variants no longer lower unconditionally to
-    # LlmNode (_agent_spec._lower_oracle now dispatches per node.mode), so
-    # reconstruction must dispatch per the variant's ACTUAL Agent Spec type
-    # too -- the inverse of that same dispatch, mirroring
-    # _reconstruct_primitive_node's LlmNode/ToolNode branching.
-    base_variant = variant_nodes[0]
-    base_cls = type(base_variant).__name__
-    base_prompt_marker = (getattr(base_variant, "metadata", None) or {}).get(_MARK_PROMPT_SPEC)
-
-    outputs = _agent_spec_props_to_type(merge_node.outputs)
-    # Option F neograph-cbpyx: a think/agent variant's external inputs are
-    # translated to flat placeholder names, so prefer the variant marker's
-    # ORIGINAL dict-form inputs (fallback to the merge node's data-edge inputs
-    # for scripted/foreign).
-    inputs = _inputs_from_data_edges(merge_node.name, flow, output_types)
-    if base_prompt_marker is not None:
-        inputs = _augment_inputs_from_prompt_marker(inputs, base_prompt_marker, output_types)
-    output_types[merge_node.name] = outputs
-
-    if base_cls == "AgentNode":
-        # Design B round-trip, neograph-i7k7j: the variant is a real AgentNode+Agent
-        # (the inverse of _lower_oracle's agent/act branch). Reuse the primitive
-        # AgentNode reconstructor to recover mode/prompt/model/tools/gate_tools_when/
-        # context from the neograph/agent_spec marker, then rename it to the GROUP
-        # name (the merge node) and attach Oracle below. The per-variant model tier
-        # is discarded here -- it round-trips via the Oracle marker's `models`, so the
-        # marker (built from the BASE node) already carries the base model.
-        base_node = _reconstruct_agent_node(base_variant, inputs, outputs).model_copy(update={"name": merge_node.name})
-    else:
-        if base_cls == "LlmNode":
-            # Option F neograph-cbpyx: prefer the variant's neograph/prompt_spec
-            # marker for the UNtranslated base prompt (fallback to the translated
-            # prompt_template for a pre-Option-F/foreign variant).
-            base_prompt = base_prompt_marker["original_text"] if base_prompt_marker else base_variant.prompt_template
-            base_mode, base_scripted_fn = "think", None
-            base_model = spec.get("models")[0] if spec.get("models") else base_variant.llm_config.model_id
-        elif base_cls == "ToolNode":
-            base_mode, base_prompt, base_scripted_fn = "scripted", None, base_variant.tool.name
-            base_model = spec.get("models")[0] if spec.get("models") else None
-        else:
-            raise ConfigurationError.build(
-                f"Oracle group {merge_node.name!r}'s variant node has unsupported type {base_cls!r}",
-                expected="LlmNode, ToolNode, or AgentNode",
-                found=base_cls,
-            )
-        base_node = Node(
-            name=merge_node.name,
-            mode=base_mode,
-            inputs=inputs,
-            outputs=outputs,
-            prompt=base_prompt,
-            model=base_model,
-            scripted_fn=base_scripted_fn,
-        )
-
-    oracle_kwargs: dict[str, Any] = {"n": spec["n"]}
-    if spec.get("models"):
-        oracle_kwargs["models"] = spec["models"]
-    if spec.get("merge_prompt"):
-        oracle_kwargs["merge_prompt"] = spec["merge_prompt"]
-        if spec.get("merge_model"):
-            oracle_kwargs["merge_model"] = spec["merge_model"]
-    elif spec.get("merge_fn"):
-        oracle_kwargs["merge_fn"] = spec["merge_fn"]
-
-    return base_node | Oracle(**oracle_kwargs)
-
-
-def _reconstruct_each_node(map_node: Any, flow: Any, output_types: dict[str, Any]) -> Node:
-    """Reconstruct an Each-modified Node from its exported MapNode --
-    the inverse of ``_agent_spec._lower_each``."""
-
-    each_spec = map_node.metadata[_MARK_EACH_SPEC]
-    inner_nodes = _subflow_inner_nodes(map_node)
-    if len(inner_nodes) != 1:
-        raise ConfigurationError.build(
-            f"Each group {map_node.name!r}'s sub-flow has {len(inner_nodes)} inner nodes, expected 1",
-            expected="exactly one inner node (Each wraps a single Node)",
-            found=f"{len(inner_nodes)} inner nodes",
-        )
-    inner_output_types: dict[str, Any] = {}
-    inner_spec = inner_nodes[0]
-    inner = _reconstruct_primitive_node(inner_spec, map_node.subflow, inner_output_types)
-    # Rename only -- KEEP the inner node's own reconstructed `inputs` (its
-    # per-item Property signature, e.g. Tagged): Each's fan-out mechanism
-    # feeds each item via `neo_each_item` state, not a dict-form upstream
-    # mapping, so overwriting inputs with the MapNode's EXTERNAL data edges
-    # (the collection producer, e.g. "seed") would be wrong -- that external
-    # edge names the COLLECTION's owner, not the fanned-out item's shape.
-    update: dict[str, Any] = {"name": map_node.name}
-    # PRIMARY @node shape (map_over= / dict-form inputs): the inner node's input
-    # Properties are dotted-prefixed ("cluster.v", "source.c"). Un-group them
-    # back to per-key types so the fan-out receiver reconstructs to the SAME
-    # structural class as the producer's list element (Each's assembly checks
-    # then pass through the dict-form fan_out_param skip, exactly like the
-    # original @node did) instead of a flat {"cluster.v": ...} model whose hash
-    # never matches -- neograph-3lk2l. The single-type inner shape (the legacy
-    # ``Node.scripted(inputs=Tagged)`` form, no dot) is left untouched.
-    dict_inputs = _dict_form_inputs_from_props(inner_spec.inputs)
-    if dict_inputs is not None:
-        update["inputs"] = dict_inputs
-    inner = inner.model_copy(update=update)
-
-    # _lower_each's MapNode never sets its own outputs= (only the wrapped
-    # inner node's SpecNode carries the per-item output Properties) -- the
-    # per-item output type is the inner node's, not the MapNode's (unset).
-    if not normalize_outputs(inner.outputs).is_none:
-        output_types[map_node.name] = normalize_outputs(inner.outputs).primary
-
-    return inner | Each(over=each_spec["over"], key=each_spec.get("key"))
-
-
-def _reconstruct_loop_item(body_spec: Any, check_spec: Any, flow: Any, output_types: dict[str, Any]) -> Node:
-    """Reconstruct a Loop-modified Node from its exported body+check pair --
-    the inverse of ``_agent_spec._lower_loop``."""
-
-    loop_spec = check_spec.metadata[_MARK_LOOP_SPEC]
-    inner_output_types: dict[str, Any] = {}
-    body = _reconstruct_primitive_node(body_spec, flow, inner_output_types)
-
-    outputs = body.outputs
-    inputs = _inputs_from_data_edges(body_spec.name, flow, output_types)
-    output_types[body_spec.name] = outputs
-    body = body.model_copy(update={"inputs": inputs, "outputs": outputs} if inputs is not None else {})
-
-    condition = parse_condition(loop_spec["when"]) if isinstance(loop_spec["when"], str) else loop_spec["when"]
-    return body | Loop(when=condition, max_iterations=loop_spec["max_iterations"], on_exhaust=loop_spec["on_exhaust"])
-
-
-def _reconstruct_operator_primary(primary_spec: Any, flow: Any, output_types: dict[str, Any]) -> Node:
-    """Reconstruct the BODY node of a BARE+Operator composite, with its external
-    inputs routed -- the inverse of the ``PrimaryShape.BARE`` half of
-    ``_agent_spec._lower_construct_item``'s Operator path.
-
-    Returns the node WITHOUT the ``| Operator(...)`` pipe: the caller applies
-    that in the one shared postlude, so Operator composes onto every primary
-    shape the same way (neograph-s7zt3.10) rather than being fused into one
-    shape's reconstructor.
-    """
-    inner_output_types: dict[str, Any] = {}
-    primary = _reconstruct_primitive_node(primary_spec, flow, inner_output_types)
-
-    inputs = _inputs_from_data_edges(primary_spec.name, flow, output_types)
-    if not normalize_outputs(primary.outputs).is_none:
-        output_types[primary_spec.name] = normalize_outputs(primary.outputs).primary
-    if inputs is not None:
-        primary = primary.model_copy(update={"inputs": inputs})
-
-    return primary
-
-
-def _reconstruct_fused_each_oracle_node(map_node: Any, output_types: dict[str, Any]) -> Node:
-    """Reconstruct an Each x Oracle FUSED Node from its exported MapNode whose
-    sub-flow is an Oracle variant+merge group -- the inverse of
-    ``_agent_spec._lower_each(node, each, oracle=...)``.
-
-    Composes the two EXISTING reconstructors rather than adding a third: the
-    nested group goes through ``_reconstruct_oracle_group`` (against the SUB-flow,
-    which is where its fan-in data edges live), then ``| Each(...)`` is piped on.
-    """
-    each_spec = map_node.metadata[_MARK_EACH_SPEC]
-    inner_nodes = _subflow_oracle_group(map_node)
-    if inner_nodes is None:  # pragma: no cover - the walk only routes here on a match
-        raise ConfigurationError.build(
-            f"Each group {map_node.name!r} was recognized as fused but its sub-flow holds no Oracle group",
-            expected="an Oracle variant+merge run sharing one neograph/group_id",
-            found="no shared group_id",
-        )
-
-    inner_output_types: dict[str, Any] = {}
-    inner = _reconstruct_oracle_group(inner_nodes, map_node.subflow, inner_output_types)
-    if inner is None:
-        raise ConfigurationError.build(
-            f"Each group {map_node.name!r}'s nested Oracle group did not reconstruct",
-            expected="a variant+merge run whose structure matches its neograph/modifier=oracle marker",
-            found="stale or inconsistent oracle markers inside the MapNode sub-flow",
-        )
-
-    # neograph-3lk2l inside the fusion: the fan-out receiver's element type is
-    # recovered from the FIRST VARIANT's dotted input Properties -- the fused
-    # analogue of the un-fused path's "inner spec" (there is no single inner
-    # node here, and the merge node's inputs are the variant OUTPUTS, not the
-    # per-item input shape). Without this the receiver reconstructs as a flat
-    # {"cluster.v": ...} model whose hash never matches the producer's element.
-    update: dict[str, Any] = {"name": map_node.name}
-    dict_inputs = _dict_form_inputs_from_props(inner_nodes[0].inputs)
-    if dict_inputs is not None:
-        update["inputs"] = dict_inputs
-    inner = inner.model_copy(update=update)
-
-    if not normalize_outputs(inner.outputs).is_none:
-        output_types[map_node.name] = normalize_outputs(inner.outputs).primary
-
-    return inner | Each(over=each_spec["over"], key=each_spec.get("key"))
-
-
-def _subflow_inner_nodes(map_node: Any) -> list[Any]:
-    """The real (non-sentinel) nodes inside an Each MapNode's sub-flow.
-
-    The ONE place that descends into a ``MapNode.subflow``, shared by the plain
-    Each reconstructor and the fusion recognizer so the descent is not walked
-    twice under two names.
-    """
-    inner_nodes = [n for n in map_node.subflow.nodes if type(n).__name__ not in ("StartNode", "EndNode")]
-    return inner_nodes
-
-
-def _subflow_oracle_group(map_node: Any) -> list[Any] | None:
-    """The Oracle variant+merge run nested INSIDE an Each MapNode's sub-flow,
-    or None when the MapNode wraps a plain single body.
-
-    This is how an Each x Oracle FUSION is recognized on import -- structurally,
-    by descending into the sub-flow and finding a shared ``neograph/group_id``
-    run, NOT by a dedicated marker on the MapNode. Per the loader's Core
-    Invariant, a marker is never trusted without confirming the structure it
-    claims to describe, so there is nothing a new marker could add here.
-    """
-    inner = _subflow_inner_nodes(map_node)
-    if len(inner) < 2:
-        return None
-    group_id = (inner[0].metadata or {}).get(_MARK_GROUP_ID)
-    if group_id is None or (inner[0].metadata or {}).get(_MARK_MODIFIER) != "oracle":
-        return None
-    if any((node.metadata or {}).get(_MARK_GROUP_ID) != group_id for node in inner):
-        return None
-    return inner
 
 
 def _trailing_operator(nodes: list[Any], j: int, primary_spec: Any, flow: Any) -> Any | None:
@@ -878,8 +307,14 @@ def _flow_member_to_construct(agent: Any, payload: type[BaseModel]) -> Construct
     """Reconstruct a Flow Swarm member (C1) onto a Construct mesh member whose
     boundary I/O is the synthesized uniform mesh ``payload`` (by identity).
 
-    Reuses the SAME ``from_agent_spec`` FlowNode->Construct recursion the
-    bare-FlowNode item path uses, then forces BOTH the Construct boundary
+    Calls ``_construct_from_subflow`` -- the SAME seam the bare-FlowNode item
+    path uses, now genuinely shared rather than re-implemented here (it used to
+    claim this reuse while holding its own copy, which is how the boundary-drop
+    bug lived in one copy and not the other). It takes a ``Flow``, not a
+    ``FlowNode``, and must not register into any ``output_types`` map, so it
+    calls the inner seam directly rather than ``_reconstruct_item_body``.
+
+    On top of the seam it forces BOTH the Construct boundary
     (``input``/``output``) AND its terminal interior producer's ``outputs`` to
     ``payload`` — the sub-construct output-boundary validator requires an internal
     node to actually produce the declared ``output`` type, and a round-tripped
@@ -893,11 +328,11 @@ def _flow_member_to_construct(agent: Any, payload: type[BaseModel]) -> Construct
     rather than being silently mis-coerced, per the maintainer's fail-loud-over-
     silent default for the interior-already-fixed case.
     """
-    sub = from_agent_spec(agent)
+    sub = _construct_from_subflow(agent, agent.name, from_agent_spec)
     nodes = list(sub.nodes)
     if nodes and isinstance(nodes[-1], Node):
-        nodes[-1] = nodes[-1].model_copy(update={"outputs": payload})
-    return sub.model_copy(update={"name": agent.name, "input": payload, "output": payload, "nodes": nodes})
+        nodes[-1] = _with_declared_io(nodes[-1], outputs=payload)
+    return sub.model_copy(update={"input": payload, "output": payload, "nodes": nodes})
 
 
 def _reconstruct_swarm_mesh(swarm: Any) -> Construct:
@@ -1122,11 +557,11 @@ def from_agent_spec(flow: Any) -> Construct:
         # None-valued key would read as ABSENT and silently un-fuse the import.
         if is_each_oracle_fused(dict.fromkeys(names, True)):
             # Fused Each x Oracle -- the MapNode's sub-flow IS an Oracle group.
-            item = _reconstruct_fused_each_oracle_node(payload["map_node"], output_types)
+            item = _reconstruct_fused_each_oracle_node(payload["map_node"], output_types, from_agent_spec)
         else:
             match decomp.primary:
                 case PrimaryShape.ORACLE:
-                    reconstructed = _reconstruct_oracle_group(payload["group"], flow, output_types)
+                    reconstructed = _reconstruct_oracle_group(payload["group"], flow, output_types, from_agent_spec)
                     if reconstructed is None:
                         # Stale marker -- fall back to importing every node in the
                         # group as a bare primitive (per the Core Invariant: never
@@ -1139,23 +574,22 @@ def from_agent_spec(flow: Any) -> Construct:
                     item = reconstructed
 
                 case PrimaryShape.EACH:
-                    item = _reconstruct_each_node(payload["map_node"], flow, output_types)
+                    item = _reconstruct_each_node(payload["map_node"], flow, output_types, from_agent_spec)
 
                 case PrimaryShape.LOOP:
-                    item = _reconstruct_loop_item(payload["body"], payload["check"], flow, output_types)
+                    item = _reconstruct_loop_item(
+                        payload["body"], payload["check"], flow, output_types, from_agent_spec
+                    )
 
                 case PrimaryShape.BARE:
                     spec_node = payload["primary"]
                     if type(spec_node).__name__ == "FlowNode":
-                        sub = from_agent_spec(spec_node.subflow)
-                        sub = sub.model_copy(update={"name": spec_node.name})
-                        output_types[spec_node.name] = sub.output
-                        item = sub
+                        item = _reconstruct_item_body(spec_node, flow, output_types, from_agent_spec)
                     elif decomp.has_operator:
                         # External inputs land on the PRIMARY node, not the
                         # property-less check BranchingNode -- mirror
                         # to_agent_spec's input_targets routing for BARE+Operator.
-                        item = _reconstruct_operator_primary(spec_node, flow, output_types)
+                        item = _reconstruct_operator_primary(spec_node, flow, output_types, from_agent_spec)
                     else:
                         item = _reconstruct_primitive_node(spec_node, flow, output_types)
 
@@ -1179,3 +613,55 @@ def from_agent_spec(flow: Any) -> Construct:
 
 
 # -- Builder -----------------------------------------------------------------
+
+
+# Re-exports: the Agent Spec import cluster moved out (neograph-s7zt3.11) so
+# loader.py could come back under its ratchet ceiling. Kept here so existing
+# `from neograph.loader import ...` call sites resolve unchanged.
+# noqa F401 is REQUIRED -- without it ruff --fix strips these as unused.
+from neograph._agent_spec_group_import import (  # noqa: E402,F401
+    _construct_from_subflow,
+    _oracle_kwargs,
+    _reconstruct_each_node,
+    _reconstruct_fused_each_oracle_node,
+    _reconstruct_item_body,
+    _reconstruct_loop_item,
+    _reconstruct_operator_primary,
+    _reconstruct_oracle_group,
+    _subflow_inner_nodes,
+    _subflow_oracle_group,
+)
+
+# --- Names loader.py imported and RE-EXPORTED before the neograph-s7zt3.11 split.
+# --- The moved cluster was their only local consumer, so `ruff --fix` strips them
+# --- as unused unless they carry F401. Verified against the pre-split surface
+# --- (defined names UNION imported names), not by eye.
+from neograph._agent_spec_markers import (  # noqa: E402,F401
+    _MARK_AGENT_SPEC,
+    _MARK_EACH_SPEC,
+    _MARK_LOOP_SPEC,
+    _MARK_ORACLE_SPEC,
+    _MARK_TOOL_SPEC,
+)
+from neograph._agent_spec_node_import import (  # noqa: E402,F401  # noqa: E402,F401
+    _REMOTE_AGENT_ENDPOINT_ATTRS,
+    _agent_spec_props_to_type,
+    _augment_inputs_from_prompt_marker,
+    _dict_form_inputs_from_props,
+    _inputs_from_data_edges,
+    _node_from_spec_agent,
+    _reconstruct_agent_node,
+    _reconstruct_primitive_node,
+    _tools_from_foreign_agent,
+    _tools_from_marker,
+)
+from neograph._normalize import normalize_outputs  # noqa: E402,F401
+from neograph.conditions import parse_condition  # noqa: E402,F401
+from neograph.modifiers import Each, Loop, Oracle  # noqa: E402,F401
+from neograph.spec_types import (  # noqa: E402,F401
+    _import_agent_spec_property_classes,
+    _structural_type_name,
+    agent_spec_properties_to_types,
+    lookup_type,
+)
+from neograph.tool import Tool  # noqa: E402,F401
