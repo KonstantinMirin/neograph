@@ -913,6 +913,37 @@ class TestConstructItemModifierExport:
         group_ids = {n.metadata["neograph/group_id"] for n in oracle_nodes}
         assert len(group_ids) == 1, "all Oracle-group nodes must share one group_id"
 
+    def test_oracle_on_construct_item_gives_each_variant_its_own_subflow_object(self):
+        """Characterization pin for neograph-15rpw: N variants, N DISTINCT sub-Flows.
+
+        A Construct-item Oracle variant is a COPY of the sub-flow, so each variant
+        FlowNode must wrap its own ``Flow`` component -- distinct Python object AND
+        distinct component ``id`` -- not one shared ``Flow`` referenced N times. A
+        shared Flow is a different exported spec: one component the variants alias,
+        rather than N independent bodies.
+
+        Pins the property against the wrong way to collapse the variant arm onto
+        ``_lower_item_body`` -- hoisting the body lowering out of the per-variant
+        loop and ``model_copy``-ing it N times shares the ``subflow`` by reference
+        (``model_copy`` is shallow), turning a pure refactor into a behaviour
+        change. Verified to fail against exactly that mutation.
+        """
+        from neograph._agent_spec import to_agent_spec
+        from neograph.modifiers import Oracle
+
+        sub = self._sub(Claims, Claims) | Oracle(n=3, merge_fn="combine")
+        parent = Construct("parent", nodes=[sub])
+
+        flow = to_agent_spec(parent)
+
+        variants = [n for n in flow.nodes if "neograph/variant" in (n.metadata or {})]
+        assert len(variants) == 3
+        subflows = [v.subflow for v in variants]
+        assert len({id(s) for s in subflows}) == 3, "each variant must wrap its own sub-Flow object"
+        assert len({s.id for s in subflows}) == 3, "each variant's sub-Flow must be its own component"
+        assert len({v.id for v in variants}) == 3, "each variant FlowNode must be its own component"
+        assert [v.name for v in variants] == ["sub__variant_0", "sub__variant_1", "sub__variant_2"]
+
     def test_loop_on_construct_item_lowers_to_branching_node_with_marker(self):
         from pyagentspec.flows.edges import ControlFlowEdge
         from pyagentspec.flows.nodes import BranchingNode, FlowNode

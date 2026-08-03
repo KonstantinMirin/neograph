@@ -16,12 +16,12 @@ reimported parent no longer compiled -- while still satisfying an
 is-a-Construct-with-the-right-combo check, so no test saw it. A procedure with
 enough steps to diverge must have one owner.
 
-Contrast the EXPORT side, and do NOT repeat the claim commonly made about it:
-export does NOT have a single body seam. There are two ``FlowNode`` construction
-sites, ``_agent_spec.py``'s ``_lower_item_body`` and the Construct-variant arm of
-``_lower_oracle`` (which needs a distinct per-variant name). That is tracked
-separately as **neograph-15rpw**; this guard governs the IMPORT path only and
-makes no claim of symmetry.
+The EXPORT side has one body seam too, but only since **neograph-15rpw** — it
+previously had two ``FlowNode`` construction sites, ``_agent_spec.py``'s
+``_lower_item_body`` and an inline one in the Construct-variant arm of
+``_lower_oracle`` (which needs a distinct per-variant name and metadata, now
+stamped on with a shallow ``model_copy`` over the seam's result). This guard
+still governs the IMPORT path only and enforces nothing about export.
 
 Scope note: ``from_agent_spec`` is also invoked at genuine ENTRY points
 (``_hot_swap.py``, ``factory.py``) to load a whole Flow. Those are not sub-flow

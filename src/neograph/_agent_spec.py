@@ -190,14 +190,14 @@ def _lower_oracle(
         variant_metadata = {_MARK_MODIFIER: "oracle", _MARK_GROUP_ID: group_id, _MARK_VARIANT: i}
 
         if isinstance(node, Construct):
-            # A Construct variant is a copy of the sub-flow run N times (the
-            # runtime shape make_oracle_redirect_fn produces over the subgraph);
-            # each copy is a FlowNode over the recursively-exported sub-Flow.
-            # Per-variant Oracle.models rides the oracle_spec marker, not a
-            # FlowNode field (the sub-flow has no single model to swap here).
-            variant_nodes.append(
-                nodes_mod.FlowNode(name=variant_name, subflow=to_agent_spec(node), metadata=variant_metadata)
-            )
+            # A Construct variant is a copy of the sub-flow run N times (the runtime
+            # shape make_oracle_redirect_fn produces over the subgraph); per-variant
+            # Oracle.models rides the oracle_spec marker, not a FlowNode field.
+            # neograph-15rpw: built through the shared body seam instead of a second
+            # inline FlowNode, and called INSIDE the loop -- model_copy is shallow, so
+            # a hoisted body would alias ONE sub-Flow across all N variants.
+            body = _lower_item_body(node)
+            variant_nodes.append(body.model_copy(update={"name": variant_name, "metadata": variant_metadata}))
             continue
 
         # Unified per-node.mode dispatch neograph-2s2o6: each Oracle variant
