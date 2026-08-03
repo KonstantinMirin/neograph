@@ -106,6 +106,27 @@ qualification now actually reaching the wire, plus already-qualified
 (23), both purely the separator. ``git diff --numstat`` on the fixture: 1010
 insertions, 1010 deletions (1034/1034 counting the p7dyq rows landed alongside).
 
+## The THIRD sanctioned value modification (neograph-s7zt3.15, 2026-08-03)
+
+Same category again, and again the golden had captured the bug: the exported
+control graph was not one a foreign Agent Spec runtime could execute. An
+Operator's BODY had no inbound edge (the item's incoming edge went straight to
+the gate), the pause ``InputMessageNode`` had no outgoing edge, every Oracle
+VARIANT had no inbound edge, and a Loop was entered at its check rather than its
+body -- inverting neograph's do-while into a while-do.
+
+Extent, measured by a full recursive golden-vs-actual diff across all 37 cells
+BEFORE patching: 22 cells changed -- all 16 ORACLE, all 3 LOOP, all 3 OPERATOR --
+and in every one of the 37, the change was confined ENTIRELY to
+``control_flow_connections``. The ``nodes`` list, ``data_flow_connections``,
+``start_node`` and every metadata marker are byte-identical, and the 8 BARE plus
+4 EACH cells did not move at all. That containment was asserted by the patch
+script itself, which refuses any cell that differs outside the control edges, so
+the modification could not silently widen. Line churn is large
+(``git diff --numstat``: 6074 insertions, 4595 deletions) only because
+``_canonicalize`` inlines each edge's ``from_node``/``to_node`` in full, so
+re-pointing one edge rewrites a whole nested node blob.
+
 Run with::
 
     uv run --extra agent-spec pytest tests/test_agent_spec_refactor_snapshot.py

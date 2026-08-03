@@ -162,6 +162,7 @@ AGENT_SPEC_SOURCE_FILES = [
     _SRC_DIR / "_agent_spec_markers.py",
     _SRC_DIR / "_agent_spec_placeholders.py",
     _SRC_DIR / "_agent_spec_node_lowering.py",
+    _SRC_DIR / "_agent_spec_modifier_lowering.py",
     _SRC_DIR / "_agent_spec_portal.py",
 ]
 

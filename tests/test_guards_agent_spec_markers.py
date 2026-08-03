@@ -43,6 +43,7 @@ SCANNED = [
     SRC / "_agent_spec_markers.py",
     SRC / "_agent_spec_placeholders.py",
     SRC / "_agent_spec_node_lowering.py",
+    SRC / "_agent_spec_modifier_lowering.py",
     SRC / "_agent_spec_portal.py",
     SRC / "loader.py",
 ]

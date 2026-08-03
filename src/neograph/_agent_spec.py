@@ -46,10 +46,6 @@ from neograph.errors import ConfigurationError
 from neograph.modifiers import (
     COMBO_DECOMPOSITION,
     SUB_CONSTRUCT_UNSUPPORTED_COMBOS,
-    Each,
-    Loop,
-    Operator,
-    Oracle,
     PrimaryShape,
     classify_modifiers,
     is_each_oracle_fused,
@@ -83,6 +79,15 @@ from neograph._agent_spec_markers import (  # noqa: E402,F401
     _MARK_VARIANT,
     _import_agent_spec_flow_classes,
 )
+from neograph._agent_spec_modifier_lowering import (  # noqa: E402,F401
+    _DEFAULT_BRANCH,
+    _PAUSE_BRANCH,
+    _lower_each,
+    _lower_item_body,
+    _lower_loop,
+    _lower_operator,
+    _lower_oracle,
+)
 from neograph._agent_spec_node_lowering import (  # noqa: E402,F401
     _agent_spec_marker,
     _lower_generation_step,
@@ -110,428 +115,42 @@ from neograph._agent_spec_portal import (  # noqa: E402,F401
     _lower_portal_mesh_to_swarm,
 )
 
-_DEFAULT_BRANCH = "default"
-_PAUSE_BRANCH = "pause"
-
-
-def _lower_item_body(item: Node | Construct) -> SpecNode:
-    """Lower one construct item to the SpecNode a modifier wraps.
-
-    A ``Node`` lowers via ``_lower_node`` (per-mode think/agent/scripted
-    dispatch). A ``Construct`` used as one item lowers to the SAME
-    ``FlowNode`` the BARE-Construct branch emits — its ``subflow`` is the
-    recursively-exported sub-``Flow`` (``to_agent_spec``). Shared by
-    ``_lower_each`` / ``_lower_loop`` / ``_lower_oracle`` and the
-    LOOP/OPERATOR/BARE arms of ``_lower_construct_item`` so a Construct-item
-    modifier wraps its sub-flow EXACTLY as a Node modifier wraps its lowered
-    primitive — one body-lowering seam, never a per-modifier re-derivation."""
-    if isinstance(item, Construct):
-        nodes_mod, _flow_mod, _edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
-        return nodes_mod.FlowNode(name=item.name, subflow=to_agent_spec(item))
-    return _lower_node(item)
-
-
-def _lower_oracle(
-    node: Node | Construct, oracle: Oracle
-) -> tuple[list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge]]:
-    """Lower an Oracle-modified item: N variant bodies + merge node.
-
-    Oracle is the flagship irreversible gap — no single Agent Spec node
-    represents it. Lowers to a ``ParallelFlowNode`` of N single-node flows
-    (one ``LlmConfig`` per ``Oracle.models`` entry, or N copies) + a merge
-    node, stamped with the full ``neograph/modifier=oracle`` marker (incl.
-    ``models``, which has no primitive representation).
-    """
-    nodes_mod, flow_mod, edges_mod, _property_mod, tools_mod = _import_agent_spec_flow_classes()
-
-    # B2: the per-variant loop lowers ``node`` N times but never guarded its
-    # unrepresentable fields — unlike ``_lower_node``, which calls this before
-    # lowering. Without it an Oracle-modified node carrying a raw_fn / custom
-    # renderer / skip_when (etc.) exported silently. Guard once, up front. A
-    # Construct item has none of those callable-valued Node fields (its own
-    # child nodes get the same guard during the recursive ``to_agent_spec``
-    # that ``_lower_item_body`` runs), so the guard is Node-only.
-    if isinstance(node, Node):
-        _reject_unrepresentable_fields(node)
-
-    if oracle.merge_pre_process or oracle.merge_post_process or oracle.merge_fallback:
-        raise ConfigurationError.build(
-            f"node {node.name!r}'s Oracle uses merge_pre_process/merge_post_process/merge_fallback "
-            "— Python callables with no Agent Spec representation",
-            expected="Oracle without merge hooks",
-            found="one or more merge hooks set",
-            hint="Oracle merge hooks cannot be exported to Agent Spec (callable-valued field, doc s6)",
-        )
-
-    group_id = f"{node.name}__oracle"
-    # A Construct item declares no ``.model`` (per-variant model swap rides the
-    # oracle_spec marker + runtime _inject_oracle_config, not the export body);
-    # ``.oracle_gen_type`` is likewise a Node-only IR field. Read both defensively
-    # so the shared lowering covers Node and Construct alike.
-    node_model = getattr(node, "model", None)
-    variant_models = oracle.models if oracle.models else [node_model] * oracle.n
-    oracle_gen_type = getattr(node, "oracle_gen_type", None)
-    gen_outputs = _properties_for(oracle_gen_type) if oracle_gen_type else _properties_for(_item_outputs(node))
-
-    variant_nodes: list[SpecNode] = []
-    for i, model_tier in enumerate(variant_models):
-        variant_name = f"{node.name}__variant_{i}"
-        variant_metadata = {_MARK_MODIFIER: "oracle", _MARK_GROUP_ID: group_id, _MARK_VARIANT: i}
-
-        if isinstance(node, Construct):
-            # A Construct variant is a copy of the sub-flow run N times (the runtime
-            # shape make_oracle_redirect_fn produces over the subgraph); per-variant
-            # Oracle.models rides the oracle_spec marker, not a FlowNode field.
-            # neograph-15rpw: built through the shared body seam instead of a second
-            # inline FlowNode, and called INSIDE the loop -- model_copy is shallow, so
-            # a hoisted body would alias ONE sub-Flow across all N variants.
-            body = _lower_item_body(node)
-            variant_nodes.append(body.model_copy(update={"name": variant_name, "metadata": variant_metadata}))
-            continue
-
-        # Unified per-node.mode dispatch neograph-2s2o6: each Oracle variant
-        # lowers through the SAME _lower_generation_step _lower_node uses -- one
-        # dispatch, not two. The variant carries the oracle group/variant markers
-        # (base metadata) plus its per-variant Oracle.models tier; think/agent-act/
-        # scripted are all handled identically to the top-level node, so the merge
-        # node + variant->merge edges below stay mode-agnostic. (An unconditional
-        # LlmNode was the root cause of the scripted-mode Oracle export bug --
-        # neograph-m57mn; the shared dispatch prevents that class of drift.)
-        variant_nodes.append(
-            _lower_generation_step(
-                node,
-                name=variant_name,
-                outputs=gen_outputs,
-                metadata=variant_metadata,
-                model_tier=model_tier,
-                tool_description=f"Oracle variant {i} for {node.name!r}",
-            )
-        )
-
-    outputs = _properties_for(_item_outputs(node))
-    # Option F neograph-cbpyx: the merge LlmNode's prompt references the variant
-    # outputs via ${...}; translate to {{ flat }} and route the variant->merge
-    # fan-in DataFlowEdges through the SAME flat map. merge_orig_to_flat stays empty
-    # (no translation) for the merge_fn ToolNode branch, so its fan-in edges keep the
-    # raw gen_output titles.
-    merge_orig_to_flat: dict[str, str] = {}
-    if oracle.merge_prompt:
-        # Gated on oracle.merge_prompt truthiness, NOT node.mode -- a
-        # scripted-mode node can legally carry merge_prompt=... (neograph-
-        # m57mn addendum, translated at the 4th Option-F site).
-        merge_rewritten, merge_ref_props, merge_flat_to_orig = _translate_placeholders(
-            oracle.merge_prompt, gen_outputs, node.name
-        )
-        merge_orig_to_flat = {path: flat for flat, path in merge_flat_to_orig.items()}
-        merge_node = nodes_mod.LlmNode(
-            name=f"{node.name}",
-            inputs=merge_ref_props or None,
-            outputs=outputs or None,
-            llm_config=_make_llm_config(Node(name=node.name, model=oracle.merge_model)),
-            prompt_template=merge_rewritten,
-            metadata={
-                _MARK_MODIFIER: "oracle",
-                _MARK_GROUP_ID: group_id,
-                _MARK_ORACLE_SPEC: {
-                    "n": oracle.n,
-                    "models": oracle.models,
-                    "merge_prompt": oracle.merge_prompt,
-                    "merge_model": oracle.merge_model,
-                },
-            },
-        )
-    else:
-        merge_node = nodes_mod.ToolNode(
-            name=f"{node.name}",
-            inputs=gen_outputs or None,
-            outputs=outputs or None,
-            tool=tools_mod.ServerTool(
-                name=oracle.merge_fn or f"{node.name}_merge",
-                description=f"Oracle merge for {node.name!r}",
-                inputs=gen_outputs or None,
-                outputs=outputs or None,
-            ),
-            metadata={
-                _MARK_MODIFIER: "oracle",
-                _MARK_GROUP_ID: group_id,
-                _MARK_ORACLE_SPEC: {
-                    "n": oracle.n,
-                    "models": oracle.models,
-                    "merge_fn": oracle.merge_fn,
-                },
-            },
-        )
-
-    control_edges: list[ControlFlowEdge] = []
-    data_edges: list[DataFlowEdge] = []
-    for i, variant in enumerate(variant_nodes):
-        control_edges.append(
-            edges_mod.ControlFlowEdge(name=f"{group_id}_fanout_{i}", from_node=variant, to_node=merge_node)
-        )
-        for prop in gen_outputs:
-            # When the merge node is a translated LlmNode (merge_prompt), its
-            # declared input is the flat placeholder name; route the fan-in edge
-            # through the SAME flat map and drop it if the merge prompt never
-            # referenced this variant output (unreferenced -> no data path).
-            if oracle.merge_prompt:
-                dest_input = merge_orig_to_flat.get(property_title_to_prompt_path(prop.title))
-                if dest_input is None:
-                    continue
-            else:
-                dest_input = prop.title
-            data_edges.append(
-                edges_mod.DataFlowEdge(
-                    name=f"{group_id}_fanin_{i}_{prop.title}",
-                    source_node=variant,
-                    source_output=prop.title,
-                    destination_node=merge_node,
-                    destination_input=dest_input,
-                )
-            )
-
-    return [*variant_nodes, merge_node], control_edges, data_edges
-
-
-def _lower_each(node: Node | Construct, each: Each, oracle: Oracle | None = None) -> SpecNode:
-    """Lower an Each-modified item: MapNode wrapping a single-body sub-Flow.
-
-    The wrapped body is a Node's lowered primitive OR a Construct-item's
-    ``FlowNode`` (``_lower_item_body``), so ``Construct(...) | Each(...)`` used
-    as one item lowers to the SAME MapNode shape as ``node | Each(...)``.
-    ``over``/``key``/``on_error`` have no primitive representation — ride in
-    the ``neograph/modifier=each`` marker (``EachSpec``).
-
-    ``oracle`` is the Each x Oracle FUSION seam (neograph-s7zt3.10), and mirrors
-    ``_lower_loop(node, loop, body)``'s caller-lowered-body seam: when set, the
-    sub-Flow's body is the variant-fan-out + merge group ``_lower_oracle``
-    already produces, instead of a single primitive. Composition, not a second
-    lowering — the fused MapNode adds ZERO new node-construction sites.
-    """
-    nodes_mod, flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
-
-    # The MapNode infers its OWN inputs as ``iterated_{title}`` for every
-    # property in ``subflow.inputs`` (pyagentspec MapNode._get_inferred_inputs,
-    # which reads the sub-flow's StartNode inputs). Declare the inner node's
-    # input Properties on the StartNode so a NON-fan-out context input (e.g.
-    # ``verify(source: RawText, cluster: Elem)`` with ``map_over``) has a valid
-    # ``iterated_source.text`` destination for its top-level DataFlowEdge — the
-    # fan-out-receiver-only case stays valid too (its inferred input is simply
-    # left unconnected, populated per-item from the iterated collection).
-    # neograph-hf505.
-    #
-    # Option F consumer sweep (neograph-cbpyx, MEDIUM-1): the StartNode is a
-    # NON-DataFlowEdge consumer of _properties_for(node.inputs). When the inner
-    # node is placeholder-translated (LLM mode), its declared inputs are the flat
-    # ${var}->{{ flat }} names, so the StartNode MUST use the SAME flat titles or
-    # the sub-flow ships an unfillable ``{{ item_v }}`` (the inner's inferred input
-    # and the StartNode's declared input would not match). Scripted inners keep the
-    # untranslated dotted Properties.
-    if _is_translation_eligible(node):
-        _rewritten, inner_inputs, _flat = _node_translation(node)
-    else:
-        inner_inputs = _properties_for(_item_inputs(node))
-    start_node = nodes_mod.StartNode(name=f"{node.name}__each_start", inputs=inner_inputs or None)
-    end_node = nodes_mod.EndNode(name=f"{node.name}__each_end")
-
-    if oracle is None:
-        inner = _lower_item_body(node)
-        body_nodes: list[SpecNode] = [inner]
-        body_control = [
-            edges_mod.ControlFlowEdge(name=f"{node.name}__each_start_edge", from_node=start_node, to_node=inner),
-            edges_mod.ControlFlowEdge(name=f"{node.name}__each_end_edge", from_node=inner, to_node=end_node),
-        ]
-        body_data: list[DataFlowEdge] = []
-    else:
-        # FUSED Each x Oracle. The Oracle group's own variant->merge control edges
-        # and fan-in data edges come through verbatim; only the Flow's boundary
-        # wiring is added here. A pyagentspec StartNode must have EXACTLY ONE
-        # outgoing control edge, so it points at the MERGE node — the same shape
-        # to_agent_spec already builds at top level for an un-fused ORACLE item
-        # (primary = the merge node; variants carry no inbound edge). The inner
-        # merge node keeps the MapNode's own name, which validates and round-trips.
-        body_nodes, body_control, body_data = _lower_oracle(node, oracle)
-        merge = body_nodes[-1]  # _lower_oracle returns [*variants, merge]
-        body_control = [
-            edges_mod.ControlFlowEdge(name=f"{node.name}__each_start_edge", from_node=start_node, to_node=merge),
-            *body_control,
-            edges_mod.ControlFlowEdge(name=f"{node.name}__each_end_edge", from_node=merge, to_node=end_node),
-        ]
-
-    sub_flow = flow_mod.Flow(
-        name=f"{node.name}__each_body",
-        start_node=start_node,
-        nodes=[start_node, *body_nodes, end_node],
-        control_flow_connections=body_control,
-        data_flow_connections=body_data or None,
-    )
-    return nodes_mod.MapNode(
-        name=node.name,
-        subflow=sub_flow,
-        metadata={
-            _MARK_MODIFIER: "each",
-            _MARK_EACH_SPEC: {"over": each.over, "key": each.key, "on_error": each.on_error},
-        },
-    )
-
-
-def _lower_loop(
-    node: Node | Construct, loop: Loop, body: SpecNode
-) -> tuple[SpecNode, list[ControlFlowEdge], list[DataFlowEdge]]:
-    """Lower a Loop-modified item: BranchingNode({continue: back-edge, done: next}).
-
-    ``body`` is the caller-lowered primitive (a Node's lowered node or a
-    Construct-item's ``FlowNode``), so ``Construct(...) | Loop(...)`` loops its
-    sub-flow the same way ``node | Loop(...)`` loops its body node.
-
-    A bare BranchingNode+back-edge is ambiguous (loop vs branch) without the
-    ``neograph/modifier=loop`` marker (per the Core Invariant's marker
-    requirement) — always stamped.
-    """
-    nodes_mod, _flow_mod, edges_mod, property_mod, _tools_mod = _import_agent_spec_flow_classes()
-
-    if callable(loop.when):
-        raise ConfigurationError.build(
-            f"node {node.name!r}'s Loop.when is a callable — no Agent Spec representation",
-            expected="a registered condition NAME (str)",
-            found="Loop.when is a callable",
-            hint="only registered-string conditions serialize (callable-valued field, doc s6)",
-        )
-
-    branch = nodes_mod.BranchingNode(
-        name=f"{node.name}__loop_check",
-        mapping={"continue": "continue", "done": "done"},
-        metadata={
-            _MARK_MODIFIER: "loop",
-            _MARK_LOOP_SPEC: {
-                "when": loop.when,
-                "max_iterations": loop.max_iterations,
-                "on_exhaust": loop.on_exhaust,
-            },
-        },
-    )
-    control_edges = [
-        edges_mod.ControlFlowEdge(name=f"{node.name}__loop_body_to_check", from_node=body, to_node=branch),
-        edges_mod.ControlFlowEdge(
-            name=f"{node.name}__loop_back", from_node=branch, from_branch="continue", to_node=body
-        ),
-    ]
-    # Dict-form inputs qualify each Property title with its upstream key (per
-    # _properties_for's dict-form convention) -- the body node's real input
-    # Property is the qualified title, never the bare "{field}", so the
-    # self-edge's destination_input must be resolved against the SAME key the
-    # runtime feeds the re-entry value into. That key is whichever dict-form
-    # inputs entry has a type compatible with the node's own output type
-    # (mirrors the single-type upstream-resolution scan below: a Loop-fed key
-    # could be a self-reference — "key matching the node's own name" per the
-    # validator's Loop rule — OR the ORIGINAL upstream producer's name, e.g.
-    # inputs={'seed': Draft} — either way it's the key whose declared type
-    # matches the fed-back output).
-    ni = normalize_inputs(_item_inputs(node))
-    no_self = normalize_outputs(_item_outputs(node))
-    dest_key: str | None = None
-    if ni.is_dict_form and not no_self.is_dict_form:
-        self_field = field_name_for(node.name)
-        if self_field in ni.by_name:
-            dest_key = self_field
-        else:
-            for key, typ in ni.by_name.items():
-                if isinstance(typ, type) and (issubclass(no_self.primary, typ) or issubclass(typ, no_self.primary)):
-                    dest_key = key
-                    break
-
-    # Option F consumer sweep neograph-cbpyx: when the loop body is a
-    # placeholder-translated LLM node, its declared inputs are flat ${var}->{{ flat }}
-    # names, so the self-feedback edge's destination_input must route through the
-    # body's flat map -- keyed by the dotted ${...} PROMPT path, NOT by a Property
-    # title (drop it if the fed-back output isn't referenced in the prompt).
-    body_orig_to_flat = _node_translation(node)[2] if _is_translation_eligible(node) else {}
-
-    # A DATA edge only where the fed-back output has a castable destination Property on
-    # the body's OWN input port. LangGraph's loop-back (_wiring._add_subgraph_loop) is a
-    # pure CONTROL edge over a shared accumulating state dict -- input and output occupy
-    # separate slots -- so a body with differing boundary types (a Construct item with
-    # input != output) maps ZERO fields and loops on control alone. Decided per field via
-    # pyagentspec's OWN property_is_castable_to, never by suppressing it -- neograph-rh5fb.
-    body_inputs = {p.title: p for p in (body.inputs or [])}
-    body_outputs = {p.title: p for p in (body.outputs or [])}
-    data_edges: list[DataFlowEdge] = []
-    for prop in _properties_for(_item_outputs(node)):
-        if _is_translation_eligible(node):
-            dest_input = body_orig_to_flat.get(f"{dest_key}.{prop.title}" if dest_key else prop.title)
-            if dest_input is None:
-                continue
-        else:
-            dest_input = compose_property_title(dest_key, prop.title) if dest_key else prop.title
-        source_prop, dest_prop = body_outputs.get(prop.title), body_inputs.get(dest_input)
-        if source_prop is None or dest_prop is None:
-            continue  # no destination property for this field -> control-only loop-back
-        if not property_mod.property_is_castable_to(source_prop, dest_prop):
-            continue  # same name, incompatible type -> not a structurally identical field
-        data_edges.append(
-            edges_mod.DataFlowEdge(
-                name=f"{node.name}__loop_self_{prop.title}",
-                source_node=body,
-                source_output=prop.title,
-                destination_node=body,
-                destination_input=dest_input,
-            )
-        )
-    return branch, control_edges, data_edges
-
-
-def _lower_operator(
-    node: Node | Construct, operator: Operator
-) -> tuple[SpecNode, list[SpecNode], list[ControlFlowEdge]]:
-    """Lower an Operator-modified item: the FULLY PINNED HITL-pause composite
-    (neograph-03djs, verified against real pyagentspec 26.1.2 source).
-
-    Reads only ``item.name`` + ``operator.when`` (the caller lowers the primary
-    body separately), so it applies uniformly to a Node or a Construct item.
-
-    ``BranchingNode(mapping={<condition-string>: PAUSE_BRANCH})`` +
-    ``ControlFlowEdge(from_branch=PAUSE_BRANCH) -> InputMessageNode`` +
-    ``ControlFlowEdge(from_branch=DEFAULT_BRANCH) -> reconverge``. The
-    boolean-to-string-key coercion is REQUIRED: the condition's truthy
-    result must render to the literal mapping-key string, or the composite
-    silently always takes DEFAULT_BRANCH (never pauses).
-    """
-    nodes_mod, _flow_mod, edges_mod, property_mod, _tools_mod = _import_agent_spec_flow_classes()
-
-    check = nodes_mod.BranchingNode(
-        name=f"{node.name}__operator_check",
-        mapping={"true": _PAUSE_BRANCH, "false": _DEFAULT_BRANCH},
-        metadata={_MARK_MODIFIER: "operator", _MARK_OPERATOR_SPEC: {"when": operator.when}},
-    )
-    input_message = nodes_mod.InputMessageNode(
-        name=f"{node.name}__operator_pause",
-        outputs=[property_mod.StringProperty(title="user_input")],
-    )
-    pause_edge = edges_mod.ControlFlowEdge(
-        name=f"{node.name}__operator_to_pause", from_node=check, from_branch=_PAUSE_BRANCH, to_node=input_message
-    )
-    return check, [input_message], [pause_edge]
-
+_Exit: TypeAlias = "tuple[SpecNode, str | None]"
+"""One outgoing control-flow endpoint of a lowered item: the SpecNode a
+successor edge leaves FROM, plus the ``from_branch`` it must name (``None`` for
+an unconditional node). An item has several only when its lowering genuinely
+forks — an Operator reconverges its gate's DEFAULT_BRANCH and its post-pause
+continuation on the same successor."""
 
 _LoweredItem: TypeAlias = (
-    "tuple[list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge], SpecNode, SpecNode, list[tuple[SpecNode, bool]]]"
+    "tuple[list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge], "
+    "SpecNode, list[_Exit], SpecNode, list[tuple[SpecNode, bool]]]"
 )
 """What one lowered construct item is: (all_spec_nodes, extra_control_edges,
-extra_data_edges, primary_node, data_node, input_targets). Named so the
+extra_data_edges, entry_node, exits, data_node, input_targets). Named so the
 per-shape arms of ``_lower_construct_item`` can BIND this shape and let the
 shared Operator postlude rewrite it, instead of each arm returning its own."""
 
 
 def _lower_construct_item(item: Any) -> _LoweredItem:
     """Lower one top-level construct item (Node/Construct/_BranchNode) to
-    (all_spec_nodes, extra_control_edges, extra_data_edges, primary_node,
+    (all_spec_nodes, extra_control_edges, extra_data_edges, entry_node, exits,
     data_node, input_targets).
 
-    ``primary_node`` is the node other items' ControlFlowEdges attach to
-    (the item's DX-visible identity — e.g. an Operator's check node, or an
-    Oracle's merge node). ``data_node`` is the node that OTHER items read this
-    item's OUTPUT Properties FROM (usually the same as ``primary_node``, except
-    for LOOP, where the control-flow ``primary`` — the check ``BranchingNode``
-    — declares no Properties, so the wrapped ``body`` is the output source).
+    ``entry_node`` is the node an INCOMING ControlFlowEdge lands on — the first
+    node of this item a literal edge-walking executor runs. ``exits`` is the
+    dual: the ``(from_node, from_branch)`` endpoints an OUTGOING edge leaves
+    from. They are separate because several lowerings are not single-node — a
+    Loop is entered at its BODY and left from its check's ``done`` branch; an
+    Operator is entered at the body it guards and left from BOTH its gate's
+    default branch and its pause node. Collapsing the two roles onto one
+    ``primary`` node is what made the Operator body unreachable and the pause
+    node a dead end (neograph-s7zt3.15).
+
+    ``data_node`` is the node that OTHER items read this item's OUTPUT Properties
+    FROM (usually the entry/exit node, except for LOOP, where the check
+    ``BranchingNode`` declares no Properties, so the wrapped ``body`` is the
+    output source).
 
     ``input_targets`` is the modifier-aware answer to "when a downstream edge
     feeds THIS item an external input, which SpecNode(s) receive it, and does
@@ -543,8 +162,8 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
         Properties (``data_node``), bare titles.
       * EACH → the MapNode, ``iterated_``-prefixed (its inputs are inferred as
         ``iterated_{title}`` from the sub-flow StartNode). neograph-hf505.
-      * OPERATOR → the PRIMARY node (the real lowered node with Properties), NOT
-        the ``check`` BranchingNode (which declares none).
+      * OPERATOR → whatever the GUARDED arm already targets (the real lowered
+        node with Properties), NOT the ``check`` BranchingNode (declares none).
       * ORACLE → EVERY variant node (each variant independently consumes the
         external input); the merge node consumes only the variant fan-in.
     """
@@ -556,7 +175,7 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
             mapping={"true": "true", "false": "false"},
             metadata={_MARK_BRANCH: True},
         )
-        return [branch], [], [], branch, branch, [(branch, False)]
+        return [branch], [], [], branch, [(branch, None)], branch, [(branch, False)]
 
     if not isinstance(item, (Node, Construct)):
         raise ConfigurationError.build(
@@ -615,31 +234,48 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
         # variant-fan-out + merge that _lower_oracle already produces. Composed,
         # not re-implemented — _lower_each grows an optional caller-lowered body
         # group exactly the way _lower_loop(node, loop, body) already takes one.
-        map_node = _lower_each(item, mods["each"], oracle=mods["oracle"])
-        arm: _LoweredItem = ([map_node], [], [], map_node, map_node, [(map_node, True)])
+        map_node = _lower_each(item, mods["each"], to_agent_spec, oracle=mods["oracle"])
+        arm: _LoweredItem = ([map_node], [], [], map_node, [(map_node, None)], map_node, [(map_node, True)])
     else:
         match decomp.primary:
             case PrimaryShape.ORACLE:
-                variant_and_merge, control_edges, data_edges = _lower_oracle(item, mods["oracle"])
+                variant_and_merge, control_edges, data_edges = _lower_oracle(item, mods["oracle"], to_agent_spec)
                 variants = variant_and_merge[:-1]
                 merge = variant_and_merge[-1]
-                arm = (variant_and_merge, control_edges, data_edges, merge, merge, [(v, False) for v in variants])
+                # ENTRY is the head of the variant chain, not the merge: the merge is
+                # the group's DX identity and its data source, but entering there
+                # skips every variant whose output it consumes.
+                arm = (
+                    variant_and_merge,
+                    control_edges,
+                    data_edges,
+                    variants[0],
+                    [(merge, None)],
+                    merge,
+                    [(v, False) for v in variants],
+                )
 
             case PrimaryShape.EACH:
-                map_node = _lower_each(item, mods["each"])
-                arm = ([map_node], [], [], map_node, map_node, [(map_node, True)])
+                map_node = _lower_each(item, mods["each"], to_agent_spec)
+                arm = ([map_node], [], [], map_node, [(map_node, None)], map_node, [(map_node, True)])
 
             case PrimaryShape.LOOP:
-                body = _lower_item_body(item)
+                body = _lower_item_body(item, to_agent_spec)
                 branch, extra_control, extra_data = _lower_loop(item, mods["loop"], body)
-                arm = ([body, branch], extra_control, extra_data, branch, body, [(body, False)])
+                # neograph's Loop is a DO-while (_wiring._add_subgraph_loop wires
+                # ``prev -> body`` and only THEN the conditional back-edge), so the
+                # group is ENTERED at the body and LEFT through the check's ``done``
+                # branch. Entering at the check evaluates ``when`` against state the
+                # body has never written -- a different program, not a different
+                # spelling of the same one.
+                arm = ([body, branch], extra_control, extra_data, body, [(branch, "done")], body, [(body, False)])
 
             case PrimaryShape.BARE:
                 # BARE and OPERATOR are the SAME primary shape; has_operator is what
                 # distinguishes them, and that difference now lives entirely in the
                 # shared postlude below.
-                primary = _lower_item_body(item)
-                arm = ([primary], [], [], primary, primary, [(primary, False)])
+                primary = _lower_item_body(item, to_agent_spec)
+                arm = ([primary], [], [], primary, [(primary, None)], primary, [(primary, False)])
 
             case PrimaryShape.PORTAL:
                 # C2 (neograph-s7zt3.12): a DISPATCH-mode Portal (route="decide") reaching
@@ -677,21 +313,35 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
 
     # -- ONE unconditional Operator postlude, orthogonal to every primary shape --
     # Reuses _lower_operator as-is: it reads only item.name + operator.when and is
-    # already item-kind- and shape-agnostic. The arm's data_node and input_targets
-    # are preserved unchanged; only the control-flow primary moves to the check node
-    # (other items' ControlFlowEdges attach to the gate, so the pause is reachable).
+    # already item-kind- and shape-agnostic. The arm's ENTRY, data_node and
+    # input_targets are preserved unchanged -- the gate runs AFTER the body it
+    # guards (_wiring._add_operator_check wires ``node -> check``), so it appends
+    # itself to the arm's EXITS rather than taking over its entry.
     if not decomp.has_operator:
         return arm
 
-    arm_nodes, arm_control, arm_data, arm_primary, arm_data_node, arm_targets = arm
+    arm_nodes, arm_control, arm_data, arm_entry, arm_exits, arm_data_node, arm_targets = arm
     _nodes_mod, _flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
-    check, extra_nodes, extra_control = _lower_operator(item, mods["operator"])
-    pre_edge = edges_mod.ControlFlowEdge(name=f"{item.name}__to_operator_check", from_node=arm_primary, to_node=check)
+    check, pause, extra_control = _lower_operator(item, mods["operator"])
+    # EVERY one of the arm's exits feeds the gate, so an Operator over a forking
+    # primary would still be gated on all paths rather than on one of them.
+    pre_edges = [
+        edges_mod.ControlFlowEdge(
+            name=f"{exit_node.name}__to_operator_check", from_node=exit_node, from_branch=branch, to_node=check
+        )
+        for exit_node, branch in arm_exits
+    ]
+    # The composite exits on BOTH the non-pausing DEFAULT_BRANCH and the pause
+    # node, reconverging on the item's successor. At runtime the interrupt happens
+    # INSIDE the check node (_wiring._add_operator_check), so once the human
+    # answers, execution resumes there and falls through to the next node -- the
+    # pause node's outgoing edge IS that fall-through, not an invented path.
     return (
-        [*arm_nodes, check, *extra_nodes],
-        [*arm_control, pre_edge, *extra_control],
+        [*arm_nodes, check, pause],
+        [*arm_control, *pre_edges, *extra_control],
         arm_data,
-        check,
+        arm_entry,
+        [(check, _DEFAULT_BRANCH), (pause, None)],
         arm_data_node,
         arm_targets,
     )
@@ -734,36 +384,45 @@ def to_agent_spec(construct: Construct) -> Flow:
     all_nodes: list[SpecNode] = []
     control_edges: list[ControlFlowEdge] = []
     data_edges: list[DataFlowEdge] = []
-    primaries: list[SpecNode] = []
+    entries: list[SpecNode] = []
+    exits: list[list[_Exit]] = []
     data_nodes: list[SpecNode] = []
     item_by_name: dict[str, Any] = {}
     input_targets_by_item_name: dict[str, list[tuple[SpecNode, bool]]] = {}
 
     for item in iter_with_arms(construct):
         item_by_name[item.name] = item
-        lowered_nodes, extra_control, extra_data, primary, data_node, input_targets = _lower_construct_item(item)
+        lowered = _lower_construct_item(item)
+        lowered_nodes, extra_control, extra_data, entry, item_exits, data_node, input_targets = lowered
         all_nodes.extend(lowered_nodes)
         control_edges.extend(extra_control)
         data_edges.extend(extra_data)
-        primaries.append(primary)
+        entries.append(entry)
+        exits.append(item_exits)
         data_nodes.append(data_node)
         input_targets_by_item_name[item.name] = input_targets
 
-    # Explicit ControlFlowEdge per adjacent pair in Construct.nodes order.
-    for prev_primary, next_primary in zip(primaries, primaries[1:], strict=False):
-        control_edges.append(
-            edges_mod.ControlFlowEdge(
-                name=f"{prev_primary.name}_to_{next_primary.name}",
-                from_node=prev_primary,
-                to_node=next_primary,
+    # Explicit ControlFlowEdge per adjacent pair in Construct.nodes order, from
+    # every EXIT of the previous item to the ENTRY of the next. An item with more
+    # than one exit (an Operator: its gate's default branch plus its pause node's
+    # continuation) reconverges them all on that single entry -- which is what
+    # makes both the paused and un-paused paths continue the program.
+    for prev_exits, next_entry in zip(exits, entries[1:], strict=False):
+        for from_node, from_branch in prev_exits:
+            control_edges.append(
+                edges_mod.ControlFlowEdge(
+                    name=f"{from_node.name}_to_{next_entry.name}",
+                    from_node=from_node,
+                    from_branch=from_branch,
+                    to_node=next_entry,
+                )
             )
-        )
 
     # Explicit DataFlowEdge per Node.inputs upstream-name mapping. The
     # destination(s) come from the item's modifier-aware ``input_targets`` (see
     # _lower_construct_item): a MapNode wants ``iterated_``-prefixed inputs, an
-    # Oracle fans each external input to EVERY variant, an Operator targets its
-    # PRIMARY (not the property-less check node) — one rule, no per-modifier
+    # Oracle fans each external input to EVERY variant, an Operator targets the
+    # body it guards (not the property-less check node) — one rule, no per-modifier
     # re-derivation here. As a SOURCE, the upstream's output still comes from
     # its single ``data_node``.
     ordered_items = list(iter_with_arms(construct))
@@ -936,7 +595,7 @@ def to_agent_spec(construct: Construct) -> Flow:
                 _emit_input_edges(item.name, "", source_node, shared_title)
             break
 
-    if not primaries:
+    if not entries:
         raise ConfigurationError.build(
             f"construct {construct.name!r} has no nodes — nothing to export",
             expected="at least one node",
@@ -963,10 +622,22 @@ def to_agent_spec(construct: Construct) -> Flow:
     start_node = _nodes_mod.StartNode(name=f"{construct.name}__start", inputs=start_props or None)
     end_node = _nodes_mod.EndNode(name=f"{construct.name}__end", outputs=end_props or None)
     all_nodes = [start_node, *all_nodes, end_node]
+    # The last item's every exit terminates at the EndNode, for the same reason
+    # the inter-item edges above fan from every exit: a branch-qualified exit that
+    # is dropped here is a path with no way to finish. The branch suffix keeps the
+    # names unique without renaming the single-exit case every construct has.
     control_edges = [
-        edges_mod.ControlFlowEdge(name=f"{construct.name}__start_edge", from_node=start_node, to_node=primaries[0]),
+        edges_mod.ControlFlowEdge(name=f"{construct.name}__start_edge", from_node=start_node, to_node=entries[0]),
         *control_edges,
-        edges_mod.ControlFlowEdge(name=f"{construct.name}__end_edge", from_node=primaries[-1], to_node=end_node),
+        *(
+            edges_mod.ControlFlowEdge(
+                name=f"{construct.name}__end_edge" + (f"_{from_branch}" if from_branch else ""),
+                from_node=from_node,
+                from_branch=from_branch,
+                to_node=end_node,
+            )
+            for from_node, from_branch in exits[-1]
+        ),
     ]
 
     metadata: dict[str, Any] = {}

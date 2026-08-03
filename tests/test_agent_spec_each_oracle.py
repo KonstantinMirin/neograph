@@ -144,10 +144,15 @@ class TestEachOracleExportShape:
         group_ids = {n.metadata[_MARK_GROUP_ID] for n in inner}
         assert len(group_ids) == 1, "variants and merge must share ONE group id inside the subflow"
 
-    def test_subflow_has_a_single_start_edge_into_the_merge_node(self):
-        """pyagentspec requires exactly one StartNode outgoing control edge, so
-        the fused subflow is wired StartNode -> merge, with the variants
-        reaching the merge via the Oracle lowering's own fan-in edges."""
+    def test_subflow_start_edge_enters_the_variant_chain_and_exits_at_the_merge(self):
+        """neograph-s7zt3.15: pyagentspec requires exactly one StartNode outgoing
+        control edge, and the fused subflow spends it on the HEAD OF THE VARIANT
+        CHAIN -- variant_0 -> ... -> variant_{n-1} -> merge -> EndNode.
+
+        It used to be spent on the merge instead, which left every variant with
+        no inbound control edge at all: a foreign runtime walking these edges
+        literally would run the merge over outputs nothing had produced.
+        """
         flow = to_agent_spec(_each_oracle_pipeline())
         map_node = {n.name: n for n in flow.nodes}["fanned"]
         subflow = map_node.subflow
@@ -156,12 +161,14 @@ class TestEachOracleExportShape:
         assert len(start_edges) == 1
 
         merge = next(n for n in _inner_nodes(map_node) if _MARK_ORACLE_SPEC in (n.metadata or {}))
-        assert start_edges[0].to_node.name == merge.name
+        variants = [n for n in _inner_nodes(map_node) if _MARK_VARIANT in (n.metadata or {})]
+        variants.sort(key=lambda n: n.metadata[_MARK_VARIANT])
+        assert start_edges[0].to_node.name == variants[0].name
 
         pairs = {(e.from_node.name, e.to_node.name) for e in subflow.control_flow_connections}
-        variants = [n for n in _inner_nodes(map_node) if _MARK_VARIANT in (n.metadata or {})]
-        for v in variants:
-            assert (v.name, merge.name) in pairs
+        chain = [*variants, merge]
+        for src, dst in zip(chain, chain[1:], strict=False):
+            assert (src.name, dst.name) in pairs, f"missing chain edge {src.name} -> {dst.name}"
 
         end_edges = [e for e in subflow.control_flow_connections if type(e.to_node).__name__ == "EndNode"]
         assert [e.from_node.name for e in end_edges] == [merge.name]

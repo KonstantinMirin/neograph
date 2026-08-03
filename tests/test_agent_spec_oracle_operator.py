@@ -131,13 +131,15 @@ class TestOracleOperatorExportShape:
         assert type(by_name["ensemble__operator_pause"]).__name__ == "InputMessageNode"
 
     def test_merge_node_chains_into_the_operator_check(self):
-        """The postlude's pre-edge attaches to the ORACLE arm's primary (the
-        merge node), leaving the variant fan-in edges untouched."""
+        """The postlude's pre-edge attaches to the ORACLE arm's EXIT (the merge
+        node), leaving the variant chain untouched -- the last variant is what
+        reaches the merge (neograph-s7zt3.15)."""
         flow = to_agent_spec(_oracle_operator_pipeline())
         pairs = {(e.from_node.name, e.to_node.name) for e in flow.control_flow_connections}
         assert ("ensemble", "ensemble__operator_check") in pairs
         assert ("ensemble__operator_check", "ensemble__operator_pause") in pairs
-        assert ("ensemble__variant_0", "ensemble") in pairs
+        assert ("ensemble__variant_0", "ensemble__variant_1") in pairs
+        assert ("ensemble__variant_2", "ensemble") in pairs
 
         pause_edge = next(e for e in flow.control_flow_connections if e.to_node.name == "ensemble__operator_pause")
         assert pause_edge.from_branch == _PAUSE_BRANCH

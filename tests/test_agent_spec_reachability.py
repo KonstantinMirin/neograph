@@ -1,0 +1,227 @@
+"""Control-flow TOPOLOGY proof for ``to_agent_spec`` -- neograph-s7zt3.15.
+
+The maintainer's policy decision (2026-08-03) on this ticket is that an exported
+``Flow`` must be "a faithful, independently executable program": correct when
+executed by ANY real Agent Spec runtime that walks ``ControlFlowEdge``s
+literally, not merely round-trippable through neograph's own marker-reading
+importer (which never executes a control edge at all, so it is blind to every
+defect below).
+
+That policy has a structural consequence a literal edge-walk can check, and
+this module checks it over the WHOLE mechanically-derived GREEN matrix, not a
+hand-picked shape:
+
+  * REACHABILITY -- every node in a Flow is reachable from its ``StartNode`` by
+    following control edges. A node nothing points at never executes.
+  * LIVENESS -- every node can reach an ``EndNode``. A node with no path out is
+    a dead end: a literal executor stops there forever.
+
+Both hold recursively for every nested sub-``Flow`` (``MapNode.subflow``,
+``FlowNode.subflow``, ``ParallelFlowNode.subflows``), which is where the fused
+Each x Oracle body lives.
+
+The three defects this pinned (all pre-existing, all found by the
+neograph-s7zt3.10 architect review):
+
+  1. OPERATOR -- the top-level incoming edge targeted the check ``BranchingNode``
+     and the body's only edge was ``body -> check``, so the BODY node had no
+     inbound edge at all: unreachable, never executed.
+  2. The pause ``InputMessageNode`` had no outgoing edge: a dead end.
+  3. ORACLE (top level AND fused inside an Each ``MapNode``) -- the incoming edge
+     targeted the MERGE node and every variant's only edge was ``variant ->
+     merge``, so no variant had an inbound edge: unreachable, yet the merge
+     consumes their outputs.
+
+LOOP's defect is NOT visible to a reachability walk (the body is reachable
+through the check's ``continue`` branch), so it has its own do-while entry test
+in ``TestLoopEntersTheBodyBeforeTheCheck`` below -- see that class for why the
+distinction is semantic rather than structural.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+pytest.importorskip("pyagentspec")
+
+from neograph._agent_spec import to_agent_spec  # noqa: E402
+from neograph.construct import Construct  # noqa: E402
+from tests.test_agent_spec_matrix import GREEN, build_cell  # noqa: E402
+
+
+def _sub_flows(flow: Any) -> list[Any]:
+    """Every nested sub-``Flow`` one level down, from any subflow-bearing node.
+
+    Reads BOTH pyagentspec subflow-holder spellings -- the singular ``subflow``
+    (``FlowNode``/``MapNode``/``CatchExceptionNode``) and the plural ``subflows``
+    (``ParallelFlowNode``) -- so a fused Each x Oracle body cannot hide from the
+    walk behind whichever holder the lowering happens to pick.
+    """
+    found: list[Any] = []
+    for node in flow.nodes:
+        one = getattr(node, "subflow", None)
+        if one is not None:
+            found.append(one)
+        found.extend(getattr(node, "subflows", None) or [])
+    return found
+
+
+def _all_flows(flow: Any) -> list[Any]:
+    """The flow and every sub-flow beneath it, breadth-first."""
+    flows = [flow]
+    i = 0
+    while i < len(flows):
+        flows.extend(_sub_flows(flows[i]))
+        i += 1
+    return flows
+
+
+def _walk(flow: Any) -> tuple[set[str], set[str]]:
+    """(reachable-from-start, can-reach-an-EndNode) node names for ONE flow."""
+    successors: dict[str, set[str]] = {n.name: set() for n in flow.nodes}
+    predecessors: dict[str, set[str]] = {n.name: set() for n in flow.nodes}
+    for edge in flow.control_flow_connections:
+        successors[edge.from_node.name].add(edge.to_node.name)
+        predecessors[edge.to_node.name].add(edge.from_node.name)
+
+    def closure(seeds: set[str], adjacency: dict[str, set[str]]) -> set[str]:
+        seen = set(seeds)
+        stack = list(seeds)
+        while stack:
+            for nxt in adjacency[stack.pop()]:
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        return seen
+
+    ends = {n.name for n in flow.nodes if type(n).__name__ == "EndNode"}
+    return closure({flow.start_node.name}, successors), closure(ends, predecessors)
+
+
+def _topology_defects(flow: Any) -> list[str]:
+    """Every unreachable or dead-end node across the flow and its sub-flows."""
+    defects: list[str] = []
+    for sub in _all_flows(flow):
+        reachable, live = _walk(sub)
+        for node in sub.nodes:
+            if node.name not in reachable:
+                defects.append(f"{sub.name}: {node.name} ({type(node).__name__}) is UNREACHABLE from the StartNode")
+            if node.name not in live:
+                defects.append(f"{sub.name}: {node.name} ({type(node).__name__}) cannot reach any EndNode")
+    return defects
+
+
+class TestEveryExportedFlowIsLiterallyExecutable:
+    """Every GREEN matrix cell exports a Flow whose control graph a naive
+    edge-walking executor can traverse: nothing orphaned, nothing dead-ended.
+
+    Parametrized over the matrix's mechanically-derived GREEN set rather than a
+    hand-typed shape list -- the same completeness discipline
+    ``test_agent_spec_matrix.py`` exists to enforce. A new mode/combo axis lands
+    here automatically instead of silently escaping the topology net.
+    """
+
+    @pytest.mark.parametrize("cell_id", sorted(GREEN))
+    def test_every_node_is_reachable_and_can_reach_an_end_node(self, cell_id: str) -> None:
+        from tests.test_agent_spec_matrix import CELLS
+
+        mode, combo, config, shape = CELLS[cell_id]
+        flow = to_agent_spec(build_cell(mode, combo, config, shape))
+        if type(flow).__name__ != "Flow":
+            pytest.skip(f"{cell_id} exports a {type(flow).__name__}, not a Flow")
+
+        defects = _topology_defects(flow)
+        assert not defects, f"{cell_id} exports a Flow a literal executor cannot run:\n  " + "\n  ".join(defects)
+
+
+class TestLoopEntersTheBodyBeforeTheCheck:
+    """neograph's ``Loop`` is a DO-while, not a while-do.
+
+    ``_wiring._add_subgraph_loop`` wires ``prev -> body`` and only then attaches
+    the conditional back-edge, so the body always runs at least once and the
+    condition is evaluated against what the body produced. The exported Flow
+    used to invert that -- the incoming control edge targeted the check
+    ``BranchingNode`` -- which a reachability walk cannot see (the body is still
+    reachable through the ``continue`` branch) but which changes what the program
+    DOES: a literal executor would evaluate ``when`` against state the body has
+    not written yet, and on a false-y first read would skip the body entirely.
+    """
+
+    @staticmethod
+    def _pipeline() -> Construct:
+        from neograph.modifiers import Loop
+        from neograph.node import Node
+        from tests.schemas import Claims
+
+        node = Node.scripted("refine", fn="refine_fn", inputs=Claims, outputs=Claims) | Loop(
+            when="claims_incomplete", max_iterations=3
+        )
+        return Construct("loop-entry-pipeline", nodes=[node])
+
+    def test_the_flow_enters_the_loop_body_not_the_check_node(self) -> None:
+        flow = to_agent_spec(self._pipeline())
+        entered = {e.to_node.name for e in flow.control_flow_connections if type(e.from_node).__name__ == "StartNode"}
+        assert entered == {"refine"}, (
+            "a do-while loop must be ENTERED at its body; entering at the check node evaluates "
+            f"the condition before the body has ever run (entered: {entered})"
+        )
+
+    def test_the_loop_exits_through_the_check_nodes_done_branch(self) -> None:
+        flow = to_agent_spec(self._pipeline())
+        exits = [
+            e
+            for e in flow.control_flow_connections
+            if e.from_node.name == "refine__loop_check" and type(e.to_node).__name__ == "EndNode"
+        ]
+        assert len(exits) == 1
+        assert exits[0].from_branch == "done", (
+            "the loop's exit edge must name the 'done' branch -- an unlabelled edge out of a "
+            "BranchingNode is ambiguous to a literal executor"
+        )
+
+
+class TestOperatorPauseResumesIntoTheFlow:
+    """The HITL pause node must continue where the un-paused path continues.
+
+    At runtime (``_wiring._add_operator_check``) the interrupt happens INSIDE the
+    check node: once the human answers, execution resumes from that same node and
+    proceeds to the next node in the pipeline. So the exported pause
+    ``InputMessageNode`` and the check's non-pausing branch must RECONVERGE on the
+    same successor -- which is exactly what ``_lower_operator``'s own docstring
+    has always claimed ("ControlFlowEdge(from_branch=DEFAULT_BRANCH) ->
+    reconverge") but the lowering never emitted.
+    """
+
+    @staticmethod
+    def _flow() -> Any:
+        from neograph.modifiers import Operator
+        from tests.schemas import Claims, _producer
+
+        gate = _producer("gate", Claims) | Operator(when="needs_review")
+        return to_agent_spec(Construct("operator-resume-pipeline", nodes=[gate]))
+
+    def test_pause_node_and_default_branch_reconverge_on_the_same_successor(self) -> None:
+        flow = self._flow()
+        after_pause = {
+            e.to_node.name for e in flow.control_flow_connections if e.from_node.name == "gate__operator_pause"
+        }
+        after_default = {
+            e.to_node.name
+            for e in flow.control_flow_connections
+            if e.from_node.name == "gate__operator_check" and e.from_branch == "default"
+        }
+        assert after_pause, "the pause node dead-ends -- a literal executor never resumes"
+        assert after_pause == after_default, (
+            "the paused and un-paused paths must reconverge on the same successor "
+            f"(pause -> {after_pause}, default -> {after_default})"
+        )
+
+    def test_the_operator_body_is_entered_before_the_gate(self) -> None:
+        flow = self._flow()
+        entered = {e.to_node.name for e in flow.control_flow_connections if type(e.from_node).__name__ == "StartNode"}
+        assert entered == {"gate"}, (
+            "the Operator gate runs AFTER the body it guards (_wiring._add_operator_check wires "
+            f"node -> check), so the flow must enter the body (entered: {entered})"
+        )
