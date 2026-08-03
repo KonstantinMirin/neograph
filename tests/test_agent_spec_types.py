@@ -81,6 +81,19 @@ class _Claims(BaseModel, frozen=True):
     items: list[str]
 
 
+# Not `_`-prefixed like the fixtures above: the exported title of a $ref field
+# becomes a field NAME on the rebuilt model, and Pydantic silently drops
+# `_`-prefixed names as private attrs -- which would mask what these tests pin.
+class Leaf(BaseModel, frozen=True):
+    x: int
+
+
+class Shared(BaseModel, frozen=True):
+    a: Leaf
+    b: Leaf
+    c: list[Leaf]
+
+
 class TestPydanticToAgentSpecPropertyRoundTrip:
     """Pydantic BaseModel -> Agent Spec Property list -> back to Pydantic."""
 
@@ -274,3 +287,49 @@ class TestStructuralTypeNameDistinguishesListItemTypes:
         # Must NOT raise "items.0: Input should be a valid dictionary, got str"
         claims_instance = ClaimsRebuilt(items=["x", "y"])
         assert claims_instance.items == ["x", "y"]
+
+
+class TestRefFieldKeepsItsOwnTitle:
+    """neograph-p7dyq: a ``$ref``-shaped field must export under the FIELD's
+    name, not the referenced DEFINITION's title.
+
+    Pydantic only hoists a nested model into ``$defs`` (and emits a ``$ref``)
+    once that model is referenced more than once -- so every single-nesting
+    fixture inlines and keeps its field title, which is why this hid. With two
+    fields of the same nested type, the ref branch titled BOTH properties after
+    the model (``'Leaf'``), and the import side -- which uses ``Property.title``
+    as the field name -- rebuilt them under one name, silently dropping a field.
+
+    The ``c: list[Leaf]`` field pins that the list branch (which already kept
+    its own title today, since ``ListProperty`` carries the field title and only
+    its ``item_type`` went through the ref branch) does not regress relative to
+    the bare-ref branch."""
+
+    def test_repeated_nested_model_fields_export_under_their_own_field_names(self):
+        from neograph.spec_types import model_to_agent_spec_properties
+
+        assert "Leaf" in Shared.model_json_schema().get("$defs", {}), (
+            "test premise: Pydantic must hoist the twice-referenced Leaf into "
+            "$defs so the exporter's $ref branch is the one under test"
+        )
+
+        properties = model_to_agent_spec_properties(Shared)
+
+        assert [p.title for p in properties] == ["a", "b", "c"]
+
+    def test_repeated_nested_model_fields_survive_the_round_trip(self):
+        from neograph.spec_types import (
+            agent_spec_properties_to_types,
+            model_to_agent_spec_properties,
+        )
+
+        properties = model_to_agent_spec_properties(Shared)
+        agent_spec_properties_to_types(properties, name="SharedRebuilt")
+        rebuilt = lookup_type("SharedRebuilt")
+
+        assert list(rebuilt.model_fields) == ["a", "b", "c"]
+
+        instance = rebuilt(a={"x": 1}, b={"x": 2}, c=[{"x": 3}])
+        assert instance.a.x == 1
+        assert instance.b.x == 2
+        assert instance.c[0].x == 3

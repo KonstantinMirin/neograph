@@ -306,8 +306,12 @@ def _annotation_to_property(annotation: Any, schema: dict[str, Any], defs: dict[
 
     ref = schema.get("$ref")
     if ref and ref.startswith(_REF_POINTER_PREFIX):
+        # The definition supplies the SHAPE only; the title stays the FIELD's.
+        # Preferring the definition's title collapsed two fields of the same
+        # nested type into one -- both exported as the model's name, and the
+        # import side uses Property.title as the field name.
         def_name = ref.removeprefix(_REF_POINTER_PREFIX)
-        return _annotation_to_property(None, defs[def_name], defs, title=defs[def_name].get("title", title))
+        return _annotation_to_property(None, defs[def_name], defs, title=title)
 
     any_of = schema.get("anyOf")
     if any_of is not None:
