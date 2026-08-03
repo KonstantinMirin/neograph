@@ -843,6 +843,159 @@ class TestToAgentSpecLowersModifiers:
             "expected the PAUSE_BRANCH edge (not DEFAULT_BRANCH) into InputMessageNode"
         )
 
+    def test_forward_construct_if_else_lowers_to_branching_node_not_unconditional_sequence(self):
+        """neograph-s7zt3.17: a ForwardConstruct if/else must export to a real
+        BranchingNode with divergent true/false ControlFlowEdges into each
+        arm, reconverging on the successor -- NOT both arms wired to run
+        unconditionally in sequence (the pre-fix behavior, since
+        ``iter_with_arms`` drops the ``_BranchNode`` sentinel before
+        ``to_agent_spec`` ever sees it)."""
+        from pyagentspec.flows.edges import ControlFlowEdge
+        from pyagentspec.flows.nodes import BranchingNode
+        from pydantic import BaseModel
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.forward import ForwardConstruct
+        from neograph.node import Node
+
+        from .fakes import register_scripted
+
+        class Confidence(BaseModel, frozen=True):
+            score: float
+
+        class HighResult(BaseModel, frozen=True):
+            label: str
+
+        class LowResult(BaseModel, frozen=True):
+            label: str
+
+        register_scripted("s7zt3_17_check", lambda input_data, config: Confidence(score=0.9))
+        register_scripted("s7zt3_17_high", lambda input_data, config: HighResult(label="high"))
+        register_scripted("s7zt3_17_low", lambda input_data, config: LowResult(label="low"))
+
+        class BranchPipeline(ForwardConstruct):
+            check = Node.scripted("s7zt3-17-check", fn="s7zt3_17_check", outputs=Confidence)
+            high_path = Node.scripted("s7zt3-17-high", fn="s7zt3_17_high", outputs=HighResult)
+            low_path = Node.scripted("s7zt3-17-low", fn="s7zt3_17_low", outputs=LowResult)
+
+            def forward(self, topic):
+                result = self.check(topic)
+                if result.score > 0.5:
+                    return self.high_path(result)
+                else:
+                    return self.low_path(result)
+
+        pipeline = BranchPipeline()
+
+        flow = to_agent_spec(pipeline)
+
+        branch_nodes = [n for n in flow.nodes if isinstance(n, BranchingNode)]
+        assert len(branch_nodes) == 1, (
+            "expected a BranchingNode for the if/else -- got a flattened, "
+            "unconditional sequence of both arms instead"
+        )
+
+        control_edges = [e for e in flow.control_flow_connections if isinstance(e, ControlFlowEdge)]
+        high_node = next(n for n in flow.nodes if n.name == "s7zt3-17-high")
+        low_node = next(n for n in flow.nodes if n.name == "s7zt3-17-low")
+
+        # Both arms must be entered ONLY via a labeled branch edge out of the
+        # BranchingNode -- never directly from each other in sequence.
+        assert not any(e.from_node.name == "s7zt3-17-high" and e.to_node.name == "s7zt3-17-low" for e in control_edges), (
+            "high_path must not fall through directly into low_path -- both arms ran "
+            "unconditionally in sequence, the exact pre-fix bug"
+        )
+        assert not any(e.from_node.name == "s7zt3-17-low" and e.to_node.name == "s7zt3-17-high" for e in control_edges), (
+            "low_path must not fall through directly into high_path -- both arms ran "
+            "unconditionally in sequence, the exact pre-fix bug"
+        )
+
+        true_edges = [e for e in control_edges if e.from_node.name == branch_nodes[0].name and e.from_branch == "true"]
+        false_edges = [e for e in control_edges if e.from_node.name == branch_nodes[0].name and e.from_branch == "false"]
+        assert any(e.to_node.name == high_node.name for e in true_edges), (
+            "expected the branch's 'true' edge to enter high_path"
+        )
+        assert any(e.to_node.name == low_node.name for e in false_edges), (
+            "expected the branch's 'false' edge to enter low_path"
+        )
+
+    def test_multi_node_arm_wires_internal_sequence_and_reconverges_on_last_node(self):
+        """neograph-s7zt3.17 (architect-review-flagged): an arm with MORE than
+        one item must wire its own internal sequential edges and reconverge
+        on the successor from its LAST item -- not just its first -- proving
+        the fix's per-arm reconvergence chain, not only single-node arms."""
+        import operator as op
+
+        from pyagentspec.flows.edges import ControlFlowEdge
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
+        from neograph.node import Node
+
+        seed = _producer("mn-seed", Claims)
+        step1 = Node.scripted("mn-step1", fn="f", inputs=Claims, outputs=Claims)
+        step2 = Node.scripted("mn-step2", fn="f", inputs=Claims, outputs=Claims)
+        low_path = Node.scripted("mn-low", fn="f", inputs=Claims, outputs=Claims)
+
+        branch_meta = _BranchMeta(
+            condition_spec=_ConditionSpec(source_node=seed, attr_chain=[], op_fn=op.gt, op_str=">", threshold=0),
+            true_arm_nodes=[step1, step2],
+            false_arm_nodes=[low_path],
+        )
+        pipeline = Construct("multi-node-arm", nodes=[seed, _BranchNode(branch_meta, 0)])
+
+        flow = to_agent_spec(pipeline)
+
+        control_edges = [e for e in flow.control_flow_connections if isinstance(e, ControlFlowEdge)]
+        assert any(e.from_node.name == "mn-step1" and e.to_node.name == "mn-step2" for e in control_edges), (
+            "expected mn-step1 -> mn-step2 sequential wiring WITHIN the true arm"
+        )
+        end_node = next(n for n in flow.nodes if n.name == "multi-node-arm__end")
+        assert any(e.from_node.name == "mn-step2" and e.to_node.name == end_node.name for e in control_edges), (
+            "expected the arm's LAST item (mn-step2), not just its first, to reconverge on the successor"
+        )
+        assert not any(e.from_node.name == "mn-step1" and e.to_node.name == end_node.name for e in control_edges), (
+            "mn-step1 must NOT reconverge directly -- only the arm's final item's exit does"
+        )
+
+    def test_modifier_wrapped_node_inside_arm_gets_its_existing_lowering(self):
+        """neograph-s7zt3.17 (architect-review-flagged): an arm item carrying
+        its OWN modifier (Loop) must dispatch through the SAME
+        _lower_construct_item machinery the top-level loop uses -- proving
+        the recursive per-arm-item reuse design generalizes, not just bare
+        single-node arms."""
+        import operator as op
+
+        from pyagentspec.flows.nodes import BranchingNode
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
+        from neograph.modifiers import Loop
+        from neograph.node import Node
+
+        seed = _producer("mod-seed", Claims)
+        looped = Node.scripted("mod-looped-body", fn="f", inputs=Claims, outputs=Claims) | Loop(
+            when="claims_incomplete", max_iterations=3
+        )
+        low_path = _consumer("mod-low", Claims, Claims)
+
+        branch_meta = _BranchMeta(
+            condition_spec=_ConditionSpec(source_node=seed, attr_chain=[], op_fn=op.gt, op_str=">", threshold=0),
+            true_arm_nodes=[looped],
+            false_arm_nodes=[low_path],
+        )
+        pipeline = Construct("modifier-in-arm", nodes=[seed, _BranchNode(branch_meta, 0)])
+
+        flow = to_agent_spec(pipeline)
+
+        loop_branch_nodes = [
+            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get("neograph/modifier") == "loop"
+        ]
+        assert len(loop_branch_nodes) == 1, (
+            "expected the arm's Loop-wrapped node to lower to its own BranchingNode+back-edge, "
+            "via the SAME modifier dispatch the top-level loop uses"
+        )
+
 
 # ── neograph-s7zt3.8: Construct-ITEM modifier export (silent-drop bug fix) ────
 

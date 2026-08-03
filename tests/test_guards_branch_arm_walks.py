@@ -84,6 +84,14 @@ _ALLOWLIST: Counter = Counter(
         # Graph-build dispatch loop — already arm-aware (dispatches _BranchNode to
         # _add_branch_to_graph).
         ("compiler.py", "for item in construct.nodes:"): 1,
+        # Agent Spec export dispatch loop (neograph-s7zt3.17) — mirrors compiler.py's
+        # entry directly above: already arm-aware, dispatching _BranchNode to
+        # _lower_branch (which recurses into each arm's own items via the injected
+        # _lower_construct_item). Pre-fix this walked iter_with_arms, which DROPS the
+        # _BranchNode sentinel and silently flattened both arms into an unconditional
+        # sequence -- exactly the arm-blindness disease this guard exists to catch,
+        # just on the export side instead of the compile side.
+        ("_agent_spec.py", "for item in construct.nodes:"): 1,
         # LangGraph compiled-graph node ids — NOT a Construct node list.
         # neograph-3ffdg.8: this walk moved with describe_graph into
         # _compile_diagnostics.py. Re-keyed by (module, content); it walks the

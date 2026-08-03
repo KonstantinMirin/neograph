@@ -2,14 +2,18 @@
 Spec ``Flow``.
 
 A free function, NOT a ``Construct``/``Node`` method (CLAUDE.md layer
-discipline, design doc agent-spec-interop-2026-07-09.md §7). Walks the IR via
-the existing ``iter_with_arms`` (``_ir_branch.py``) — the same arm-aware walk
-the compiler/runner/lint already use — and LOWERS each modifier to the flat
-Agent Spec primitives it already lowers to for LangGraph compilation (Oracle
-fan-out/barrier, Each router/Send/barrier, Loop back-edge, Operator's
-check-node-with-interrupt), per the exporter's Core Invariant: this is the
-SAME lowering neograph performs when compiling, expressed in Agent Spec
+discipline, design doc agent-spec-interop-2026-07-09.md §7). LOWERS each
+modifier to the flat Agent Spec primitives it already lowers to for LangGraph
+compilation (Oracle fan-out/barrier, Each router/Send/barrier, Loop back-edge,
+Operator's check-node-with-interrupt), per the exporter's Core Invariant: this
+is the SAME lowering neograph performs when compiling, expressed in Agent Spec
 vocabulary instead of LangGraph's — never a second, divergent lowering.
+
+The main dispatch loop walks RAW ``construct.nodes``, never ``iter_with_arms``
+(right for the compiler's/lint's MEMBERSHIP-only consumers, wrong here: the
+exporter must see a ``_BranchNode`` boundary to emit a real ``BranchingNode``,
+per ``_lower_top_level_item`` / ``_lower_branch``, neograph-s7zt3.17) — the
+DATA-edge phase below still uses ``iter_with_arms``, which is right there.
 
 Every irreversible flattening that CAN round-trip rides in
 ``neograph/``-prefixed ``metadata`` markers (per-group modifier markers:
@@ -39,7 +43,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypeAlias, assert_never, cast
 
-from neograph._ir_branch import _BranchNode, iter_with_arms
+from neograph._ir_branch import iter_with_arms
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
@@ -87,6 +91,7 @@ from neograph._agent_spec_modifier_lowering import (  # noqa: E402,F401
     _lower_loop,
     _lower_operator,
     _lower_oracle,
+    _lower_top_level_item,
 )
 from neograph._agent_spec_node_lowering import (  # noqa: E402,F401
     _agent_spec_marker,
@@ -167,16 +172,6 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
       * ORACLE → EVERY variant node (each variant independently consumes the
         external input); the merge node consumes only the variant fan-in.
     """
-    nodes_mod, flow_mod, _edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
-
-    if isinstance(item, _BranchNode):
-        branch = nodes_mod.BranchingNode(
-            name=item.name,
-            mapping={"true": "true", "false": "false"},
-            metadata={_MARK_BRANCH: True},
-        )
-        return [branch], [], [], branch, [(branch, None)], branch, [(branch, False)]
-
     if not isinstance(item, (Node, Construct)):
         raise ConfigurationError.build(
             f"unrecognized construct item {item!r} — no Agent Spec lowering",
@@ -386,21 +381,27 @@ def to_agent_spec(construct: Construct) -> Flow:
     data_edges: list[DataFlowEdge] = []
     entries: list[SpecNode] = []
     exits: list[list[_Exit]] = []
-    data_nodes: list[SpecNode] = []
     item_by_name: dict[str, Any] = {}
     input_targets_by_item_name: dict[str, list[tuple[SpecNode, bool]]] = {}
+    data_node_by_item_name: dict[str, SpecNode] = {}
 
-    for item in iter_with_arms(construct):
-        item_by_name[item.name] = item
-        lowered = _lower_construct_item(item)
-        lowered_nodes, extra_control, extra_data, entry, item_exits, data_node, input_targets = lowered
+    # Raw construct.nodes, NOT iter_with_arms — a _BranchNode must be seen as a
+    # boundary here (see module docstring). _lower_top_level_item dispatches a
+    # plain item vs a _BranchNode uniformly, returning per-item bookkeeping this
+    # loop merges in so the DATA-edge phase below -- which walks
+    # iter_with_arms(construct) and needs membership-only visibility into
+    # arm-internal nodes -- can still resolve them by name exactly as pre-fix.
+    for item in construct.nodes:
+        lowered = _lower_top_level_item(item, _lower_construct_item)
+        lowered_nodes, extra_control, extra_data, entry, item_exits, names, targets, data_nodes = lowered
+        item_by_name.update(names)
+        input_targets_by_item_name.update(targets)
+        data_node_by_item_name.update(data_nodes)
         all_nodes.extend(lowered_nodes)
         control_edges.extend(extra_control)
         data_edges.extend(extra_data)
         entries.append(entry)
         exits.append(item_exits)
-        data_nodes.append(data_node)
-        input_targets_by_item_name[item.name] = input_targets
 
     # Explicit ControlFlowEdge per adjacent pair in Construct.nodes order, from
     # every EXIT of the previous item to the ENTRY of the next. An item with more
@@ -426,7 +427,6 @@ def to_agent_spec(construct: Construct) -> Flow:
     # re-derivation here. As a SOURCE, the upstream's output still comes from
     # its single ``data_node``.
     ordered_items = list(iter_with_arms(construct))
-    data_node_by_item_name = dict(zip((item.name for item in ordered_items), data_nodes, strict=True))
 
     def _emit_input_edges(
         item_name: str,

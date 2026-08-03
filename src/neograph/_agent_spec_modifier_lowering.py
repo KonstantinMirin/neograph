@@ -23,6 +23,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from neograph._agent_spec_markers import (
+    _MARK_BRANCH,
     _MARK_EACH_SPEC,
     _MARK_GROUP_ID,
     _MARK_LOOP_SPEC,
@@ -48,6 +49,7 @@ from neograph._agent_spec_placeholders import (
     compose_property_title,
     property_title_to_prompt_path,
 )
+from neograph._ir_branch import _BranchNode
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
@@ -450,6 +452,166 @@ def _lower_loop(
             )
         )
     return branch, control_edges, data_edges
+
+
+def _lower_branch(
+    branch_node: _BranchNode,
+    lower_item: Callable[[Any], Any],
+) -> tuple[
+    list[SpecNode],
+    list[ControlFlowEdge],
+    list[DataFlowEdge],
+    SpecNode,
+    list[tuple[SpecNode, str | None]],
+    dict[str, Any],
+    dict[str, list[tuple[SpecNode, bool]]],
+    dict[str, SpecNode],
+]:
+    """Lower a ``_BranchNode`` (a ForwardConstruct ``if``/``else``) into a real
+    ``BranchingNode`` with divergent true/false ``ControlFlowEdge``s into each
+    arm, reconverging on the successor — neograph-s7zt3.17.
+
+    Pre-fix, ``to_agent_spec`` walked ``iter_with_arms``, which DROPS the
+    ``_BranchNode`` sentinel and flattens ``true_arm_nodes`` then
+    ``false_arm_nodes`` in place — so the exporter never saw a branch at all,
+    and both arms were wired to run unconditionally in sequence.
+
+    ``lower_item`` is ``_lower_construct_item``, INJECTED (mirrors
+    ``export_flow`` on ``_lower_item_body`` — this module must not import
+    ``_agent_spec`` back) so each arm's own items dispatch through the SAME
+    modifier machinery the top-level loop uses: a Construct sub-pipeline or an
+    Oracle/Each/Loop/Operator-wrapped node inside an arm gets its existing
+    lowering for free, chained sequentially within the arm via the identical
+    adjacent-pair reconvergence ``to_agent_spec`` already uses between
+    top-level items. A nested ``_BranchNode`` inside an arm is not reachable —
+    the forward tracer never nests branches (``_merge_sequential_branches``
+    handles only sequential, non-nested branches) — so ``lower_item`` raising
+    on one is a correct fail-loud boundary, not a gap.
+
+    Returns ``(all_nodes, control_edges, data_edges, entry, exits,
+    item_by_name, input_targets_by_item_name, data_node_by_item_name)`` — the
+    last three are per-ARM-ITEM bookkeeping the caller merges into its own
+    dicts, since ``to_agent_spec``'s data-edge resolution phase
+    (``_emit_input_edges``) must still find an arm-internal node by name —
+    exactly the visibility ``iter_with_arms`` used to give for free by
+    flattening the arm into the top-level item list.
+    """
+    nodes_mod, _flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
+    meta = branch_node._neo_branch_meta
+
+    branch = nodes_mod.BranchingNode(
+        name=branch_node.name,
+        mapping={"true": "true", "false": "false"},
+        metadata={_MARK_BRANCH: True},
+    )
+
+    all_nodes: list[SpecNode] = [branch]
+    control_edges: list[ControlFlowEdge] = []
+    data_edges: list[DataFlowEdge] = []
+    exits: list[tuple[SpecNode, str | None]] = []
+    item_by_name: dict[str, Any] = {}
+    input_targets_by_item_name: dict[str, list[tuple[SpecNode, bool]]] = {}
+    data_node_by_item_name: dict[str, SpecNode] = {}
+
+    for arm_items, arm_label in ((meta.true_arm_nodes, "true"), (meta.false_arm_nodes, "false")):
+        if not arm_items:
+            # An empty arm has no body -- the branch itself is the exit for
+            # that side, mirroring _wiring_branch.py's true_target/
+            # false_target = END fallback for an empty arm.
+            exits.append((branch, arm_label))
+            continue
+
+        arm_entries: list[SpecNode] = []
+        arm_exits: list[list[tuple[SpecNode, str | None]]] = []
+        for item in arm_items:
+            item_by_name[item.name] = item
+            lowered_nodes, extra_control, extra_data, entry, item_exits, data_node, input_targets = lower_item(item)
+            all_nodes.extend(lowered_nodes)
+            control_edges.extend(extra_control)
+            data_edges.extend(extra_data)
+            arm_entries.append(entry)
+            arm_exits.append(item_exits)
+            data_node_by_item_name[item.name] = data_node
+            input_targets_by_item_name[item.name] = input_targets
+
+        control_edges.append(
+            edges_mod.ControlFlowEdge(
+                name=f"{branch.name}_{arm_label}",
+                from_node=branch,
+                from_branch=arm_label,
+                to_node=arm_entries[0],
+            )
+        )
+        # Same adjacent-pair reconvergence to_agent_spec uses between
+        # top-level items, scoped to this arm's own item list.
+        for prev_exits, next_entry in zip(arm_exits, arm_entries[1:], strict=False):
+            for from_node, from_branch in prev_exits:
+                control_edges.append(
+                    edges_mod.ControlFlowEdge(
+                        name=f"{from_node.name}_to_{next_entry.name}",
+                        from_node=from_node,
+                        from_branch=from_branch,
+                        to_node=next_entry,
+                    )
+                )
+        exits.extend(arm_exits[-1])
+
+    return (
+        all_nodes,
+        control_edges,
+        data_edges,
+        branch,
+        exits,
+        item_by_name,
+        input_targets_by_item_name,
+        data_node_by_item_name,
+    )
+
+
+def _lower_top_level_item(
+    item: Any,
+    lower_item: Callable[[Any], Any],
+) -> tuple[
+    list[SpecNode],
+    list[ControlFlowEdge],
+    list[DataFlowEdge],
+    SpecNode,
+    list[tuple[SpecNode, str | None]],
+    dict[str, Any],
+    dict[str, list[tuple[SpecNode, bool]]],
+    dict[str, SpecNode],
+]:
+    """Dispatch one top-level ``construct.nodes`` item, incl. ``_BranchNode``,
+    to a UNIFORM per-item-bookkeeping shape ``to_agent_spec`` merges into its
+    own dicts — keeps the ``isinstance(item, _BranchNode)`` branch out of the
+    main loop, since a plain item and a branch's several arm-items need
+    different-shaped bookkeeping (one name vs several) unified here instead.
+    """
+    if isinstance(item, _BranchNode):
+        lowered_nodes, extra_control, extra_data, entry, item_exits, item_by_name, targets_by_name, data_by_name = (
+            _lower_branch(item, lower_item)
+        )
+        return (
+            lowered_nodes,
+            extra_control,
+            extra_data,
+            entry,
+            item_exits,
+            item_by_name,
+            targets_by_name,
+            {**data_by_name, item.name: entry},
+        )
+    lowered_nodes, extra_control, extra_data, entry, item_exits, data_node, input_targets = lower_item(item)
+    return (
+        lowered_nodes,
+        extra_control,
+        extra_data,
+        entry,
+        item_exits,
+        {item.name: item},
+        {item.name: input_targets},
+        {item.name: data_node},
+    )
 
 
 def _lower_operator(node: Node | Construct, operator: Operator) -> tuple[SpecNode, SpecNode, list[ControlFlowEdge]]:
