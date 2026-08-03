@@ -99,6 +99,9 @@ from neograph._agent_spec_placeholders import (  # noqa: E402,F401
     _prompt_spec_marker,
     _properties_for,
     _translate_placeholders,
+    compose_property_title,
+    property_title_to_prompt_path,
+    split_property_title,
 )
 from neograph._agent_spec_portal import (  # noqa: E402,F401
     _is_peer_mesh_member,
@@ -285,7 +288,7 @@ def _lower_oracle(
             # through the SAME flat map and drop it if the merge prompt never
             # referenced this variant output (unreferenced -> no data path).
             if oracle.merge_prompt:
-                dest_input = merge_orig_to_flat.get(prop.title)
+                dest_input = merge_orig_to_flat.get(property_title_to_prompt_path(prop.title))
                 if dest_input is None:
                     continue
             else:
@@ -426,44 +429,44 @@ def _lower_loop(
             name=f"{node.name}__loop_back", from_node=branch, from_branch="continue", to_node=body
         ),
     ]
-    # Dict-form inputs prefix each Property title as "{upstream}.{field}"
-    # (per _properties_for's dict-form convention) -- the body node's real
-    # input Property is "{key}.{field}", never the bare "{field}", so the
-    # self-edge's destination_input must be resolved against the SAME key
-    # the runtime feeds the re-entry value into. That key is whichever
-    # dict-form inputs entry has a type compatible with the node's own
-    # output type (mirrors the single-type upstream-resolution scan below:
-    # a Loop-fed key could be a self-reference — "key matching the node's
-    # own name" per the validator's Loop rule — OR the ORIGINAL upstream
-    # producer's name, e.g. inputs={'seed': Draft} — either way it's the
-    # key whose declared type matches the fed-back output).
+    # Dict-form inputs qualify each Property title with its upstream key (per
+    # _properties_for's dict-form convention) -- the body node's real input
+    # Property is the qualified title, never the bare "{field}", so the
+    # self-edge's destination_input must be resolved against the SAME key the
+    # runtime feeds the re-entry value into. That key is whichever dict-form
+    # inputs entry has a type compatible with the node's own output type
+    # (mirrors the single-type upstream-resolution scan below: a Loop-fed key
+    # could be a self-reference — "key matching the node's own name" per the
+    # validator's Loop rule — OR the ORIGINAL upstream producer's name, e.g.
+    # inputs={'seed': Draft} — either way it's the key whose declared type
+    # matches the fed-back output).
     ni = normalize_inputs(_item_inputs(node))
     no_self = normalize_outputs(_item_outputs(node))
-    dest_prefix = ""
+    dest_key: str | None = None
     if ni.is_dict_form and not no_self.is_dict_form:
         self_field = field_name_for(node.name)
         if self_field in ni.by_name:
-            dest_prefix = f"{self_field}."
+            dest_key = self_field
         else:
             for key, typ in ni.by_name.items():
                 if isinstance(typ, type) and (issubclass(no_self.primary, typ) or issubclass(typ, no_self.primary)):
-                    dest_prefix = f"{key}."
+                    dest_key = key
                     break
 
     # Option F consumer sweep neograph-cbpyx: when the loop body is a
     # placeholder-translated LLM node, its declared inputs are flat ${var}->{{ flat }}
     # names, so the self-feedback edge's destination_input must route through the
-    # body's flat map (drop it if the fed-back output isn't referenced in the prompt).
+    # body's flat map -- keyed by the dotted ${...} PROMPT path, NOT by a Property
+    # title (drop it if the fed-back output isn't referenced in the prompt).
     body_orig_to_flat = _node_translation(node)[2] if _is_translation_eligible(node) else {}
     data_edges: list[DataFlowEdge] = []
     for prop in _properties_for(_item_outputs(node)):
-        dotted = f"{dest_prefix}{prop.title}"
         if _is_translation_eligible(node):
-            dest_input = body_orig_to_flat.get(dotted)
+            dest_input = body_orig_to_flat.get(f"{dest_key}.{prop.title}" if dest_key else prop.title)
             if dest_input is None:
                 continue
         else:
-            dest_input = dotted
+            dest_input = compose_property_title(dest_key, prop.title) if dest_key else prop.title
         data_edges.append(
             edges_mod.DataFlowEdge(
                 name=f"{node.name}__loop_self_{prop.title}",
@@ -776,43 +779,41 @@ def to_agent_spec(construct: Construct) -> Flow:
         """Emit one DataFlowEdge per (destination target, prefix) for a single
         source Property. ``upstream_name`` is the dict-form key ('' for the
         single-type path, where the destination input title is the bare
-        Property title, not '{upstream}.{title}').
+        Property title, not the key-qualified one).
 
         ``dest_title`` decouples the DESTINATION input field from the
         ``source_output`` when they differ — needed for a dict-form-OUTPUT
-        producer (B4), whose output Property is ``{key}.{field}`` but whose
-        downstream consumer declares the input as the bare ``{field}`` (or
-        ``{upstream}.{field}``). Defaults to ``source_title`` (unchanged for
-        every single-shape caller).
+        producer (B4), whose output Property is qualified by its output KEY but
+        whose consumer declares it bare, or qualified by the UPSTREAM name.
+        Defaults to ``source_title`` (unchanged for every single-shape caller).
 
         Option F consumer sweep neograph-cbpyx: when the CONSUMING item is
         placeholder-translated (LLM mode), the destination declares the flat
-        ${var}->{{ flat }} name, so the dotted ``{upstream}.{title}`` (and the
+        ${var}->{{ flat }} name, so the ``${upstream.title}`` path (and the
         MapNode's ``iterated_``-prefixed form) route through the item's flat map —
         and the edge is DROPPED when the source path was never referenced in the
         prompt (a real topology change: the translated primitive has no data path
         to that value). Scripted/raw destinations keep the untranslated form.
+
+        The two name spaces MUST NOT be conflated -- neograph-8zvd1: the flat map
+        is keyed by the dotted ``${...}`` PROMPT path, ``destination_input`` by
+        the Agent Spec Property TITLE the destination declares.
         """
         dest_item = item_by_name.get(item_name)
         translate = _is_translation_eligible(dest_item)
         orig_to_flat = _node_translation(cast("Node", dest_item))[2] if translate else {}
         dest_core = dest_title if dest_title is not None else source_title
-        dotted = f"{upstream_name}.{dest_core}" if upstream_name else dest_core
         for target_node, iterated in input_targets_by_item_name[item_name]:
             if translate:
-                flat = orig_to_flat.get(dotted)
+                flat = orig_to_flat.get(f"{upstream_name}.{dest_core}" if upstream_name else dest_core)
                 if flat is None:
                     continue
                 core = flat
-            elif iterated:
-                # A MapNode infers its inputs as ``iterated_{json_schema title}``
-                # — and pyagentspec forbids dots in json_schema titles, so the
-                # inner node's dict-form ``{key}.{field}`` prefix lives only on
-                # Property.title; the inferred MapNode input is the BARE
-                # ``iterated_{field}``. Target that, not the dotted form.
-                core = source_title
             else:
-                core = dotted
+                # A MapNode infers its inputs as ``iterated_{json_schema title}``
+                # from the INNER node's own Properties, so the qualified title is
+                # right for the MapNode too — it is what the inner node declares.
+                core = compose_property_title(upstream_name, dest_core) if upstream_name else dest_core
             dest_input = f"iterated_{core}" if iterated else core
             data_edges.append(
                 edges_mod.DataFlowEdge(
@@ -884,12 +885,11 @@ def to_agent_spec(construct: Construct) -> Flow:
                     )
                 if output_key is not None:
                     # B4: dict-form producer, one key referenced. The producer's
-                    # output Property is ``{key}.{field}`` (the SAME prefix
-                    # ``_properties_for`` applies); the consumer's declared input is
-                    # ``{upstream_name}.{field}`` — decouple source/dest so the edge
-                    # is wired, not dropped.
+                    # output Property is qualified by ``output_key``, the consumer's
+                    # declared input by ``upstream_name`` — decouple source/dest so
+                    # the edge is wired, not dropped.
                     for prop in _properties_for({output_key: no.all_keys[output_key]}):
-                        field = prop.title[len(output_key) + 1 :]
+                        field = split_property_title(prop.title)[1]
                         _emit_input_edges(item.name, upstream_name, source_node, prop.title, dest_title=field)
                 else:
                     # Single-type producer referenced directly by node name.
@@ -912,7 +912,7 @@ def to_agent_spec(construct: Construct) -> Flow:
             if no.is_dict_form:
                 # B4: a dict-form-output producer is no longer skipped. Match the
                 # consumer's single input type against each output KEY; wire the
-                # matching key's ``{key}.{field}`` output Property to the consumer's
+                # matching key's qualified output Property to the consumer's
                 # bare ``{field}`` input (source/dest decoupled, same as the
                 # dict-form-input branch above).
                 matched = False
@@ -922,7 +922,7 @@ def to_agent_spec(construct: Construct) -> Flow:
                     if not (issubclass(ktype, ni.single_type) or issubclass(ni.single_type, ktype)):
                         continue
                     for prop in _properties_for({key: ktype}):
-                        field = prop.title[len(key) + 1 :]
+                        field = split_property_title(prop.title)[1]
                         if field in input_props:
                             _emit_input_edges(item.name, "", source_node, prop.title, dest_title=field)
                             matched = True

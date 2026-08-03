@@ -215,25 +215,30 @@ class TestLoopSelfEdgeResolvesDictFormDestinationTitle:
 
     Disease pattern: ``_lower_loop``'s self-edge must not construct
     ``destination_input`` from a BARE output Property title alone -- dict-form
-    inputs prefix input Property titles as ``'{key}.{field}'`` (per
+    inputs qualify input Property titles with their upstream key (per
     ``_properties_for``'s dict-form convention), so a bare title crashes
     pyagentspec's own ``DataFlowEdge`` validator for any Loop-wrapped node
     declared with @node's PRIMARY dict-form inputs shape.
+
+    neograph-8zvd1 renamed the resolved variable ``dest_prefix`` -> ``dest_key``
+    (a KEY, not a pre-joined string) and routes it through the shared
+    ``compose_property_title``, so the guard now pins those names.
     """
 
     def test_loop_self_edge_computes_a_dict_form_destination_prefix(self):
         source = _lower_loop_source()
-        assert "dest_prefix" in source, (
+        assert "dest_key" in source, (
             "_lower_loop's self-edge must resolve a dict-form destination "
-            "prefix (via node.inputs' dict-form key), not assume the "
+            "key (via node.inputs' dict-form key), not assume the "
             "destination's input Property title is always bare"
         )
-        assert 'dotted = f"{dest_prefix}{prop.title}"' in source, (
+        assert "compose_property_title(dest_key, prop.title)" in source, (
             "the self-edge's destination title must be built from the resolved "
-            "dest_prefix (dotted = f'{dest_prefix}{prop.title}'), never the bare "
-            "prop.title alone -- Option F (neograph-cbpyx) then routes this dotted "
-            "title through the body's flat placeholder map when the loop body is a "
-            "translated LLM node, but the dict-form prefix resolution is unchanged"
+            "dest_key through the SHARED compose_property_title, never the bare "
+            "prop.title alone and never an inline separator literal -- Option F "
+            "(neograph-cbpyx) then routes the PROMPT-path form through the body's "
+            "flat placeholder map when the loop body is a translated LLM node, "
+            "but the dict-form key resolution is unchanged"
         )
 
     def test_meta_guard_catches_the_disease_pattern_if_reintroduced(self):
@@ -254,8 +259,8 @@ class TestLoopSelfEdgeResolvesDictFormDestinationTitle:
             "            )\n"
             "        )\n"
         )
-        assert "dest_prefix" not in buggy_source
-        assert 'dotted = f"{dest_prefix}{prop.title}"' not in buggy_source
+        assert "dest_key" not in buggy_source
+        assert "compose_property_title(dest_key, prop.title)" not in buggy_source
 
 
 def _func_def(name: str) -> ast.FunctionDef:

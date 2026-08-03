@@ -391,6 +391,148 @@ class TestDictFormFanInRoundTrip:
 
         assert result["consumer"].value == "got: hello"
 
+    def test_dict_form_fan_in_survives_the_json_wire(self):
+        """neograph-8zvd1: the in-memory assertion above never exercised
+        ``Flow.from_dict(flow.to_dict())``, so the export could -- and did --
+        emit a Flow no conforming reader could load. Dict-form is what @node
+        always produces for a typed upstream param, so this is essentially
+        every pipeline: an interchange format that only its own author can
+        read back is not an interchange format."""
+        from pyagentspec.flows.flow import Flow
+
+        def seed_fn(input_data, config):
+            return Claims(items=["hello", "world"])
+
+        register_scripted("rt_wire_dictfanin_seed", seed_fn)
+
+        def consume_fn(input_data, config):
+            return Result(value=f"got: {input_data['seed'].items[0]}")
+
+        register_scripted("rt_wire_dictfanin_consume", consume_fn)
+
+        seed = Node.scripted("seed", fn="rt_wire_dictfanin_seed", outputs=Claims)
+        consumer = Node.scripted(
+            "consumer", fn="rt_wire_dictfanin_consume", inputs={"seed": Claims}, outputs=Result
+        )
+        pipeline = Construct("dict-fanin-wire", nodes=[seed, consumer])
+
+        reloaded = Flow.from_dict(to_agent_spec(pipeline).to_dict())
+
+        imported = from_agent_spec(reloaded)
+        graph = compile(imported, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "dict-fanin-wire-rt"})
+
+        assert result["consumer"].value == "got: hello"
+
+    def test_dict_form_prefix_survives_serialization_not_just_the_python_object(self):
+        """The prefix must live in ``json_schema['title']`` -- the ONLY thing
+        ``Property`` serializes. A prefix set on the ``.title`` attribute alone
+        (the pre-8zvd1 post-construction mutation) vanishes on the wire while
+        every DataFlowEdge still routes to the prefixed name, which is exactly
+        how the dangling-edge failure was produced."""
+        seed = Node.scripted("seed", fn="x", outputs=Claims)
+        consumer = Node.scripted("consumer", fn="y", inputs={"seed": Claims}, outputs=Result)
+        exported = to_agent_spec(Construct("dict-fanin-serialized", nodes=[seed, consumer])).to_dict()
+
+        consumer_spec = next(
+            c
+            for c in exported["$referenced_components"].values()
+            if c.get("name") == "consumer" and "inputs" in c
+        )
+        titles = {p["title"] for p in consumer_spec["inputs"]}
+        assert titles == {"seed:items"}, (
+            f"the dict-form upstream key must be carried in the SERIALIZED title, got {titles}"
+        )
+
+        dest_inputs = {e["destination_input"] for e in exported["data_flow_connections"]}
+        assert dest_inputs <= titles, (
+            f"every DataFlowEdge destination_input must name a real input Property; "
+            f"edges target {dest_inputs}, node declares {titles}"
+        )
+
+
+class Note(BaseModel, frozen=True):
+    note: str
+
+
+def _title_shape_pipelines() -> dict[str, list]:
+    """A representative spread of the shapes whose Properties carry a
+    dict-form upstream prefix, keyed by a human-readable shape name."""
+    return {
+        "dict-form-fan-in": [
+            Node.scripted("seed", fn="x", outputs=Claims),
+            Node.scripted("consumer", fn="y", inputs={"seed": Claims}, outputs=Result),
+        ],
+        "dict-form-outputs": [
+            Node.scripted("producer", fn="x", outputs={"claims": Claims, "note": Note}),
+            Node.scripted("consumer", fn="y", inputs={"producer_claims": Claims}, outputs=Result),
+        ],
+        "nested-model-fan-in": [
+            Node.scripted("bagger", fn="x", outputs=Bag),
+            Node.scripted("reader", fn="y", inputs={"bagger": Bag}, outputs=Result),
+        ],
+        "each-fan-out": [
+            Node.scripted("bagger", fn="x", outputs=Bag),
+            # 'bagger' is a peer producer (a real dict-form fan-in edge);
+            # 'element' names no peer, so it is the fan-out receiver.
+            Node.scripted("tag", fn="y", inputs={"bagger": Bag, "element": Tagged}, outputs=Result)
+            | Each(over="bagger.items", key="label"),
+        ],
+        "loop-dict-form-body": [
+            Node.scripted("seed", fn="x", outputs=Draft),
+            Node.scripted("refine", fn="y", inputs={"seed": Draft}, outputs=Draft)
+            | Loop(when="score < 0.8", max_iterations=3),
+        ],
+    }
+
+
+TITLE_SHAPES = list(_title_shape_pipelines())
+
+
+class TestExportedPropertyTitlesAreAgentSpecLegal:
+    """neograph-8zvd1, the whole class of bug rather than the one shape that
+    surfaced it: ``Property`` validates its title at CONSTRUCTION only (no
+    ``validate_assignment``), so ANY post-construction title mutation slips
+    past the validator, serializes happily, and blows up in the reader. Assert
+    pyagentspec's OWN validator against every title neograph emits, over a
+    representative spread of shapes."""
+
+    @pytest.mark.parametrize("shape", TITLE_SHAPES)
+    def test_every_exported_property_title_passes_agent_spec_validation(self, shape):
+        from pyagentspec.property import _validate_schema_titles
+
+        nodes = _title_shape_pipelines()[shape]
+        exported = to_agent_spec(Construct(f"titles-{shape}", nodes=nodes)).to_dict()
+
+        seen = 0
+        for component in _walk_components(exported):
+            for key in ("inputs", "outputs"):
+                for prop in component.get(key) or []:
+                    seen += 1
+                    _validate_schema_titles(prop)
+        assert seen, f"{shape}: exported no Properties at all -- the assertion would be vacuous"
+
+    @pytest.mark.parametrize("shape", TITLE_SHAPES)
+    def test_exported_flow_survives_a_json_wire_round_trip(self, shape):
+        from pyagentspec.flows.flow import Flow
+
+        nodes = _title_shape_pipelines()[shape]
+        exported = to_agent_spec(Construct(f"wire-{shape}", nodes=nodes)).to_dict()
+
+        Flow.from_dict(exported)
+
+
+def _walk_components(payload):
+    """Yield every dict in a serialized Flow that looks like a component."""
+    if isinstance(payload, dict):
+        if "component_type" in payload:
+            yield payload
+        for value in payload.values():
+            yield from _walk_components(value)
+    elif isinstance(payload, list):
+        for value in payload:
+            yield from _walk_components(value)
+
 
 class TestStaleMarkerDoesNotSilentlyReconstruct:
     """Round-trip-marker item (3): a hand-edited Flow whose Oracle marker no

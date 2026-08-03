@@ -53,7 +53,7 @@ def _translate_placeholders(
     """
     from pyagentspec.property import StringProperty
 
-    declared_keys = {p.title.split(".", 1)[0] for p in input_props}
+    declared_keys = {split_property_title(p.title)[0] or p.title for p in input_props}
     flat_to_original: dict[str, str] = {}
     ordered: list[str] = []
 
@@ -132,9 +132,9 @@ def _prompt_spec_marker(node: Node, flat_to_original: dict[str, str]) -> dict[st
     and DataFlowEdge, a real topology change). MUST stay JSON-native (str / dict /
     list only): ``p.json_schema`` is the plain JSON-Schema dict (NOT a live
     pyagentspec ``Property`` object, which would degrade to a dict across a
-    JSON/YAML wire round trip and break the loader's un-flatten). The dotted
-    ``title`` (``"{key}.{field}"``) is stored alongside so the loader can regroup
-    by upstream key via the EXISTING ``_dict_form_inputs_from_props``.
+    JSON/YAML wire round trip and break the loader's un-flatten). The qualified
+    ``title`` is stored alongside so the loader can regroup by upstream key via
+    the EXISTING ``_dict_form_inputs_from_props``.
     """
     return {
         "original_text": node.prompt or "",
@@ -143,20 +143,96 @@ def _prompt_spec_marker(node: Node, flat_to_original: dict[str, str]) -> dict[st
     }
 
 
+PROPERTY_KEY_SEP = ":"
+"""Separator joining a dict-form upstream KEY to a field name in a Property title.
+
+The SINGLE source of truth for the qualified-title convention — export
+(``_properties_for``), the edge sweep in ``_agent_spec.py``, and the import-side
+un-flatten (``_agent_spec_node_import._dict_form_inputs_from_props``) all go
+through ``compose_property_title`` / ``split_property_title``, never an inline
+literal. Changing the character here changes both directions at once.
+
+Why not ``.`` (the pre-neograph-8zvd1 character): pyagentspec's ``Property``
+rejects ``.,{} \\n'"`` in a title, so a dotted title is unrepresentable in the
+standard — a ``Flow`` carrying one cannot be read back by ANY conforming reader,
+including pyagentspec itself. Why not ``_``: node names routinely contain
+underscores (and ``{upstream}_{key}`` is already the multi-output state-field
+convention), so the split back to ``(key, field)`` would be ambiguous. ``:``
+is legal in a title and cannot appear in a node name or a Python field name,
+so ``partition`` recovers the pair exactly.
+
+DISTINCT from the ``${upstream.field}`` PROMPT-placeholder path space, which
+stays dotted — that is neograph's user-facing syntax, not an Agent Spec name.
+``property_title_to_prompt_path`` converts between them.
+"""
+
+
+def compose_property_title(key: str, field: str) -> str:
+    """Qualify a dict-form input/output *field* with its upstream *key*."""
+    return f"{key}{PROPERTY_KEY_SEP}{field}"
+
+
+def split_property_title(title: str) -> tuple[str | None, str]:
+    """Inverse of :func:`compose_property_title`.
+
+    Returns ``(key, field)`` for a qualified title, ``(None, title)`` for a bare
+    one (single-type inputs/outputs declare unqualified field titles).
+    """
+    key, sep, field = title.partition(PROPERTY_KEY_SEP)
+    return (key, field) if sep else (None, title)
+
+
+def property_title_to_prompt_path(title: str) -> str:
+    """Render a Property title in the ``${...}`` PROMPT-placeholder path space.
+
+    The two spaces differ only in the separator, but they are different spaces:
+    a placeholder path is what the user wrote in the prompt, a Property title is
+    an Agent Spec name. Anything looking a title up in a ``${path}`` map must
+    convert first.
+    """
+    key, field = split_property_title(title)
+    return f"{key}.{field}" if key is not None else field
+
+
+_BASE_PROPERTY_FIELDS = frozenset({"json_schema", "title", "description", "default", "type"})
+
+
+def _retitled(prop: Property, title: str) -> Property:
+    """Rebuild *prop* under a new *title*, THROUGH the constructor.
+
+    Not ``prop.title = title``: ``Property`` validates its title in a
+    ``model_validator`` and serializes ONLY ``json_schema``, and it does not set
+    ``validate_assignment``. So assigning the attribute both (a) skipped the
+    character validation and (b) never reached ``json_schema['title']`` — the
+    qualified name silently vanished on the wire while every ``DataFlowEdge``
+    still routed to it, leaving a dangling edge no reader could resolve
+    -- neograph-8zvd1. Reconstructing re-runs the validator, so an illegal
+    separator fails LOUD at export instead of at someone else's import.
+
+    Passing the original ``json_schema`` as the base preserves every key the
+    subclass does not rebuild; the ``title`` kwarg overrides it. Subclass-only
+    fields (``item_type``/``value_type``/``properties``/``any_of``) are carried
+    across so the subclass is preserved, not erased to a bare ``Property``.
+    """
+    extras = {name: getattr(prop, name) for name in type(prop).model_fields if name not in _BASE_PROPERTY_FIELDS}
+    return type(prop)(json_schema=prop.json_schema, title=title, **extras)
+
+
 def _properties_for(type_spec: Any) -> list[Property]:
     """Convert a Node.inputs/outputs TypeSpec (None | type | dict[str, type]) to Properties.
 
     Reuses ``spec_types.model_to_agent_spec_properties`` for every model —
-    never a second type walker, per the Core Invariant.
+    never a second type walker, per the Core Invariant. Dict-form entries are
+    qualified with their upstream key via ``compose_property_title`` so two
+    upstreams contributing a same-named field stay distinguishable.
     """
     if type_spec is None:
         return []
     if isinstance(type_spec, dict):
         result: list[Property] = []
         for key, typ in type_spec.items():
-            props = model_to_agent_spec_properties(typ)
-            for p in props:
-                p.title = f"{key}.{p.title}"
-            result.extend(props)
+            result.extend(
+                _retitled(p, compose_property_title(key, p.title)) for p in model_to_agent_spec_properties(typ)
+            )
         return result
     return model_to_agent_spec_properties(type_spec)

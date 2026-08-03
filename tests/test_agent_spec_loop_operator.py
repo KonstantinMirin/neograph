@@ -11,13 +11,13 @@ two nodes and never continues into a trailing operator composite, so the
 Same three binding evidence rules as the sibling combo modules:
 
   R1  full ``Flow.from_dict(flow.to_dict())`` survival is asserted.
-      NOTE the input shape matters here: a DICT-FORM ``inputs={'seed': Draft}``
-      loop body exports Properties titled ``seed.content`` etc., and pyagentspec
-      26.1.2's deserializer chokes on dotted Property titles (probed:
-      ``TypeError: ValueError: 'error' required in context``). That is a
-      PRE-EXISTING serialization gap unrelated to this ticket, so this fixture
-      uses the single-type ``inputs=Draft`` form -- exactly what
+      This fixture uses the single-type ``inputs=Draft`` form -- exactly what
       ``test_agent_spec_roundtrip.py::test_loop_round_trips_and_runs`` uses.
+      It was originally forced: a DICT-FORM body then exported dotted Property
+      titles that pyagentspec's deserializer rejected. neograph-8zvd1 fixed that
+      (titles are qualified with ``:`` at construction), and dict-form loop
+      bodies now survive the wire -- pinned by
+      ``test_agent_spec_roundtrip.py::TestExportedPropertyTitlesAreAgentSpecLegal``.
   R2  Operator needs a checkpointer to compile, hence
       ``build_test_compile_kwargs(checkpointer=MemorySaver())`` plus a
       deliberately-FALSE ``when``. **NOT CLAIMED**: pause/resume semantics of a

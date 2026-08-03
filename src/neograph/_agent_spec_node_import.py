@@ -20,6 +20,7 @@ from neograph._agent_spec_markers import (
     _MARK_PROMPT_SPEC,
     _MARK_TOOL_SPEC,
 )
+from neograph._agent_spec_placeholders import split_property_title
 from neograph.errors import ConfigurationError
 from neograph.node import Node
 from neograph.spec_types import (
@@ -82,27 +83,27 @@ def _inputs_from_data_edges(dest_name: str, flow: Any, output_types: dict[str, A
 
 
 def _dict_form_inputs_from_props(props: Any) -> dict[str, Any] | None:
-    """Reconstruct a dict-form ``Node.inputs`` from dotted-prefixed input
-    Properties, the inverse of ``_agent_spec._properties_for``'s dict-form
-    ``p.title = f"{key}.{p.title}"`` prefixing.
+    """Reconstruct a dict-form ``Node.inputs`` from key-qualified input
+    Properties, the inverse of ``_agent_spec_placeholders._properties_for``'s
+    ``compose_property_title(key, field)`` qualification.
 
     ``to_agent_spec`` flattens a dict-form ``inputs={'k': SomeModel}`` into one
-    Property per field titled ``"k.field"``. A FLAT reconstruction
+    Property per field titled ``"k:field"``. A FLAT reconstruction
     (``_agent_spec_props_to_type``) would build a single model with dotted field
     names (``{'k.field': ...}``) whose structural type hash does NOT match the
     producer's — the neograph-3lk2l / qtfof.4 type-identity loss. Grouping the
     Properties back by their ``k`` prefix and reconstructing each group's model
     from the UN-prefixed field Properties restores the original per-key type, so
     the Each fan-out receiver reconstructs to the SAME structural class as the
-    producer's list element. Returns ``None`` when no Property is dotted (leave
-    the caller's default single-type reconstruction in charge)."""
+    producer's list element. Returns ``None`` when a Property is unqualified
+    (leave the caller's default single-type reconstruction in charge)."""
     if not props:
         return None
     groups: dict[str, list[Any]] = {}
     for p in props:
-        if "." not in p.title:
+        key, rest = split_property_title(p.title)
+        if key is None:
             return None
-        key, _, rest = p.title.partition(".")
         groups.setdefault(key, []).append(p.model_copy(update={"title": rest}))
     return {key: _agent_spec_props_to_type(group) for key, group in groups.items()} or None
 
@@ -133,7 +134,7 @@ def _augment_inputs_from_prompt_marker(
 
     ordered_keys: list[str] = []
     for e in entries:
-        key = e["title"].split(".", 1)[0]
+        key = split_property_title(e["title"])[0] or e["title"]
         if key not in ordered_keys:
             ordered_keys.append(key)
 
@@ -147,14 +148,14 @@ def _augment_inputs_from_prompt_marker(
         pas = _import_agent_spec_property_classes()
         group = [
             pas.Property.model_construct(
-                title=e["title"].partition(".")[2],
+                title=split_property_title(e["title"])[1],
                 json_schema=e["json_schema"],
                 type=e["json_schema"].get("type"),
                 description=None,
                 default=None,
             )
             for e in entries
-            if e["title"].split(".", 1)[0] == key
+            if split_property_title(e["title"])[0] == key
         ]
         result[key] = _agent_spec_props_to_type(group)
     return result or None

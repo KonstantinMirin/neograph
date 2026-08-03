@@ -159,9 +159,10 @@ class TestB2OracleGuardsUnrepresentableFields:
 
 class TestB4DictFormOutputEdges:
     """A dict-form ``Node.outputs`` producer must wire DataFlowEdges to its
-    downstream consumers via ``_properties_for``'s ``{key}.{field}`` prefix --
-    the input side already does this; the producer side used to raise (dict-form
-    input consumer) or silently drop the edge (single-type input consumer)."""
+    downstream consumers via ``_properties_for``'s ``compose_property_title``
+    qualification -- the input side already does this; the producer side used to
+    raise (dict-form input consumer) or silently drop the edge (single-type
+    input consumer)."""
 
     def test_dict_form_input_consumer_of_dict_form_producer_wires_edge(self):
         from neograph._agent_spec import to_agent_spec
@@ -172,7 +173,7 @@ class TestB4DictFormOutputEdges:
 
         edges = flow.data_flow_connections or []
         wired = [(e.source_node.name, e.source_output, e.destination_node.name, e.destination_input) for e in edges]
-        assert ("prod", "result.text", "cons", "prod_result.text") in wired, wired
+        assert ("prod", "result:text", "cons", "prod_result:text") in wired, wired
 
     def test_single_type_consumer_of_dict_form_producer_wires_edge(self):
         from neograph._agent_spec import to_agent_spec
@@ -183,7 +184,7 @@ class TestB4DictFormOutputEdges:
 
         edges = flow.data_flow_connections or []
         wired = [(e.source_node.name, e.source_output, e.destination_node.name, e.destination_input) for e in edges]
-        assert ("prod", "result.text", "cons", "text") in wired, wired
+        assert ("prod", "result:text", "cons", "text") in wired, wired
 
 
 # ── B3 + A5: Swarm round-trip + loader re-validation ──────────────────────────

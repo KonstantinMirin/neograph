@@ -68,6 +68,44 @@ one-off snippet is recorded in that bead's notes).
 POLARITY: this whole module is GREEN before and after the tjpn4 migration -- it
 pins today's bytes. It is not a TDD-red artifact; do not "fix" it for passing.
 
+## The ONE sanctioned value modification to date (neograph-p7dyq, 2026-08-03)
+
+The append-only rule above governs REFACTORS, whose whole premise is zero
+behavior change. It does not cover an intentional BUG FIX that legitimately
+changes the exported bytes -- and this golden had captured a bug: the exporter
+titled a ``$ref``-shaped field after the referenced DEFINITION rather than the
+FIELD, which silently collapsed two same-typed nested fields into one on import.
+Fixing it changed exactly 24 values across the 4 EACH cells -- every one of them
+a ``list[Elem]`` item schema's ``title``, ``'Elem'`` -> ``'groups'`` (the field
+name, which is what a primitive item schema such as ``list[str]`` already
+carried). Nothing else in the tree moved; that was verified by a full recursive
+diff of golden-vs-actual across every cell BEFORE patching, and the patch touched
+only those 24 lines (``git diff --numstat``: 24 insertions, 24 deletions).
+
+The discipline that survives: a changed existing value is still never absorbed
+silently. It is either a drift finding, or -- as here -- an intended fix that
+names its bead, states the diff's exact extent, and proves the extent.
+
+## The SECOND sanctioned value modification (neograph-8zvd1, 2026-08-03)
+
+Same category, and the golden had captured this bug too: a dict-form input's
+``'{key}.{field}'`` qualification was applied by MUTATING ``Property.title``
+after construction, so it (a) never reached ``json_schema['title']`` -- the only
+thing ``Property`` serializes -- and (b) skipped the title validator, which
+rejects ``.``. The exported Flow therefore declared BARE input titles while every
+``DataFlowEdge`` still routed to the qualified name: a dangling edge that
+``Flow.from_dict`` refuses, for essentially every @node pipeline. The fix
+qualifies at construction time and moves the separator to ``:`` (legal in a
+title; unambiguous to split, unlike ``_``).
+
+Extent, measured by a full recursive golden-vs-actual diff across all 37 cells
+BEFORE patching: 1010 changed values, ZERO added/removed/reordered nodes, and
+only three keys touched -- ``title`` (962: bare ``'a'`` -> ``'pa:a'``, the
+qualification now actually reaching the wire, plus already-qualified
+``'pa.a'`` -> ``'pa:a'``), ``destination_input`` (25) and DataFlowEdge ``name``
+(23), both purely the separator. ``git diff --numstat`` on the fixture: 1010
+insertions, 1010 deletions (1034/1034 counting the p7dyq rows landed alongside).
+
 Run with::
 
     uv run --extra agent-spec pytest tests/test_agent_spec_refactor_snapshot.py
