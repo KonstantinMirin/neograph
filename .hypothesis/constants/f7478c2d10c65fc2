@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/node.py
-# hypothesis_version: 6.151.12
-
-['/', 'Each', 'Loop', 'Oracle', '_SkipIn', '_SkipOut', '__origin__', '_scripted_shim', 'act', 'agent', 'before', 'configurable', 'llm_factory', 'modifiers', 'name', 'prompt_compiler', 'scripted', 'skip_value', 'skip_when', 'think', 'tools']

@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/_image.py
-# hypothesis_version: 6.151.12
-
-[b'<?xml', b'<svg', b'BM', b'GIF8', b'RIFF', b'WEBP', b'\x89PNG', b'\xff\xd8\xff', 512, 1024, 4096, '/', '<I', '\\', 'data:', 'image/', 'image/bmp', 'image/gif', 'image/jpeg', 'image/png', 'image/svg+xml', 'image/webp', 'image_dir_blocked', 'image_path_not_found', 'image_read_failed', 'image_resolve_empty', 'image_too_large', 'positive integer']

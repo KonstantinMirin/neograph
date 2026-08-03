@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/factory.py
-# hypothesis_version: 6.151.12
-
-['<unnamed>', '__name__', 'agent', 'close', 'dispatch', 'exit', 'name', 'names', 'node_complete', 'node_start', 'parse', 'portal', 'portal-dispatch', 'portal-subgraph', 'raw', 'router', 'scripted', 'tools']

@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/_wiring.py
-# hypothesis_version: 6.151.12
-
-['agent', 'each', 'each_duplicate_key', 'each_oracle', 'each_oracle_merge', 'each_over_absent', 'error', 'gate', 'names', 'oracle', 'oracle_merge', 'parse', 'router', 'tools']

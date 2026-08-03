@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/_llm_structured_compat.py
-# hypothesis_version: 6.151.12
-
-['parsed', 'parsing_error', 'raw', 'usage_metadata']

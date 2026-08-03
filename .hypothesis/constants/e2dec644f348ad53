@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/lint.py
-# hypothesis_version: 6.151.12
-
-['${', '${%s}', ', ', '.', '?', '__annotations__', '__code__', '__func__', '_arun', '_bound_tool', '_run', 'act', 'agent', 'ainvoke', 'ask_human', 'coroutine', 'di_inputs', 'func', 'invoke', 'llm_kwargs_missing', 'loop.when', 'mode', 'modifier_set', 'name', 'render_for_prompt', 'return', 'scripted', '{%s}']

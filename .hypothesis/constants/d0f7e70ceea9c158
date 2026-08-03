@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/testing/scaffold.py
-# hypothesis_version: 6.151.12
-
-['        """', '    yield', '    }', '"""', '#', '# FAKE = FakeLLM({', '# })', 'Catches:', 'EXPECTED_LLM', 'EXPECTED_MODIFIED', 'EXPECTED_NODES', 'EXPECTED_SCRIPTED', 'None', 'YOUR_MODULE', '_', '__init__.py', 'act', 'agent', 'budget', 'class TestE2E:', 'class TestEndToEnd:', 'class TestLLMNodes:', 'class TestMetadata:', 'class TestModifiers:', 'class TestSync:', 'class TestTopology:', 'conftest.py', 'each', 'field', 'import pytest', 'input_name', 'input_names', 'is_agent', 'is_llm', 'is_scripted', 'key', 'loop', 'max_iterations', 'merge_fn', 'merge_prompt', 'mode', 'model', 'n', 'name', 'node_count', 'nodes', 'on_exhaust', 'operator', 'oracle', 'output_name', 'outputs_name', 'over', 'prompt', 'scripted', 'test_e2e.py', 'test_metadata.py', 'test_modifiers.py', 'test_sync.py', 'test_topology.py', 'think', 'tools', 'w', 'when']

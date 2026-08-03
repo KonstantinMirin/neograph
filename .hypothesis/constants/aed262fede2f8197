@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/_llm_render.py
-# hypothesis_version: 6.151.12
-
-['${', '.', '[image]', '\\$\\{image:([^}]+)\\}', 'config', 'configurable', 'content', 'context', 'di_inputs', 'image_field_empty', 'image_url', 'json_mode', 'llm_config', 'name', 'node_name', 'output_model', 'output_schema', 'outputs', 'prompt', 'prompt_var_missing', 'renderer', 'role', 'text', 'type', 'unknown', 'url', 'user']

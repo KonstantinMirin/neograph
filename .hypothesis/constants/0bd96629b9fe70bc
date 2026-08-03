@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/_agent_spec.py
-# hypothesis_version: 6.151.12
-
-['act', 'agent', 'at least one node', 'budget', 'config', 'context', 'continue', 'default', 'done', 'each', 'false', 'fan_out_param', 'gate_tools_when', 'idempotent', 'key', 'list[Tool]', 'loop', 'max_hops', 'max_iterations', 'merge_fn', 'merge_model', 'merge_prompt', 'mode', 'model', 'models', 'n', 'name', 'neograph/agent_spec', 'neograph/branch', 'neograph/each_spec', 'neograph/group_id', 'neograph/loop_spec', 'neograph/mode', 'neograph/modifier', 'neograph/oracle_spec', 'neograph/portal_spec', 'neograph/tool_spec', 'neograph/variant', 'on_error', 'on_exhaust', 'operator', 'oracle', 'over', 'pause', 'prompt', 'raw_fn set', 'renderer set', 'route', 'think', 'to_agent_spec', 'tools', 'true', 'user_input', 'when']

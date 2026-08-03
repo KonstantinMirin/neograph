@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/modifiers.py
-# hypothesis_version: 6.151.12
-
-["'error' or 'last'", '.', '?', 'Each', 'Keymaker', 'Loop', 'Operator', 'Oracle', '_', '_FallbackResult', '_PostResult', '_Variant', '__end__', '_neo_path', 'collect', 'decide', 'each', 'empty list', 'error', 'exit', 'get_modifier', 'goto', 'input_field', 'keymaker', 'last', 'loop', 'max_hops', 'modifier_set', 'n', 'name', 'neither provided', 'on_exhaust', 'operator', 'oracle', 'output', 'over', 'raise', 'reason', 'spec_field']

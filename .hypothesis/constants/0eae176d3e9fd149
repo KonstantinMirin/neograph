@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/verify.py
-# hypothesis_version: 6.151.12
-
-['<graph>', 'act', 'agent', 'builder', 'condition_missing', 'conditions', 'construct', 'llm_factory_missing', 'modifier_set', 'no_construct', 'runtime', 'scripted', 'scripted_fn_missing', 'state_field_missing', 'state_schema', 'think']

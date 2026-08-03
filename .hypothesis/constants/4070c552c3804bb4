@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/loader.py
-# hypothesis_version: 6.151.12
-
-[4096, 1048576, 'AgentNode', 'EndNode', 'FlowNode', 'LlmNode', 'StartNode', 'ToolNode', '[', 'bare', 'continue', 'each', 'inputs', 'invalid spec', 'key', 'loop', 'max_iterations', 'merge_fn', 'merge_model', 'merge_prompt', 'models', 'n', 'name', 'neograph/each_spec', 'neograph/group_id', 'neograph/loop_spec', 'neograph/modifier', 'neograph/oracle_spec', 'on_exhaust', 'operator', 'oracle', 'outputs', 'over', 'pause', 'scripted', 'think', 'when', '{']

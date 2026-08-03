@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/_usage.py
-# hypothesis_version: 6.151.12
-
-['input_tokens', 'output_tokens', 'total_tokens']

@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/_validation_keymaker.py
-# hypothesis_version: 6.151.12
-
-['?', 'act', 'agent', 'decide', 'handoff', 'list[Node]', 'max_hops', 'modifier_set', 'name', 'on_exhaust', 'outputs={...}', 'str or Literal[...]']

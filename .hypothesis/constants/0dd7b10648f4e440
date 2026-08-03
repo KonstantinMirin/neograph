@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/_state_keys.py
-# hypothesis_version: 6.151.12
-
-['_neo_input', '_neo_isolated_input', '_neo_stream_custom', 'human_feedback', 'neo_', 'neo_each_item', 'neo_oracle_gen_id', 'neo_oracle_model', 'neo_subgraph_input', 'node_id', 'project_root']

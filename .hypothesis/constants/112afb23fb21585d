@@ -1,4 +1,0 @@
-# file: /Users/konst/projects/neograph/src/neograph/_spec_schema.py
-# hypothesis_version: 6.151.12
-
-['1', 'act', 'agent', 'error', 'forbid', 'last', 'raw', 'reason', 'scripted', 'think']
