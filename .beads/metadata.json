@@ -1,5 +1,7 @@
 {
-  "database": "beads.db",
-  "jsonl_export": "issues.jsonl",
-  "backend": "sqlite"
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "neograph",
+  "project_id": "ef3be3d5-6c8c-489c-b9a7-06ff28c232e3"
 }
