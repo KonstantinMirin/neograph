@@ -9,3 +9,8 @@ build/
 .pytest_cache/
 *.db
 .env
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+.beads-credential-key
+.beads/proxieddb/
