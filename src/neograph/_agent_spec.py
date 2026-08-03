@@ -95,6 +95,8 @@ from neograph._agent_spec_node_lowering import (  # noqa: E402,F401
 )
 from neograph._agent_spec_placeholders import (  # noqa: E402,F401
     _is_translation_eligible,
+    _item_inputs,
+    _item_outputs,
     _node_translation,
     _prompt_spec_marker,
     _properties_for,
@@ -110,22 +112,6 @@ from neograph._agent_spec_portal import (  # noqa: E402,F401
 
 _DEFAULT_BRANCH = "default"
 _PAUSE_BRANCH = "pause"
-
-
-def _item_inputs(item: Node | Construct) -> Any:
-    """The input TypeSpec a modifier lowerer reads, uniform across the two
-    item kinds it now wraps: a ``Node`` declares plural fan-in ``inputs``
-    (``dict|type|None``); a ``Construct`` used as one item declares the
-    singular boundary port ``input`` (``type|None``). Both feed
-    ``_properties_for`` / ``normalize_inputs`` the same way, so the modifier
-    helpers never branch on ``isinstance`` for I/O access."""
-    return item.input if isinstance(item, Construct) else item.inputs
-
-
-def _item_outputs(item: Node | Construct) -> Any:
-    """The output TypeSpec counterpart of ``_item_inputs`` — ``Node.outputs``
-    (plural) vs ``Construct.output`` (singular boundary port)."""
-    return item.output if isinstance(item, Construct) else item.outputs
 
 
 def _lower_item_body(item: Node | Construct) -> SpecNode:
@@ -401,7 +387,7 @@ def _lower_loop(
     ``neograph/modifier=loop`` marker (per the Core Invariant's marker
     requirement) — always stamped.
     """
-    nodes_mod, _flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
+    nodes_mod, _flow_mod, edges_mod, property_mod, _tools_mod = _import_agent_spec_flow_classes()
 
     if callable(loop.when):
         raise ConfigurationError.build(
@@ -459,6 +445,15 @@ def _lower_loop(
     # body's flat map -- keyed by the dotted ${...} PROMPT path, NOT by a Property
     # title (drop it if the fed-back output isn't referenced in the prompt).
     body_orig_to_flat = _node_translation(node)[2] if _is_translation_eligible(node) else {}
+
+    # A DATA edge only where the fed-back output has a castable destination Property on
+    # the body's OWN input port. LangGraph's loop-back (_wiring._add_subgraph_loop) is a
+    # pure CONTROL edge over a shared accumulating state dict -- input and output occupy
+    # separate slots -- so a body with differing boundary types (a Construct item with
+    # input != output) maps ZERO fields and loops on control alone. Decided per field via
+    # pyagentspec's OWN property_is_castable_to, never by suppressing it -- neograph-rh5fb.
+    body_inputs = {p.title: p for p in (body.inputs or [])}
+    body_outputs = {p.title: p for p in (body.outputs or [])}
     data_edges: list[DataFlowEdge] = []
     for prop in _properties_for(_item_outputs(node)):
         if _is_translation_eligible(node):
@@ -467,6 +462,11 @@ def _lower_loop(
                 continue
         else:
             dest_input = compose_property_title(dest_key, prop.title) if dest_key else prop.title
+        source_prop, dest_prop = body_outputs.get(prop.title), body_inputs.get(dest_input)
+        if source_prop is None or dest_prop is None:
+            continue  # no destination property for this field -> control-only loop-back
+        if not property_mod.property_is_castable_to(source_prop, dest_prop):
+            continue  # same name, incompatible type -> not a structurally identical field
         data_edges.append(
             edges_mod.DataFlowEdge(
                 name=f"{node.name}__loop_self_{prop.title}",

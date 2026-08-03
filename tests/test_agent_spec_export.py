@@ -972,6 +972,70 @@ class TestConstructItemModifierExport:
         ]
         assert len(back_edges) == 1, "expected a cyclic ControlFlowEdge back into the sub-flow body"
 
+    def test_loop_on_construct_item_keeps_self_data_edge_when_boundaries_match(self):
+        """Green control for neograph-rh5fb: the matching-boundary case must
+        KEEP emitting the self-feedback DataFlowEdge.
+
+        Pins the boundary condition of the differing-boundary fix below so it
+        cannot silently widen into dropping data edges that genuinely have a
+        destination property on the body's input port.
+        """
+        from neograph._agent_spec import to_agent_spec
+        from neograph.modifiers import Loop
+
+        sub = self._sub(Claims, Claims) | Loop(when="claims_incomplete", max_iterations=3)
+        parent = Construct("parent", nodes=[sub])
+
+        flow = to_agent_spec(parent)
+
+        self_edges = [e for e in (flow.data_flow_connections or []) if e.name.startswith("sub__loop_self_")]
+        assert len(self_edges) == 1, "a same-boundary loop body feeds its output back as the next input"
+        assert self_edges[0].source_node.name == "sub"
+        assert self_edges[0].destination_node.name == "sub"
+        assert self_edges[0].source_output == "items"
+        assert self_edges[0].destination_input == "items"
+
+    def test_loop_on_construct_item_with_differing_boundaries_is_control_only(self):
+        """Red test for neograph-rh5fb.
+
+        A sub-Construct whose ``input`` and ``output`` types differ compiles and
+        RUNS (``tests/test_loop.py::TestLoopInputNotEqualOutput``) -- the
+        LangGraph loop-back is a pure CONTROL edge over a shared, accumulating
+        state dict, with zero field aliasing. Export used to build a literal
+        field-aliasing self-edge anyway (``sub__loop_self_items`` pointed at the
+        ``sub`` FlowNode's input port, which declares RawText's ``text``), so
+        pyagentspec's own ``DataFlowEdge`` validator rejected it with a raw
+        pydantic ValidationError.
+
+        There is no destination property for the fed-back output, so the correct
+        export carries NO data edge -- only the cyclic ControlFlowEdge.
+        """
+        from pyagentspec.flows.edges import ControlFlowEdge
+        from pyagentspec.flows.nodes import BranchingNode
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.modifiers import Loop
+
+        sub = self._sub(RawText, Claims) | Loop(when="claims_incomplete", max_iterations=3)
+        parent = Construct("parent", nodes=[sub])
+
+        flow = to_agent_spec(parent)
+
+        assert not [e for e in (flow.data_flow_connections or []) if e.name.startswith("sub__loop_self_")], (
+            "a differing-boundary loop body has no destination property for its fed-back output "
+            "-- the loop-back must export as a control-only edge"
+        )
+        branch = next(
+            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get("neograph/modifier") == "loop"
+        )
+        back_edges = [
+            e
+            for e in flow.control_flow_connections
+            if isinstance(e, ControlFlowEdge) and e.from_node.name == branch.name and e.from_branch == "continue"
+        ]
+        assert len(back_edges) == 1, "the cycle back into the body must survive as a control edge"
+        assert back_edges[0].to_node.name == "sub"
+
     def test_operator_on_construct_item_lowers_to_pause_composite(self):
         from pyagentspec.flows.nodes import BranchingNode, InputMessageNode
 

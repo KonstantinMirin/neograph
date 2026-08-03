@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, TypeGuard
 
 from neograph._placeholders import DOLLAR_RE, apply_scanner
+from neograph.construct import Construct
 from neograph.errors import ConfigurationError
 from neograph.node import Node
 from neograph.spec_types import model_to_agent_spec_properties
@@ -216,6 +217,26 @@ def _retitled(prop: Property, title: str) -> Property:
     """
     extras = {name: getattr(prop, name) for name in type(prop).model_fields if name not in _BASE_PROPERTY_FIELDS}
     return type(prop)(json_schema=prop.json_schema, title=title, **extras)
+
+
+def _item_inputs(item: Node | Construct) -> Any:
+    """The input TypeSpec a modifier lowerer reads, uniform across the two
+    item kinds it wraps: a ``Node`` declares plural fan-in ``inputs``
+    (``dict|type|None``); a ``Construct`` used as one item declares the
+    singular boundary port ``input`` (``type|None``). Both feed
+    ``_properties_for`` / ``normalize_inputs`` the same way, so the modifier
+    helpers never branch on ``isinstance`` for I/O access.
+
+    Lives beside ``_properties_for`` for the reason the module docstring gives
+    for ``_properties_for`` itself: it exists only to hand that function a
+    uniform TypeSpec, and every caller pairs the two."""
+    return item.input if isinstance(item, Construct) else item.inputs
+
+
+def _item_outputs(item: Node | Construct) -> Any:
+    """The output TypeSpec counterpart of ``_item_inputs`` — ``Node.outputs``
+    (plural) vs ``Construct.output`` (singular boundary port)."""
+    return item.output if isinstance(item, Construct) else item.outputs
 
 
 def _properties_for(type_spec: Any) -> list[Property]:

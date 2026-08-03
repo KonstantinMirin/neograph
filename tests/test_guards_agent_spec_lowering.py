@@ -263,6 +263,63 @@ class TestLoopSelfEdgeResolvesDictFormDestinationTitle:
         assert "compose_property_title(dest_key, prop.title)" not in buggy_source
 
 
+class TestLoopSelfEdgeDecidesAgainstTheBodysDeclaredProperties:
+    """Structural guard for neograph-rh5fb.
+
+    Disease pattern: ``_lower_loop`` constructs the self-feedback
+    ``DataFlowEdge`` unconditionally and lets pyagentspec's own validator be
+    the one to discover there is no such property on the destination -- which
+    surfaces as a raw pydantic ``ValidationError`` for any Construct item whose
+    ``input`` and ``output`` types differ (a shape that compiles and RUNS).
+
+    The edge must be a DECISION taken per field against the body's declared
+    Properties, and it must not be bought back by swallowing the validator's
+    exception -- a suppressed export error is exactly the silent seam the North
+    Star forbids.
+    """
+
+    def test_loop_self_edge_reads_the_bodys_declared_properties(self):
+        source = _lower_loop_source()
+        assert "body.inputs" in source and "body.outputs" in source, (
+            "_lower_loop's self-edge must decide per field against the lowered "
+            "body's own declared input/output Properties -- the destination "
+            "property may not exist at all when the body's boundary types differ"
+        )
+        assert "property_is_castable_to" in source, (
+            "the pairing rule must be pyagentspec's OWN property_is_castable_to "
+            "(the same predicate DataFlowEdge validates with), never a re-derived "
+            "type-compatibility check that can drift from it"
+        )
+
+    def test_loop_self_edge_does_not_suppress_the_validation_error(self):
+        source = _lower_loop_source()
+        assert "except" not in source, (
+            "_lower_loop must not catch-and-suppress pyagentspec's DataFlowEdge "
+            "ValidationError -- decide whether the destination property exists "
+            "BEFORE constructing the edge"
+        )
+
+    def test_meta_guard_catches_the_disease_pattern_if_reintroduced(self):
+        """Meta-test: prove the assertions above flag both the pre-fix body
+        (unconditional construction) and the band-aid (try/except suppression)."""
+        pre_fix = (
+            "def _lower_loop(node, loop, body):\n"
+            "    for prop in _properties_for(_item_outputs(node)):\n"
+            "        data_edges.append(edges_mod.DataFlowEdge(destination_node=body))\n"
+        )
+        band_aid = (
+            "def _lower_loop(node, loop, body):\n"
+            "    for prop in _properties_for(_item_outputs(node)):\n"
+            "        try:\n"
+            "            data_edges.append(edges_mod.DataFlowEdge(destination_node=body))\n"
+            "        except ValidationError:\n"
+            "            continue\n"
+        )
+        assert "body.inputs" not in pre_fix
+        assert "property_is_castable_to" not in pre_fix
+        assert "except" in band_aid
+
+
 def _func_def(name: str) -> ast.FunctionDef:
     tree = ast.parse(agent_spec_source())
     for node in ast.walk(tree):
