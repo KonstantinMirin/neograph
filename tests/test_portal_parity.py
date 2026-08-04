@@ -282,6 +282,34 @@ class TestPortalDecoratorConflicts:
             @node(outputs=RouteHop, portal=["billing"], loop_when=lambda d: d is not None)
             def bad(handoff: RouteHop) -> RouteHop: ...
 
+    def test_peers_with_oracle_kwargs_raises_with_kwarg_named_message(self):
+        """portal= combined with Oracle-triggering kwargs (ensemble_n=/merge_fn=)
+        on the SAME @node must raise ConstructError EAGERLY at decoration
+        time, with a kwarg-named message that names both the Portal/Oracle
+        vocabulary AND the node itself -- mirroring the style of
+        ``test_peers_with_loop_when_raises`` just above and the
+        portal/loop_when clause in decorators.py's pre-check block (:275-279).
+
+        Pins neograph-jtawq.4 Phase 2's one deliberate, named behavior
+        change: today this combination is NOT rejected by decorators.py's
+        pre-check block at all -- Oracle's kwargs get built and piped
+        successfully first, and only THEN does piping Portal afterward fail
+        via the node-agnostic pipe-layer message in modifiers.py ("Cannot
+        combine Portal and Oracle on the same item", no node context, no
+        'portal=' kwarg vocabulary). That message alone is NOT sufficient
+        here: assert on the node-named, kwarg-named vocabulary the new eager
+        pre-check must add, not merely that some ConstructError fires.
+        """
+        with pytest.raises(ConstructError) as exc_info:
+
+            @node(outputs=RouteHop, portal=["billing"], ensemble_n=3, merge_fn="combine")
+            def bad_oracle_portal(handoff: RouteHop) -> RouteHop: ...
+
+        msg = str(exc_info.value)
+        assert "portal=" in msg.lower(), f"expected the kwarg-named 'portal=' vocabulary in the message, got: {msg!r}"
+        assert "oracle" in msg.lower(), f"expected Oracle vocabulary in the message, got: {msg!r}"
+        assert "bad-oracle-portal" in msg, f"expected the node name in the message, got: {msg!r}"
+
     def test_max_hops_without_peers_raises(self):
         """max_hops= without portal= is a decoration-time error (a peer-mode knob
         with no mesh to attach to)."""

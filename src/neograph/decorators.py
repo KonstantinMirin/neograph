@@ -54,7 +54,6 @@ from __future__ import annotations
 
 import ast
 import inspect
-import secrets
 import sys
 import textwrap
 import warnings
@@ -89,9 +88,15 @@ from neograph._merge_fn_decorator import merge_fn as _merge_fn_impl  # noqa: E40
 from neograph._node_modifier_kwargs import (  # noqa: E402,F401
     _apply_eager_oracle_gen_type,
     _build_each_kwargs,
+    _build_each_node,
+    _build_loop_node,
+    _build_operator_node,
     _build_oracle_kwargs,
+    _build_oracle_node,
     _build_portal_kwargs,
+    _build_portal_node,
     _is_trivial_body,
+    derive_combo,
 )
 
 # Decorator-side shim registration. The decorators emit shims for inline
@@ -118,7 +123,7 @@ from neograph._sidecar import (  # noqa: F401 — re-exported for backward compa
     infer_oracle_gen_type,
 )
 from neograph.describe_type import type_display_name
-from neograph.modifiers import Each, Loop, Operator, Oracle, Portal
+from neograph.modifiers import modifier_names_for_combo
 from neograph.node import Node
 from neograph.renderers import Renderer
 from neograph.tool import Tool
@@ -233,6 +238,16 @@ def node(
     `factory._execute_node` via `ScriptedDispatch`. Supports fan-in
     (>1 parameter) nodes uniformly.
     """
+    # The modifier-dispatch kwargs mapping (neograph-jtawq.4, Phase 2), captured
+    # as the FIRST statement so locals() holds EXACTLY node()'s 32 parameters
+    # (31 kwargs + fn) and nothing else -- no pollution from caller_ns or any
+    # other local defined below. decorator(f) reads this via closure, the same
+    # mechanism it already uses for map_over/loop_when/etc. This IS the
+    # kwargs: Mapping[str, Any] derive_combo() consumes below -- not a
+    # hand-written dict literal, which would relocate the flat kwarg
+    # enumeration rather than remove it.
+    sugar_kwargs = {k: v for k, v in locals().items() if k != "fn"}
+
     # Capture the caller's local namespace once, at decoration time.
     # For @node(...) form: node() is called from user code, _getframe(1)
     # is the user's scope. For bare @node: same — node(fn=f) is still
@@ -292,6 +307,33 @@ def node(
                 "route= requires portal=",
                 node=_km_node,
                 hint="pass portal=[...] to declare a Portal mesh member (route is its per-node routing field)",
+            )
+
+        # -- Validate Oracle-triggering kwargs against Loop/Portal (Phase 2, --
+        # neograph-jtawq.4): the two pairs that used to fall through to the
+        # pipe layer's node-agnostic ModifierSet message now get a kwarg-named
+        # eager pre-check too, mirroring the four pairs just above. This is
+        # the ONE deliberate, named behavior change Phase 2 carries (design
+        # Finding 5): landing the checks HERE means derive_combo() below never
+        # observes an invalid combo on the @node path in practice (defense in
+        # depth, not the enforcement mechanism), and the side effects building
+        # Oracle's kwargs can trigger (the body-as-merge UserWarning,
+        # register_scripted) no longer fire for a node that is doomed to
+        # reject anyway.
+        has_oracle_kwarg = (
+            ensemble_n is not None or models is not None or merge_fn is not None or merge_prompt is not None
+        )
+        if has_oracle_kwarg and loop_when is not None:
+            raise ConstructError.build(
+                "oracle-triggering kwargs (Oracle) and loop_when= (Loop) cannot be combined on the same node",
+                node=_km_node,
+                hint="use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
+            )
+        if has_oracle_kwarg and portal is not None:
+            raise ConstructError.build(
+                "oracle-triggering kwargs (Oracle) and portal= (Portal) cannot be combined on the same node",
+                node=_km_node,
+                hint="Portal owns the node's outgoing edge; a mesh member cannot also carry an Oracle ensemble",
             )
 
         # -- Mode inference: if not explicitly set, infer from kwargs ----------
@@ -487,135 +529,43 @@ def node(
             gate_tools_when=gate_tools_when,
         )
 
-        # -- Oracle kwargs detection (needed for combined check) ----------------
-        has_oracle_kwarg = (
-            ensemble_n is not None or models is not None or merge_fn is not None or merge_prompt is not None
-        )
+        # -- Modifier dispatch (neograph-jtawq.4, Phase 2): derive_combo() reads
+        # sugar_kwargs against the MODIFIER_KWARGS registry, then classifies via
+        # _COMBO_MAP (the one validity authority) -- never a re-guessed raw-kwarg
+        # condition. The 5 membership checks are unconditional and independent
+        # (no elif, no early return): fixed order oracle/each/operator/loop/
+        # portal, reproducing today's exact pipe sequence bit-for-bit (ModifierSet
+        # stores modifiers in typed slots, not an ordered list, so application
+        # order is inert for the final IR). Because the applied set and the
+        # validated set are now the SAME `members` value, a sixth modifier cannot
+        # silently swallow the five before it -- the s7zt3.10 disease is
+        # structurally unrepresentable here, not merely re-guarded.
+        combo = derive_combo(sugar_kwargs, node_label=node_label)
+        members = modifier_names_for_combo(combo)
 
-        # -- Each×Oracle fusion: map_over + ensemble -----------
-        if map_over is not None and has_oracle_kwarg:
-            oracle_kw = _build_oracle_kwargs(
-                node_label=node_label,
-                f=f,
-                merge_fn=merge_fn,
-                merge_prompt=merge_prompt,
-                models=models,
-                ensemble_n=ensemble_n,
-                merge_pre_process=merge_pre_process,
-                merge_post_process=merge_post_process,
-                merge_fallback=merge_fallback,
-                merge_model=merge_model,
-            )
-            n = n | Oracle(**oracle_kw)
-            n = n | Each(**_build_each_kwargs(map_over, map_key, map_on_error))
-            # Rebind, never return (neograph-s7zt3.10). Both map_over branches used
-            # to early-return here, BEFORE the interrupt_when tail below, so
-            # ``@node(map_over=..., interrupt_when=...)`` silently classified as
-            # EACH / EACH_ORACLE with the Operator dropped and no error — the exact
-            # silent-seam class the North Star forbids. Operator is the ONLY
-            # modifier the early return dropped: map_over+loop_when and
-            # portal+map_over already raise ConstructError above. A DISCARDED
-            # rebind is the same silent-drop shape, hence ``n =``, not a bare call.
-            n = _apply_eager_oracle_gen_type(n)
+        if "oracle" in members:
+            n = _build_oracle_node(n, node_label=node_label, f=f, kwargs=sugar_kwargs)
+        if "each" in members:
+            n = _build_each_node(n, kwargs=sugar_kwargs)
+        if "operator" in members:
+            n = _build_operator_node(n, node_label=node_label, kwargs=sugar_kwargs)
+        if "loop" in members:
+            n = _build_loop_node(n, node_label=node_label, kwargs=sugar_kwargs)
+        if "portal" in members:
+            n = _build_portal_node(n, node_label=node_label, kwargs=sugar_kwargs)
 
-        # -- Fan-out via Each when map_over is set (no Oracle) -----------------
-        elif map_over is not None:
-            # Apply | Each(...) — this creates a new Node via model_copy. The
-            # shared re-registration below re-stamps the sidecar on the new
-            # instance so construct_from_module can find it.
-            n = n | Each(**_build_each_kwargs(map_over, map_key, map_on_error))
-
+        # Single terminal registration (collapsed from 5 per-branch sites):
+        # PrivateAttrs survive model_copy (Pydantic v2 copies __pydantic_private__),
+        # so nothing between the pipes above needs the sidecar -- it only has to
+        # be set on the FINAL `n`, once, before the eager-shim block below reads
+        # it via _get_sidecar. Runs unconditionally, matching today's behavior
+        # for the no-modifier (BARE) case too.
         _register_sidecar(n, f, param_names)
         if param_res:
             _set_param_res(n, param_res)
 
-        # -- Oracle ensemble when any ensemble kwarg is set (no Each) ----------
-        # Gated on ``map_over is None``: the fused Each×Oracle branch above already
-        # piped the Oracle, and re-piping here would double-apply it.
-        if has_oracle_kwarg and map_over is None:
-            oracle_kw = _build_oracle_kwargs(
-                node_label=node_label,
-                f=f,
-                merge_fn=merge_fn,
-                merge_prompt=merge_prompt,
-                models=models,
-                ensemble_n=ensemble_n,
-                merge_pre_process=merge_pre_process,
-                merge_post_process=merge_post_process,
-                merge_fallback=merge_fallback,
-                merge_model=merge_model,
-            )
-            n = n | Oracle(**oracle_kw)
-            _register_sidecar(n, f, param_names)
-            if param_res:
-                _set_param_res(n, param_res)
-            # Rebind: the eager write produces a copy; the fall-through below
-            # (Operator/Loop/context handling) must use the rebound node.
+        if "oracle" in members:
             n = _apply_eager_oracle_gen_type(n)
-
-        # -- Operator interrupt when interrupt_when is set --------------------
-        if interrupt_when is not None:
-            if isinstance(interrupt_when, str):
-                condition_name = interrupt_when
-            elif callable(interrupt_when):
-                condition_name = f"_node_interrupt_{node_label}_{secrets.token_hex(8)}"
-                register_condition(condition_name, interrupt_when)
-            else:
-                raise ConstructError.build(
-                    "interrupt_when must be a string (registered condition name) or a callable",
-                    node=node_label,
-                    found=type(interrupt_when).__name__,
-                )
-
-            n = n | Operator(when=condition_name)
-            _register_sidecar(n, f, param_names)
-            if param_res:
-                _set_param_res(n, param_res)
-
-        # -- Loop when loop_when is set -----------------------------------------
-        # ``on_exhaust`` is shared with the Portal sugar (below); route it by
-        # trigger. On the Loop path Portal's 'exit' is the cross-modifier
-        # value — reject it with a clean ConstructError. Any other invalid value
-        # falls through to Loop.model_post_init's own ConfigurationError.
-        if loop_when is not None:
-            if on_exhaust == "exit":
-                raise ConstructError.build(
-                    "loop_when= (Loop) does not accept on_exhaust='exit'",
-                    node=_km_node,
-                    found=repr(on_exhaust),
-                    hint="'exit' is a Portal (portal=) value; use 'last' to return the last iteration",
-                )
-            loop_kwargs: dict[str, Any] = {
-                "when": loop_when,
-                "max_iterations": max_iterations or 10,
-            }
-            if on_exhaust is not None:
-                loop_kwargs["on_exhaust"] = on_exhaust
-            n = n | Loop(**loop_kwargs)
-            _register_sidecar(n, f, param_names)
-            if param_res:
-                _set_param_res(n, param_res)
-
-        # -- Portal (peer-mode dynamic handoff) when portal= is set ------------
-        # Presence of ``portal=`` builds the Portal, mirroring ``loop_when=`` ->
-        # Loop. This is PURE SUGAR: it only builds + pipes the modifier. The
-        # normalizer (_ir_normalize) infers handoff_param + handoff_channel on
-        # Construct assembly, IDENTICALLY for all three surfaces — decorators.py
-        # writes NEITHER IR field (the neograph-ts7 / fan_out_param single-writer
-        # rule, guard G3). The reserved 'handoff' param flows through the normal
-        # signature-inferred inputs dict with no special-casing.
-        if portal is not None:
-            if on_exhaust == "last":
-                raise ConstructError.build(
-                    "portal= (Portal) does not accept on_exhaust='last'",
-                    node=_km_node,
-                    found=repr(on_exhaust),
-                    hint="'last' is a Loop (loop_when=) value; use 'exit' to leave the mesh on budget exhaustion",
-                )
-            n = n | Portal(**_build_portal_kwargs(portal, route, max_hops, on_exhaust))
-            _register_sidecar(n, f, param_names)
-            if param_res:
-                _set_param_res(n, param_res)
 
         # Eager scripted-shim registration (do0d9): a bare @node placed DIRECTLY
         # into a declarative ``Construct(nodes=[...])`` — e.g. a Portal mesh

@@ -92,6 +92,18 @@ MIGRATED: frozenset[str] = frozenset(
         # mirror of _agent_spec.py's export dispatch. It joins MIGRATED directly and
         # never passed through PENDING, exactly as the PENDING docstring pre-declared.
         "loader.py",
+        # neograph-jtawq.4 Phase 1: the @node decorator's ModifierCombo-keyed
+        # kwarg registry. Reads _COMBO_MAP's classification via
+        # combo_for_modifier_names (derive_combo) / modifier_names_for_combo
+        # (valid_kwargs) -- zero hand-written member dispatch, the same shape
+        # every other MIGRATED file has for the decomposition table.
+        "_node_modifier_kwargs.py",
+        # neograph-jtawq.4 Phase 2: decorator(f)'s dispatch reads
+        # modifier_names_for_combo(combo) directly to get the `members` set
+        # its 5 membership checks test against -- zero hand-written member
+        # dispatch (RULE 1 in test_guards_modifier_composition_completeness.py
+        # pins that shape independently).
+        "decorators.py",
     }
 )
 
@@ -109,13 +121,22 @@ PENDING: frozenset[str] = frozenset()
 #: The single definition site. Scoped out of (a)/(b) by construction.
 TABLE_OWNER = "modifiers.py"
 
-#: The symbols that ARE the single source of truth for combo decomposition.
+#: The symbols that ARE the single source of truth for combo decomposition
+#: AND classification. ``combo_for_modifier_names`` / ``modifier_names_for_combo``
+#: (neograph-jtawq.4) are the sanctioned readers of ``_COMBO_MAP`` -- the sibling
+#: single-source-of-truth for combo *classification* (name-set -> combo), the
+#: complement of ``COMBO_DECOMPOSITION``'s *meaning* (combo -> primary shape).
+#: They belong in this set for the same reason the decomposition symbols do: a
+#: consumer that imports-and-uses one of them is reading the table, not
+#: re-deriving it, and (b) below must recognize that as legitimate readership.
 TABLE_SYMBOLS: frozenset[str] = frozenset(
     {
         "COMBO_DECOMPOSITION",
         "PrimaryShape",
         "SUB_CONSTRUCT_UNSUPPORTED_COMBOS",
         "primary_shape",
+        "combo_for_modifier_names",
+        "modifier_names_for_combo",
     }
 )
 

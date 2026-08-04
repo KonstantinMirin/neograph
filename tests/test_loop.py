@@ -375,6 +375,43 @@ class TestLoopValidation:
             def bad_combo(claim: ClaimItem) -> ClaimItem:
                 return claim
 
+    def test_raises_when_oracle_kwargs_and_loop_when_combined_at_decoration(self):
+        """Oracle-triggering @node kwargs (ensemble_n=/merge_fn=) combined with
+        loop_when= on the SAME @node must raise ConstructError EAGERLY at
+        decoration time, with a kwarg-named message that names both the
+        Oracle-vocabulary and 'loop_when' AND the node itself -- mirroring the
+        style of the map_over/loop_when clause just above and the
+        portal/loop_when clause in decorators.py's pre-check block (:275-279).
+
+        Pins neograph-jtawq.4 Phase 2's one deliberate, named behavior change:
+        today this combination is NOT rejected by decorators.py's pre-check
+        block at all -- Oracle's kwargs get built and piped successfully
+        first, and only THEN does piping Loop afterward fail via the
+        node-agnostic pipe-layer message in modifiers.py ("Cannot combine
+        Oracle and Loop on the same item", no node context, no 'loop_when'
+        vocabulary). That message alone is NOT sufficient here: assert on
+        the node-named, kwarg-named vocabulary the new eager pre-check must
+        add, not merely that some ConstructError fires.
+        """
+        with pytest.raises(ConstructError) as exc_info:
+
+            @node(
+                outputs=Draft,
+                ensemble_n=3,
+                merge_fn="combine",
+                loop_when=lambda d: d.score < 0.8,
+                max_iterations=3,
+            )
+            def bad_oracle_loop(draft: Draft) -> Draft:
+                return draft
+
+        msg = str(exc_info.value)
+        assert "loop_when" in msg, (
+            f"expected the kwarg-named 'loop_when' vocabulary in the message, got: {msg!r}"
+        )
+        assert "oracle" in msg.lower(), f"expected Oracle vocabulary in the message, got: {msg!r}"
+        assert "bad-oracle-loop" in msg, f"expected the node name in the message, got: {msg!r}"
+
     def test_raises_when_oracle_then_loop_on_node(self):
         """Node | Oracle(...) | Loop(...) raises ConstructError."""
         from neograph import Loop, Oracle
