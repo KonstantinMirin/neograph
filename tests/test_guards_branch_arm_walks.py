@@ -130,10 +130,7 @@ _ALLOWLIST: Counter = Counter(
         # arm-nested nodes that cannot be mesh members).
         # content re-localized: ruff format rewrapped this comprehension onto one
         # line during neograph-3ffdg.14. Same walk, same exemption.
-        (
-            "state.py",
-            "m for m in construct.nodes if primary_shape(m) is PrimaryShape.PORTAL and not _is_dispatch(m)",
-        ): 1,
+        ("state.py", "for m in construct.nodes"): 1,
         # Test-scaffold codegen introspection. The two top-level _collect_items /
         # _collect_edges walks were migrated to iter_with_arms in neograph-gfoq; the
         # remaining inner walk descends a sub-construct's own node list one level

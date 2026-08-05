@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from neograph._agent_cycle import make_agent_cycle_bodies, make_tool_gate_bodies
 from neograph._ir_protocols import ConstructItem
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
+from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
 from neograph._trace import named
@@ -193,8 +194,7 @@ def _contiguous_portal_mesh(nodes: list[ConstructItem], entry: Node) -> list[Con
         # the run here so a dispatch node contiguous with a peer mesh is never
         # absorbed into `candidates` (which would mesh-wire it and skip its
         # dispatch wiring). The assembly-side collector (_validation_portal) agrees.
-        km = item.modifier_set.portal
-        if km is not None and km.is_dispatch:
+        if portal_member_class(item) is PortalMemberClass.DISPATCH:
             break
         candidates.append(item)
     # neograph-fefar: `candidates` may span >1 NAMED mesh if a different-named
@@ -361,7 +361,7 @@ def _add_portal_mesh(
         # Past the Construct branch every remaining member is a Portal-modified
         # Node (atomic or agent/act) — narrow for the Node-typed wiring calls.
         assert isinstance(member, Node)
-        if member.mode in ("agent", "act"):
+        if portal_member_class(member) in (PortalMemberClass.AGENT_CYCLE_OUTPUT, PortalMemberClass.AGENT_CYCLE_TOOL):
             _add_portal_agent_cycle_member(
                 graph,
                 member,
@@ -745,7 +745,7 @@ def _add_portal_agent_cycle_member(
     peer_targets = tuple(resolve.get(t, t) for t in (portal.to or ()))
     parse_destinations = peer_targets + (exit_name,)
     tools_destinations: tuple[str, ...] | None = None
-    if portal.is_tool_triggered:
+    if portal_member_class(node) is PortalMemberClass.AGENT_CYCLE_TOOL:
         parts = make_portal_agent_cycle_tool_handoff_fn(
             node,
             portal,

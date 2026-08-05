@@ -14,6 +14,7 @@ from pydantic import BaseModel, create_model
 
 from neograph._ir_branch import _BranchNode
 from neograph._ir_protocols import ConstructItem
+from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph.construct import Construct
 from neograph.errors import CompileError
 from neograph.naming import field_name_for, output_field_name
@@ -221,10 +222,6 @@ def compile_state_model(
     # channel/counter are runtime-inert until T2 lowering reads them. Grouped
     # via the SAME shared helper (_group_portal_members) the validator and IR
     # normalizer use — never a re-derived inline grouping.
-    def _is_dispatch(n: ConstructItem) -> bool:
-        km = n.modifier_set.portal
-        return km is not None and km.is_dispatch
-
     # PEER-mode members only: a dispatch node (route="decide") is NOT a mesh member
     # — it has no hop counter / mesh channel; it gets a {field}_dispatch field below.
     #
@@ -235,7 +232,9 @@ def compile_state_model(
     # construct.nodes, so _group_portal_members — which treats group_members[0] as
     # the entry — would pick a Node peer as the entry and mis-key the channel).
     portal_members: list[ConstructItem] = [
-        m for m in construct.nodes if primary_shape(m) is PrimaryShape.PORTAL and not _is_dispatch(m)
+        m
+        for m in construct.nodes
+        if primary_shape(m) is PrimaryShape.PORTAL and portal_member_class(m) is not PortalMemberClass.DISPATCH
     ]
     for _group_name, group_members in _group_portal_members(portal_members).items():
         entry = group_members[0]
@@ -262,9 +261,9 @@ def compile_state_model(
     # is written to its plain output field by the PORTAL arm in
     # `_add_single_output_field`; this is the SEPARATE dispatch-result field.
     for n in nodes_only:
-        if _is_dispatch(n):
+        if portal_member_class(n) is PortalMemberClass.DISPATCH:
             km = n.modifier_set.portal
-            assert km is not None  # _is_dispatch guarantees it
+            assert km is not None  # DISPATCH classification guarantees it
             out_spec = km.output
             assert out_spec is not None  # dispatch-mode invariant (T1 validation)
             dispatch_field = output_field_name(field_name_for(n.name), "dispatch")

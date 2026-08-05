@@ -32,8 +32,8 @@ from neograph._agent_spec_placeholders import (
     _properties_for,
     _translate_placeholders,
 )
+from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph.construct import Construct
-from neograph.modifiers import classify_modifiers
 from neograph.node import Node
 
 _DEFAULT_BRANCH = "default"
@@ -118,10 +118,7 @@ def _lower_portal_mesh_to_swarm(
     # so OPTIONAL is the canonical choice); an all-output mesh -> HandoffMode.NEVER
     # (typed-goto routing, no bound transfer tool). A Construct member is never
     # tool-triggered (validation), so only Node members are polled.
-    any_tool = any(
-        isinstance(m, Node) and m.modifier_set.portal is not None and m.modifier_set.portal.is_tool_triggered
-        for m in members
-    )
+    any_tool = any(portal_member_class(m) is PortalMemberClass.AGENT_CYCLE_TOOL for m in members)
     swarm = Swarm(
         name=construct.name,
         first_agent=agents_by_name[entry.name],
@@ -215,14 +212,12 @@ def _lower_portal_mesh_to_swarm(
 
 def _is_peer_mesh_member(item: Any) -> bool:
     """True iff ``item`` carries a PEER-mode (non-dispatch) Portal — i.e. it is
-    a Portal mesh member — using the SAME modifier-agnostic detection the IR
-    normalizer and ``_check_portal_mesh`` use, never an ``isinstance(Node)``
-    gate (A1).
+    a Portal mesh member — using the SAME structural, modifier-agnostic
+    detection ``portal_member_class`` uses, never an ``isinstance(Node)`` gate
+    (A1).
 
-    ``classify_modifiers`` reads ``.modifier_set`` on Node AND Construct, so a
+    ``portal_member_class`` reads ``.modifier_set`` on Node AND Construct, so a
     Construct mesh member (do0d9) is correctly detected as a member rather than
     misclassified as a "non-mesh node" and false-rejecting the whole mesh.
     """
-    _combo, mods = classify_modifiers(item)
-    portal = mods.get("portal")
-    return portal is not None and not portal.is_dispatch
+    return portal_member_class(item) not in (None, PortalMemberClass.DISPATCH)

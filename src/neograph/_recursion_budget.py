@@ -10,11 +10,14 @@ multi-hop region, which is a distinct concern from the run verbs that consume it
 
 from __future__ import annotations
 
+from typing import cast
+
 from langchain_core.runnables import RunnableConfig
 
 from neograph._compiled import CompiledNeograph
 from neograph._ir_branch import iter_with_arms
 from neograph._llm_config import _coerce_llm_config
+from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph.construct import Construct, iter_nodes
 from neograph.modifiers import PrimaryShape, primary_shape
 from neograph.node import Node
@@ -50,12 +53,16 @@ def _member_hop_cost(member: Node | Construct) -> int:
     sub-construct-internal work contributes 0 to the PARENT budget), so the
     parent floor must NOT fold the interior worst-case in.
     """
-    if isinstance(member, Node) and member.mode in ("agent", "act"):
-        max_iters = _coerce_llm_config(member.llm_config).max_iterations
+    if portal_member_class(member) in (PortalMemberClass.AGENT_CYCLE_OUTPUT, PortalMemberClass.AGENT_CYCLE_TOOL):
+        max_iters = _coerce_llm_config(cast(Node, member).llm_config).max_iterations
         return max_iters * _SUPERSTEPS_PER_AGENT_TURN + _AGENT_CYCLE_OVERHEAD
     # An Operator-guarded member detours through its
     # {member}__approve node before reaching the peer — one extra superstep
-    # per hop over the un-guarded atomic case.
+    # per hop over the un-guarded atomic case. Checked independently of
+    # portal_member_class's SUB_CONSTRUCT precedence: a Construct member that
+    # ALSO carries an Operator costs 2 here, same as an atomic one -- this
+    # function's operator surcharge is a strictly separate question from the
+    # classifier's lossy member-kind reduction.
     ms = getattr(member, "modifier_set", None)
     if ms is not None and ms.operator is not None:
         return 2

@@ -35,6 +35,7 @@ from neograph._fan_agent import raise_if_unsupported_fan_over_agent
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructLike
 from neograph._normalize import _declared_output
+from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._state_keys import StateKeys
 from neograph._validation_inputs import _check_item_input
 from neograph._validation_modifiers import (
@@ -246,7 +247,7 @@ def _validate_node_chain(
             # type-checks — mirrors the dict-form per-key producer registration.
             if isinstance(item, Node):
                 portal = item.modifier_set.portal
-                if portal is not None and portal.is_dispatch and portal.output is not None:
+                if portal_member_class(item) is PortalMemberClass.DISPATCH and portal is not None and portal.output is not None:
                     resolved = portal.output
                     if isinstance(resolved, str):
                         resolved = lookup_type(resolved)

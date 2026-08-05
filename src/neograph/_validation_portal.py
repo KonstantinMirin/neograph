@@ -19,6 +19,7 @@ from typing import Any, Literal, cast, get_args, get_origin
 
 from neograph._ir_protocols import ConstructLike
 from neograph._normalize import _declared_output, normalize_outputs
+from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._validation_types import _MISSING, _fmt_type, _resolve_field_annotation, _source_location
 from neograph.errors import ConstructError
 from neograph.modifiers import HANDOFF_END, Portal, _group_portal_members
@@ -61,11 +62,7 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
     # checks below do not apply. Including it here would look for a field literally
     # named "decide" on its payload and reject a valid dispatch node.
     member_positions = {
-        id(item): i
-        for i, item in enumerate(nodes)
-        if getattr(item, "modifier_set", None) is not None
-        and item.modifier_set.portal is not None
-        and not item.modifier_set.portal.is_dispatch
+        id(item): i for i, item in enumerate(nodes) if portal_member_class(item) not in (None, PortalMemberClass.DISPATCH)
     }
     if not member_positions:
         return
@@ -341,9 +338,10 @@ def _check_portal_dispatch_error_handler(construct: ConstructLike) -> None:
     for item in nodes:
         if not isinstance(item, Node):
             continue
-        portal = item.modifier_set.portal
-        if portal is None or not portal.is_dispatch:
+        if portal_member_class(item) is not PortalMemberClass.DISPATCH:
             continue
+        portal = item.modifier_set.portal
+        assert portal is not None  # DISPATCH classification guarantees it
         if portal.on_invalid != "route_to_error":
             continue
         if portal.error_handler not in sibling_names:

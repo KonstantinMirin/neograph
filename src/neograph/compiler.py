@@ -35,6 +35,7 @@ from neograph._oracle import (
     make_oracle_merge_fn,
     make_oracle_redirect_fn,
 )
+from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._runtime_registry import _decoration_registry
 
 # --- names compiler.py imported and RE-EXPORTED before the split; the moved
@@ -275,8 +276,7 @@ def compile(
         # first-class Portal member a non-entry position already admits (do0d9).
         # The mesh helpers are Construct-agnostic; only DETECTION needed relaxing.
         if isinstance(item, (Node, Construct)) and primary_shape(item) is PrimaryShape.PORTAL:
-            portal = item.modifier_set.portal
-            if portal is not None and portal.is_dispatch:
+            if portal_member_class(item) is PortalMemberClass.DISPATCH:
                 # Dispatch mode (design §4.2): a standalone LINEAR node (plain
                 # add_node + static edge, NO Command), never a mesh member —
                 # _contiguous_portal_mesh / _validation_portal exclude it. A
