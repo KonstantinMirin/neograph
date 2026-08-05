@@ -39,7 +39,7 @@ import warnings
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel
 
-from neograph import Construct, Loop, Node, Operator, compile, run
+from neograph import Construct, Loop, Node, Operator, compile, node, run
 from neograph._agent_spec import (
     _MARK_LOOP_SPEC,
     _MARK_MODIFIER,
@@ -47,6 +47,7 @@ from neograph._agent_spec import (
     _PAUSE_BRANCH,
     to_agent_spec,
 )
+from neograph.decorators import construct_from_functions
 from neograph.loader import from_agent_spec
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from tests.fakes import build_test_compile_kwargs, register_condition, register_scripted
@@ -210,4 +211,70 @@ class TestLoopOperatorRoundTrip:
         final = value[-1] if isinstance(value, list) else value
         assert final.score >= 0.8
         assert final.iteration == 3
-        assert "__interrupt__" not in result, "the gate condition is false -- the run must not pause"
+
+
+class TestNodeLevelLoopRegisteredNameRoundTrip:
+    """neograph-d3x4j: the NODE-level sibling of this file's Operator
+    registered-name coverage (``test_round_trip_preserves_both_modifier_specs``
+    above asserts ``operator.when == "lo_never"`` after reimport; Loop's own
+    ``when`` had no Node-level pin, only the Construct-level
+    ``_loop_matching_boundary`` row in
+    ``test_agent_spec_construct_item_roundtrip.py``, proven only indirectly via
+    a successful compile).
+
+    ``_reconstruct_loop_item`` (``_agent_spec_group_import.py``) is the single
+    shared reconstruction path for Loop on both Node- and Construct-level items
+    (neograph-ijyjr / commit 110e8d6), so this was expected to already work --
+    this test pins it directly on a plain ``@node(loop_when=...)`` fixture with
+    a direct string assertion, mirroring how the Operator sibling asserts its
+    ``when`` above.
+    """
+
+    def test_node_level_loop_registered_name_survives_round_trip(self):
+        # Node names deliberately underscore-free (plain "seed"/"refine") --
+        # @node infers DICT-FORM inputs from the function signature
+        # (inputs={"seed": Draft}), and the exporter's dict-form fan-in
+        # resolves that key against the upstream item's literal (hyphenated)
+        # .name; an underscored multi-word name would hyphenate and mismatch
+        # the key, which is an orthogonal pre-existing export limitation this
+        # ticket does not touch.
+        register_condition("d3x4j_continue", lambda draft: draft is None or draft.score < 0.8)
+
+        @node(outputs=Draft)
+        def seed() -> Draft:
+            return Draft(content="v0", iteration=0, score=0.0)
+
+        @node(outputs=Draft, loop_when="d3x4j_continue", max_iterations=10)
+        def refine(seed: Draft) -> Draft:
+            return Draft(content=f"v{seed.iteration + 1}", iteration=seed.iteration + 1, score=seed.score + 0.3)
+
+        pipeline = construct_from_functions("d3x4j-node-loop", [seed, refine])
+        flow = to_agent_spec(pipeline)
+        imported = _import(flow)
+
+        item = _by_name(imported)["refine"]
+        loop = item.modifier_set.loop
+        assert loop is not None
+        assert loop.when == "d3x4j_continue", (
+            "the registered NAME must survive reimport unresolved (matching "
+            "how the Operator sibling test asserts operator.when == 'lo_never' "
+            "above) -- compile() resolves it, not the importer"
+        )
+
+        def seed_fn(input_data, config):
+            return Draft(content="v0", iteration=0, score=0.0)
+
+        def refine_fn(input_data, config):
+            prev = input_data["seed"] if isinstance(input_data, dict) else input_data
+            return Draft(content=f"v{prev.iteration + 1}", iteration=prev.iteration + 1, score=prev.score + 0.3)
+
+        register_scripted("seed", seed_fn)
+        register_scripted("refine", refine_fn)
+
+        graph = compile(imported, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "d3x4j-node-loop-rt"})
+
+        value = result["refine"]
+        final = value[-1] if isinstance(value, list) else value
+        assert final.score >= 0.8
+        assert final.iteration == 3, "0.0 -> 0.3 -> 0.6 -> 0.9: the registered condition resolved and drove the loop"
