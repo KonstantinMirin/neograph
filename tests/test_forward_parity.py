@@ -854,9 +854,8 @@ class TestParityRatchet:
             for item in items:
                 ms = getattr(item, "modifier_set", None)
                 if ms is not None:
-                    for mod in (ms.each, ms.oracle, ms.loop, ms.operator):
-                        if mod is not None:
-                            acc.add(type(mod))
+                    for mod in ms.to_list():
+                        acc.add(type(mod))
                 nested = getattr(item, "nodes", None)
                 if nested:
                     _collect(nested, acc)

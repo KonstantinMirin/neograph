@@ -7,6 +7,8 @@ node | Operator(when="has_open_questions")
 
 from __future__ import annotations
 
+import itertools
+
 # --- typing names modifiers.py imported and RE-EXPORTED before the split.
 from collections.abc import (
     Callable,
@@ -211,17 +213,7 @@ def classify_modifiers(item: ConstructItem) -> tuple[ModifierCombo, dict]:
     """
     ms = getattr(item, "modifier_set", None)
     if ms is not None and isinstance(ms, ModifierSet):
-        mods: dict[str, Any] = {}
-        if ms.each is not None:
-            mods["each"] = ms.each
-        if ms.oracle is not None:
-            mods["oracle"] = ms.oracle
-        if ms.loop is not None:
-            mods["loop"] = ms.loop
-        if ms.operator is not None:
-            mods["operator"] = ms.operator
-        if ms.portal is not None:
-            mods["portal"] = ms.portal
+        mods: dict[str, Any] = {r.slot: getattr(ms, r.slot) for r in _SLOT_RULES if getattr(ms, r.slot) is not None}
         return ms.combo, mods
 
     # Fallback for duck-typed items (e.g. _BranchNode)
@@ -229,23 +221,7 @@ def classify_modifiers(item: ConstructItem) -> tuple[ModifierCombo, dict]:
     if get_mod is None:
         return ModifierCombo.BARE, {}
 
-    each = get_mod(Each)
-    oracle = get_mod(Oracle)
-    loop = get_mod(Loop)
-    operator = get_mod(Operator)
-    portal = get_mod(Portal)
-
-    mods = {}
-    if each:
-        mods["each"] = each
-    if oracle:
-        mods["oracle"] = oracle
-    if loop:
-        mods["loop"] = loop
-    if operator:
-        mods["operator"] = operator
-    if portal:
-        mods["portal"] = portal
+    mods = {r.slot: get_mod(r.mod_type) for r in _SLOT_RULES if get_mod(r.mod_type)}
 
     # Map to enum
     has = frozenset(mods.keys())
@@ -406,31 +382,13 @@ class Modifiable:
 
     def has_modifier(self, modifier_type: type[Modifier]) -> bool:
         """Check if a specific modifier is applied."""
-        if modifier_type is Each:
-            return self.modifier_set.each is not None
-        if modifier_type is Oracle:
-            return self.modifier_set.oracle is not None
-        if modifier_type is Loop:
-            return self.modifier_set.loop is not None
-        if modifier_type is Operator:
-            return self.modifier_set.operator is not None
-        if modifier_type is Portal:
-            return self.modifier_set.portal is not None
-        return False
+        rule = next((r for r in _SLOT_RULES if r.mod_type is modifier_type), None)
+        return rule is not None and getattr(self.modifier_set, rule.slot) is not None
 
     def get_modifier(self, modifier_type: type[Modifier]) -> Modifier | None:
         """Get the modifier of a given type, or None."""
-        if modifier_type is Each:
-            return self.modifier_set.each
-        if modifier_type is Oracle:
-            return self.modifier_set.oracle
-        if modifier_type is Loop:
-            return self.modifier_set.loop
-        if modifier_type is Operator:
-            return self.modifier_set.operator
-        if modifier_type is Portal:
-            return self.modifier_set.portal
-        return None
+        rule = next((r for r in _SLOT_RULES if r.mod_type is modifier_type), None)
+        return getattr(self.modifier_set, rule.slot) if rule is not None else None
 
     def map(
         self,
@@ -674,77 +632,105 @@ class Loop(Modifier, frozen=True):
 class _SlotRule(NamedTuple):
     """One row of the modifier -> ModifierSet-slot mapping.
 
-    ``excludes`` lists mutual-exclusion conflicts as (conflicting_slot,
-    error_message, hint) triples, checked when the incoming modifier lands.
+    Pair legality (which slots may not coexist) is NOT here -- it lives in
+    _CONFLICT_DIAGNOSTICS / _DYNAMIC_RULES below, the one gate every
+    construction path calls (neograph-jtawq.3). This row is purely the
+    modifier-type -> slot -> human-label mapping.
     """
 
     mod_type: type[Modifier]
     slot: str  # ModifierSet field name to populate
-    label: str  # human-facing modifier name for duplicate errors
-    excludes: tuple[tuple[str, str, str], ...]
+    label: str  # human-facing modifier name for duplicate/unknown-type errors
 
 
-# Single source of truth for ModifierSet.with_modifier: which slot each
-# modifier occupies and which sibling slots it may not coexist with. Adding a
-# new modifier means adding ONE row here, not a fifth isinstance branch.
-_EACH_LOOP_CONFLICT = (
-    "Cannot combine Each and Loop on the same item",
-    "Use a sub-construct with Loop inside an Each fan-out instead",
+# The roster: every modifier type this mixin dispatches over. Adding a new
+# modifier means adding ONE row here, not a sixth isinstance branch across
+# classify_modifiers / combo / to_list / has_modifier / get_modifier.
+_SLOT_RULES: tuple[_SlotRule, ...] = (
+    _SlotRule(Each, "each", "Each"),
+    _SlotRule(Oracle, "oracle", "Oracle"),
+    _SlotRule(Loop, "loop", "Loop"),
+    _SlotRule(Operator, "operator", "Operator"),
+    _SlotRule(Portal, "portal", "Portal"),
 )
-_ORACLE_LOOP_CONFLICT = (
-    "Cannot combine Oracle and Loop on the same item",
-    "Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
-)
+
 # Portal excludes EVERY other modifier: it owns the node's outgoing edge, so
 # no other modifier's edge/postlude can compose with a Command-returning member
-# (D-NO-OPERATOR-COMBO). The excludes are RECIPROCAL — listed on BOTH the
-# Portal row and each sibling row — so a conflict is rejected with a clean
-# ConstructError regardless of pipe order (review MEDIUM-2). Without the sibling-
-# side entries, ``node | Portal() | Each()`` (Portal landing first) would
-# slip past ``with_modifier`` and raise a raw KeyError in ``ModifierSet.combo``.
+# (D-NO-OPERATOR-COMBO).
 _PORTAL_HINT = (
     "Portal owns the node's outgoing edge; place the other modifier on the node "
     "before the mesh entry or after the mesh exit"
 )
 
-
-def _km_conflict(this_label: str) -> tuple[str, str]:
-    """(message, hint) for a ``this_label`` slot row rejecting a Portal peer.
-
-    Names ``this_label`` so the fixture/error regex (e.g. ``[Ll]oop`` /
-    ``[Oo]perator``) matches whichever modifier landed second.
-    """
-    return (f"Cannot combine {this_label} and Portal on the same item", _PORTAL_HINT)
-
-
-_SLOT_RULES: tuple[_SlotRule, ...] = (
-    _SlotRule(Each, "each", "Each", (("loop", *_EACH_LOOP_CONFLICT), ("portal", *_km_conflict("Each")))),
-    _SlotRule(Oracle, "oracle", "Oracle", (("loop", *_ORACLE_LOOP_CONFLICT), ("portal", *_km_conflict("Oracle")))),
-    _SlotRule(
-        Loop,
-        "loop",
-        "Loop",
-        (("each", *_EACH_LOOP_CONFLICT), ("oracle", *_ORACLE_LOOP_CONFLICT), ("portal", *_km_conflict("Loop"))),
+# Single source of truth for illegal modifier PAIRS (neograph-jtawq.3): every
+# 2-subset of _SLOT_RULES' slots is either a legal _COMBO_MAP key or a key
+# here, with the pair-specific (message, hint) -- G-SLOT(i) pins this
+# totality. The canonical phrasing is fixed PER PAIR (not per landing order),
+# so the pipe path's old "whichever modifier landed second" wording collapses
+# onto the direct-construction order for free.
+_CONFLICT_DIAGNOSTICS: dict[frozenset[str], tuple[str, str]] = {
+    frozenset({"each", "loop"}): (
+        "Cannot combine Each and Loop on the same item",
+        "Use a sub-construct with Loop inside an Each fan-out instead",
     ),
-    # Operator no longer excludes Portal (neograph-kdr1u, D4 lift): a Portal
-    # PEER-mode member may carry an Operator human-approval gate, spliced onto
-    # the dynamic Command(goto) path (_add_portal_mesh's approval-node
-    # splice) — never a statically-appended edge (the D4 bug). The dispatch-
-    # mode-only / non-atomic-member-only narrowing is enforced separately
-    # (model_post_init's dispatch-mode check below; _validation_portal.py's
-    # atomic-only mesh-member check), not via a blanket exclude here.
-    _SlotRule(Operator, "operator", "Operator", ()),
-    _SlotRule(
-        Portal,
-        "portal",
-        "Portal",
-        (
-            ("each", "Cannot combine Portal and Each on the same item", _PORTAL_HINT),
-            ("oracle", "Cannot combine Portal and Oracle on the same item", _PORTAL_HINT),
-            ("loop", "Cannot combine Portal and Loop on the same item", _PORTAL_HINT),
-        ),
+    frozenset({"oracle", "loop"}): (
+        "Cannot combine Oracle and Loop on the same item",
+        "Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
+    ),
+    frozenset({"each", "portal"}): (
+        "Cannot combine Portal and Each on the same item",
+        _PORTAL_HINT,
+    ),
+    frozenset({"oracle", "portal"}): (
+        "Cannot combine Portal and Oracle on the same item",
+        _PORTAL_HINT,
+    ),
+    frozenset({"loop", "portal"}): (
+        "Cannot combine Portal and Loop on the same item",
+        _PORTAL_HINT,
+    ),
+}
+
+# The ONE instance-dependent rule: Portal(dispatch mode) + Operator depends on
+# the Portal INSTANCE's is_dispatch, so it cannot be a static _CONFLICT_DIAGNOSTICS
+# entry (which only sees slot NAMES). Kept as DATA (a predicate over a
+# ModifierSet-shaped object, plus the message/hint) so the message literal
+# still lives in a table, not a raise buried in a function body.
+_DYNAMIC_RULES: tuple[tuple[Callable[[Any], bool], str, str], ...] = (
+    (
+        lambda ms: ms.portal is not None and ms.operator is not None and ms.portal.is_dispatch,
+        "Cannot combine Portal (dispatch mode) and Operator on the same item",
+        "Operator+Portal approval gate is defined for PEER mode (to=[...]) only",
     ),
 )
+
+
+def _validate_slot_set(slots: frozenset[str]) -> None:
+    """The ONE gate deciding whether a set of occupied ModifierSet slots is
+    legal -- both ``model_post_init`` (direct construction) and
+    ``with_modifier`` (the pipe path) call this before anything else.
+
+    Roster-ordered pair scan, NOT hash/set order: a 3+-member superset can
+    contain more than one illegal pair (e.g. {each, oracle, loop} contains
+    both {each, loop} and {oracle, loop}); which is reported first must be
+    deterministic, not coin-flipped by CPython's per-process str-hash
+    randomization. Iterating in ``_SLOT_RULES`` order reproduces the
+    precedence the old hand-coded arms had (each+loop, then oracle+loop,
+    then the portal pairs).
+    """
+    ordered = [r.slot for r in _SLOT_RULES if r.slot in slots]
+    for a, b in itertools.combinations(ordered, 2):
+        diagnosis = _CONFLICT_DIAGNOSTICS.get(frozenset({a, b}))
+        if diagnosis is not None:
+            message, hint = diagnosis
+            raise ConstructError.build(message, hint=hint)
+
+
+def _check_dynamic_rules(ms: ModifierSet) -> None:
+    """Run the one instance-dependent rule against an already-built ModifierSet."""
+    for predicate, message, hint in _DYNAMIC_RULES:
+        if predicate(ms):
+            raise ConstructError.build(message, hint=hint)
 
 
 class ModifierSet(BaseModel, frozen=True):
@@ -766,74 +752,39 @@ class ModifierSet(BaseModel, frozen=True):
     @property
     def combo(self) -> ModifierCombo:
         """Classify this set into a ModifierCombo enum value."""
-        has: set[str] = set()
-        if self.each is not None:
-            has.add("each")
-        if self.oracle is not None:
-            has.add("oracle")
-        if self.loop is not None:
-            has.add("loop")
-        if self.operator is not None:
-            has.add("operator")
-        if self.portal is not None:
-            has.add("portal")
-        return _COMBO_MAP[frozenset(has)]
+        has = frozenset(r.slot for r in _SLOT_RULES if getattr(self, r.slot) is not None)
+        return _COMBO_MAP[has]
 
     def model_post_init(self, __context: Any) -> None:
-        # Each + Loop mutual exclusion
-        if self.each is not None and self.loop is not None:
-            raise ConstructError.build(
-                "Cannot combine Each and Loop on the same item",
-                hint="Use a sub-construct with Loop inside an Each fan-out instead",
-            )
-        # Oracle + Loop mutual exclusion
-        if self.oracle is not None and self.loop is not None:
-            raise ConstructError.build(
-                "Cannot combine Oracle and Loop on the same item",
-                hint="Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
-            )
-        # Portal excludes every other modifier (review M2: this direct-
-        # construct path uses hard-coded pairwise arms — it does NOT read
-        # _SLOT_RULES, so without these arms a direct ModifierSet(portal=...,
-        # loop=...) would silently pass while the pipe path rejects, the exact
-        # parity hazard). Mirrors the D-NO-OPERATOR-COMBO reciprocal excludes.
-        if self.portal is not None and self.each is not None:
-            raise ConstructError.build("Cannot combine Portal and Each on the same item", hint=_PORTAL_HINT)
-        if self.portal is not None and self.oracle is not None:
-            raise ConstructError.build("Cannot combine Portal and Oracle on the same item", hint=_PORTAL_HINT)
-        if self.portal is not None and self.loop is not None:
-            raise ConstructError.build("Cannot combine Portal and Loop on the same item", hint=_PORTAL_HINT)
-        # Portal (PEER mode) + Operator is now legal (neograph-kdr1u, D4 lift) —
-        # a human-approval gate spliced onto the dynamic path. Dispatch mode
-        # (route="decide") + Operator stays illegal: dispatch has no "peer" to
-        # approve a handoff TO, and no mesh-exit analog for a rejection to
-        # route to.
-        if self.portal is not None and self.operator is not None and self.portal.is_dispatch:
-            raise ConstructError.build(
-                "Cannot combine Portal (dispatch mode) and Operator on the same item",
-                hint="Operator+Portal approval gate is defined for PEER mode (to=[...]) only",
-            )
+        # Direct construction: model_copy SKIPS model_post_init (pydantic v2),
+        # so with_modifier (the pipe path) cannot reuse this method and instead
+        # calls the same two functions itself, before/after its own model_copy.
+        # Both paths route through ONE gate for slot-pair legality
+        # (_validate_slot_set) and ONE gate for the instance-dependent rule
+        # (_check_dynamic_rules) -- neograph-jtawq.3.
+        occupied = frozenset(r.slot for r in _SLOT_RULES if getattr(self, r.slot) is not None)
+        _validate_slot_set(occupied)
+        _check_dynamic_rules(self)
 
     def with_modifier(self, mod: Modifier) -> ModifierSet:
         """Return a new ModifierSet with the given modifier added.
 
         Raises ConstructError for duplicate modifiers (slot already occupied)
-        and for illegal combinations (Each+Loop, Oracle+Loop).
-
-        The modifier-type -> slot mapping and its mutual-exclusion rules are
-        driven from the single ``_SLOT_RULES`` table so a new modifier is
-        described once, not open-coded across four isinstance branches.
+        and for illegal combinations. The modifier-type -> slot mapping comes
+        from ``_SLOT_RULES``; pair legality from ``_validate_slot_set`` /
+        ``_check_dynamic_rules`` -- the SAME gates ``model_post_init`` calls,
+        so a new modifier is described once, not open-coded across two paths.
         """
-
         rule = next((r for r in _SLOT_RULES if isinstance(mod, r.mod_type)), None)
         if rule is None:
             raise ConstructError.build(
                 "Unknown modifier type",
-                expected="Each, Oracle, Loop, or Operator",
+                expected=", ".join(r.label for r in _SLOT_RULES),
                 found=type(mod).__name__,
             )
 
-        # Duplicate: this slot is already occupied.
+        # Duplicate: this slot is already occupied. A set union can't detect
+        # this (the duplicate arm cannot move into _validate_slot_set).
         if getattr(self, rule.slot) is not None:
             raise ConstructError.build(
                 f"Duplicate {rule.label} modifier",
@@ -841,34 +792,15 @@ class ModifierSet(BaseModel, frozen=True):
                 hint="Use a sub-construct if you need nested composition",
             )
 
-        # Mutual-exclusion: any conflicting slot already occupied.
-        for conflict_slot, message, hint in rule.excludes:
-            if getattr(self, conflict_slot) is not None:
-                raise ConstructError.build(message, hint=hint)
+        prospective = frozenset(r.slot for r in _SLOT_RULES if getattr(self, r.slot) is not None) | {rule.slot}
+        _validate_slot_set(prospective)
 
         result = self.model_copy(update={rule.slot: mod})
-        # Portal (dispatch mode) + Operator stays illegal regardless of pipe
-        # order — a dynamic (not static-exclude-table-expressible) check since
-        # it depends on the Portal INSTANCE's is_dispatch, mirrors the
-        # model_post_init arm above (the direct-ModifierSet-construction path).
-        if result.portal is not None and result.operator is not None and result.portal.is_dispatch:
-            raise ConstructError.build(
-                "Cannot combine Portal (dispatch mode) and Operator on the same item",
-                hint="Operator+Portal approval gate is defined for PEER mode (to=[...]) only",
-            )
+        # Dynamic check runs AFTER model_copy -- it needs the actual Portal
+        # instance's is_dispatch, which a slot-NAME set cannot express.
+        _check_dynamic_rules(result)
         return result
 
     def to_list(self) -> list[Modifier]:
         """Return modifiers as a list (backward compat bridge)."""
-        result: list[Modifier] = []
-        if self.each is not None:
-            result.append(self.each)
-        if self.oracle is not None:
-            result.append(self.oracle)
-        if self.loop is not None:
-            result.append(self.loop)
-        if self.operator is not None:
-            result.append(self.operator)
-        if self.portal is not None:
-            result.append(self.portal)
-        return result
+        return [getattr(self, r.slot) for r in _SLOT_RULES if getattr(self, r.slot) is not None]

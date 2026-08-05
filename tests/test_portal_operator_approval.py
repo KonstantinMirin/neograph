@@ -12,9 +12,11 @@ CORE INVARIANT under test: an Operator-guarded Portal member routes
 (reject) -- so the pause sits ON the dynamic ``Command(goto)`` path and the
 member's body (its LLM/tool spend) runs EXACTLY ONCE across pause+resume.
 
-MUST FAIL NOW: Portal + Operator on the same node is still banned by THREE
-reciprocal excludes in ``modifiers.py`` (the Operator row + the Portal row in
-``_SLOT_RULES``, and the pairwise arm in ``ModifierSet.model_post_init``).
+MUST FAIL NOW: Portal + Operator on the same node is still banned by the one
+gate in ``modifiers.py`` (``_validate_slot_set`` reading
+``_CONFLICT_DIAGNOSTICS``, called from both ``ModifierSet.model_post_init``
+and ``with_modifier`` -- neograph-jtawq.3 collapsed the prior three
+independent encodings into this single gate).
 Every test below that pipes ``Node.scripted(...) | Portal(...) |
 Operator(when=...)`` (or the reverse order, or the ``@node`` decorator
 equivalent) raises ``ConstructError: Cannot combine Portal and Operator on

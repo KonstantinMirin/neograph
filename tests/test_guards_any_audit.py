@@ -531,8 +531,8 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # all three moved: two stayed in modifiers.py but renumbered when the extracted
     # classes were removed above them, and the third (Each's field_validator) went
     # to _each.py. Recomputed after ruff format.
-    "modifiers.py:330": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
-    "modifiers.py:570": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "modifiers.py:306": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
+    "modifiers.py:528": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
     "_each.py:55": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
     # ── node.py — Pydantic BeforeValidator boundary ──
     # _validate_type_spec runs inside Pydantic field validation; Pydantic

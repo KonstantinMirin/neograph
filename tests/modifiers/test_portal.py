@@ -3,11 +3,13 @@
 Pins the modifier-slot legality of ``Portal``:
 
 - slot conflicts with Each/Oracle/Loop/Operator raise ``ConstructError`` on BOTH
-  the pipe path (`_SLOT_RULES` excludes) AND the direct-`ModifierSet(...)` path
-  (`model_post_init` arms — review M2 parity hazard);
+  the pipe path AND the direct-`ModifierSet(...)` path -- both call the ONE
+  gate, `_validate_slot_set` reading `_CONFLICT_DIAGNOSTICS` (neograph-jtawq.3,
+  superseding the review M2 parity hazard's original per-path hand-coded fix);
 - CRITICALLY both pipe orders — Portal FIRST and Portal SECOND — raise
-  ``ConstructError`` (not KeyError); pins review MEDIUM-2, the reciprocal
-  `_SLOT_RULES` excludes;
+  ``ConstructError`` (not KeyError); pins review MEDIUM-2, now the single
+  `_CONFLICT_DIAGNOSTICS` table (keyed by unordered pair, so the message is
+  the same fixed phrasing regardless of landing order);
 - duplicate Portal is rejected;
 - mode discrimination raises ``ConfigurationError`` on neither/both, and
   `max_hops >= 1` is enforced.
@@ -126,8 +128,9 @@ class TestModeDiscrimination:
 class TestPipeSlotConflicts:
     """Portal × Each/Oracle/Loop/Operator on the pipe path, BOTH orders.
 
-    Both orders must raise ConstructError (not KeyError) — this pins the
-    reciprocal `_SLOT_RULES` excludes (review MEDIUM-2).
+    Both orders must raise ConstructError (not KeyError) — this pins
+    `_validate_slot_set`'s unordered-pair lookup in `_CONFLICT_DIAGNOSTICS`
+    (neograph-jtawq.3, review MEDIUM-2).
     """
 
     def test_portal_then_each_raises(self):
@@ -205,10 +208,10 @@ class TestDuplicatePortal:
 class TestDirectModifierSetConflicts:
     """Direct ModifierSet(portal=..., other=...) must ALSO reject.
 
-    The pipe path reads `_SLOT_RULES`; the direct-construct path uses
-    hard-coded pairwise checks in `model_post_init`. Without explicit portal
-    arms the direct path would silently pass while the pipe rejects — the M2
-    parity hazard. Both must reject with the "Cannot combine ..." message.
+    Both the pipe path (`with_modifier`) and the direct-construct path
+    (`model_post_init`) call the SAME `_validate_slot_set` gate
+    (neograph-jtawq.3) -- so parity is structural, not maintained by hand on
+    two sides. Both must reject with the "Cannot combine ..." message.
 
     Note the exception SHAPE differs by path (established convention, see
     ``test_modifier_edge_cases.test_each_loop_rejected_at_construction``): the
