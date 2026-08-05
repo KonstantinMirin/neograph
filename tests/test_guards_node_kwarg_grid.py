@@ -33,11 +33,15 @@ instructions.
 from __future__ import annotations
 
 import itertools
+import warnings
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
 from neograph import ConstructError, node
+from neograph._node_modifier_kwargs import MODIFIER_KWARGS
+from neograph._runtime_registry import _decoration_registry
 from neograph.modifiers import _COMBO_MAP, Each, Loop, Operator, Oracle, Portal
 
 
@@ -150,3 +154,159 @@ class TestNodeKwargGrid:
             assert portal.route == "next_hop"
             assert portal.max_hops == 6
             assert portal.on_exhaust == "exit"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 3 (neograph-5nvb0): the dangling-satellite strictness gate
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# A SATELLITE kwarg configures a modifier once triggered but never triggers it
+# (``MODIFIER_KWARGS`` row semantics). Passing one with NONE of its owning
+# triggers present means the value can reach no modifier the derived
+# ``ModifierCombo`` actually carries -- it is silently dropped today. Phase 3
+# makes that a decoration-time ``ConstructError``.
+#
+# The case set below is DERIVED from ``MODIFIER_KWARGS``, not hand-listed, so a
+# satellite added to a row later automatically gains a dangling cell (refined
+# plan, Finding 3). This is a SEPARATE parametrization from the 32-subset grid
+# above -- ``TRIGGER_NAMES`` / ``ALL_SUBSETS`` are deliberately untouched.
+#
+# Three of the derived cells (``map_key``, ``route``, ``max_hops``) already
+# raise today via ``decorators.py``'s eager pre-checks, whose messages are
+# kwarg-named and BETTER than a generic one. They stay in the derived set --
+# they cost nothing, they assert the same contract, and excluding them would
+# reintroduce the hand-maintained list this parametrization exists to remove.
+# The narrower "4 unshadowed patterns only" rule applies to the check-fixture
+# ``# CHECK_ERROR:`` files, where matching the wrong message would prove
+# nothing.
+
+
+def _satellite_owners() -> dict[str, frozenset[str]]:
+    """satellite kwarg -> every trigger that could legitimately own it.
+
+    Derived by union over ``MODIFIER_KWARGS`` rows, so ``on_exhaust`` (a
+    satellite of BOTH the loop and portal rows) correctly requires
+    ``loop_when`` OR ``portal`` and is dangling only when neither is present.
+    """
+    owners: dict[str, set[str]] = {}
+    for row in MODIFIER_KWARGS:
+        for satellite in row.satellites:
+            owners.setdefault(satellite, set()).update(row.triggers)
+    return {k: frozenset(v) for k, v in owners.items()}
+
+
+SATELLITE_OWNERS: dict[str, frozenset[str]] = _satellite_owners()
+
+#: A NON-DEFAULT value per satellite. Values must be hand-written (they are
+#: type-specific), but coverage is not: the assertion below fails the module at
+#: import if a new ``MODIFIER_KWARGS`` satellite has no value here, so the
+#: derived case set can never silently shrink.
+_DANGLING_VALUES: dict[str, Any] = {
+    "map_key": "label",
+    "map_on_error": "collect",
+    "merge_pre_process": lambda variants: variants,
+    "merge_post_process": lambda merged: merged,
+    "merge_fallback": lambda variants: variants[0],
+    "merge_model": "creative",
+    "max_iterations": 7,
+    "on_exhaust": "last",
+    "route": "next_hop",
+    "max_hops": 6,
+}
+
+assert set(_DANGLING_VALUES) == set(SATELLITE_OWNERS), (
+    "every MODIFIER_KWARGS satellite needs a non-default dangling value; missing: "
+    f"{sorted(set(SATELLITE_OWNERS) - set(_DANGLING_VALUES))}, "
+    f"stale: {sorted(set(_DANGLING_VALUES) - set(SATELLITE_OWNERS))}"
+)
+
+DANGLING_SATELLITES: list[str] = sorted(SATELLITE_OWNERS)
+
+
+class TestDanglingSatelliteKwargsRejected:
+    """Phase 3 (neograph-5nvb0): a satellite kwarg with none of its owning
+    triggers must fail loudly at decoration time, naming the offending kwarg
+    and what it requires."""
+
+    @pytest.mark.parametrize("satellite", DANGLING_SATELLITES, ids=DANGLING_SATELLITES)
+    def test_satellite_without_owning_trigger_raises(self, satellite: str) -> None:
+        owners = SATELLITE_OWNERS[satellite]
+
+        with pytest.raises(ConstructError) as exc_info:
+
+            @node(outputs=_GridIO, name=f"dangling-{satellite}", **{satellite: _DANGLING_VALUES[satellite]})
+            def _fn(seed: _GridIO) -> _GridIO: ...
+
+        message = str(exc_info.value)
+        assert f"{satellite}=" in message, (
+            f"the error must NAME the offending kwarg as '{satellite}=' (the repo's kwarg-named "
+            f"idiom, cf. 'max_hops= requires portal='), got:\n{message}"
+        )
+        assert any(f"{trigger}=" in message for trigger in owners), (
+            f"the error must name at least one owning trigger of '{satellite}' "
+            f"({sorted(owners)}) so the user knows what to add, got:\n{message}"
+        )
+
+    def test_explicitly_default_satellite_value_still_accepted(self) -> None:
+        """Positive control -- GREEN both before and after Phase 3.
+
+        ``sugar_kwargs`` is a ``locals()`` snapshot (decorators.py:249), so an
+        explicitly-passed default is indistinguishable from unset. ``map_on_error``
+        is the ONLY one of node()'s kwargs with a non-None default ('raise'), so
+        this cell is what pins value-vs-default rather than the design doc's
+        superseded ``is not None`` test -- under which EVERY node in the codebase
+        would be rejected.
+        """
+
+        @node(outputs=_GridIO, name="dangling-default-ok", map_on_error="raise")
+        def _fn(seed: _GridIO) -> _GridIO: ...
+
+        assert _fn.get_modifier(Each) is None
+
+
+class TestGateRunsBeforeBuilderSideEffects:
+    """Phase 3 (neograph-5nvb0), refined plan Finding 1: the Core Invariant's
+    "BEFORE any builder side effect fires" clause, made detectable.
+
+    ``_build_oracle_kwargs`` (_node_modifier_kwargs.py:116-133) emits a
+    body-as-merge ``UserWarning`` AND calls ``register_scripted`` as a side
+    effect. A rejected node must leave neither behind -- the same
+    side-effect-leak class Phase 2 fixed for the oracle+loop / oracle+portal
+    pairs. Asserting only "ConstructError is raised" would not notice a future
+    edit that moves the gate call below decorators.py:546.
+
+    Shape note: the review sketched this as ``merge_fn='m', ensemble_n=3``, but
+    that combination is side-effect-FREE (``_build_oracle_kwargs`` only fires
+    the warning + shim when ``models=`` is set with neither ``merge_fn`` nor
+    ``merge_prompt``), so it could not detect a misplaced gate at all. This uses
+    ``models=[...]`` -- verified to leak a ``_body_merge_*`` registry entry and a
+    ``UserWarning`` today -- which is the shape the finding was actually about.
+    """
+
+    def test_rejected_oracle_node_leaves_no_shim_and_no_warning(self) -> None:
+        scripted_before = set(_decoration_registry.scripted)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.raises(ConstructError):
+                # ORACLE combo (triggered by models=), with max_iterations
+                # dangling -- it owns no modifier this combo carries.
+                @node(
+                    outputs=_GridIO,
+                    name="leak-order",
+                    prompt="summarize ${seed}",
+                    model="reason",
+                    models=["reason", "fast"],
+                    max_iterations=7,
+                )
+                def _fn(seed: _GridIO) -> _GridIO: ...
+
+        leaked = set(_decoration_registry.scripted) - scripted_before
+        assert leaked == set(), (
+            "a rejected @node must not leave a scripted shim behind -- the gate has to run "
+            f"BEFORE the builder dispatch (decorators.py, between :544 and :546); leaked: {sorted(leaked)}"
+        )
+        assert [str(w.message) for w in caught] == [], (
+            "a rejected @node must emit no warning -- _build_oracle_kwargs' body-as-merge "
+            "UserWarning fired, which means a builder ran before the gate"
+        )

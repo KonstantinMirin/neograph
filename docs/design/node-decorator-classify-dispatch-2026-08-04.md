@@ -427,6 +427,19 @@ error naming exactly the kwarg that doesn't belong and the shape being built.
 Today's code has no such check at all; each branch consumes what it recognizes and
 the rest evaporates (§1.7).
 
+**SUPERSEDED (neograph-5nvb0, Phase 3 implementation, 2026-08-05):** the sketch
+above (`v is not None`) is wrong and unshippable — `map_on_error` is `node()`'s
+ONLY non-`None` default (`'raise'`), so an `is not None` test rejects
+`map_on_error='raise'` on every non-Each node in the codebase (every call
+captures it via `locals()` whether the caller wrote it or not). The shipped
+version compares each kwarg's VALUE against its live signature default instead
+(`v != defaults.get(k, v)`, `defaults` derived from `inspect.signature(node)`),
+and the message names the offending kwarg plus its owning trigger(s) directly
+(`"X= requires one of: t="`) rather than an enum-named accept-list, which
+renders empty for the common BARE-node case. See 5nvb0's bead (design field,
+Finding-8 resolution) and `_node_modifier_kwargs._check_kwargs_against_shape`
+for the shipped contract.
+
 ### 2.6 Mode is an orthogonal axis; required/XOR/defaults stay where they are
 
 **Mode is not part of the shape key.** The original brief's

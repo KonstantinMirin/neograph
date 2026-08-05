@@ -312,6 +312,56 @@ def valid_kwargs(combo: ModifierCombo) -> frozenset[str]:
     return frozenset(valid)
 
 
+def _owning_triggers(kwarg: str) -> frozenset[str]:
+    """Every trigger kwarg that would make ``kwarg`` (a satellite) reachable.
+
+    Unions across every ``MODIFIER_KWARGS`` row listing ``kwarg`` as a
+    satellite -- ``on_exhaust`` is shared by both loop and portal, so its
+    owning triggers are ``{loop_when, portal}``, not just one row's.
+    """
+    triggers: set[str] = set()
+    for row in MODIFIER_KWARGS:
+        if kwarg in row.satellites:
+            triggers |= row.triggers
+    return frozenset(triggers)
+
+
+def _check_kwargs_against_shape(
+    kwargs: Mapping[str, Any], combo: ModifierCombo, *, node_label: str, defaults: Mapping[str, Any]
+) -> None:
+    """Reject a passed ``@node`` kwarg that cannot reach any modifier ``combo``
+    actually carries -- the Phase 3 strictness gate.
+
+    Compares each kwarg's VALUE against its live signature default via
+    ``defaults``, never ``is not None``: ``map_on_error`` is ``node()``'s ONLY
+    non-``None`` default (``'raise'``), so an ``is not None`` test would
+    reject ``map_on_error='raise'`` on every non-Each node in the codebase,
+    since every call captures it via ``locals()`` whether the caller wrote it
+    or not. An explicitly-default value is therefore indistinguishable from
+    unset and stays accepted -- this is the only reason the value-vs-default
+    distinction exists.
+
+    ``defaults`` is a PARAMETER, not an internal ``inspect.signature(node)``
+    call: this module cannot import ``decorators.node`` (``decorators.py``
+    imports this module at module level, so that would cycle), and a
+    function-local import back would grow
+    ``FUNCTION_LOCAL_IMPORT_ALLOWLIST``, which must never grow. The caller
+    derives ``defaults`` from the live signature; never a hand-written
+    literal.
+    """
+    passed = {k for k, v in kwargs.items() if v != defaults.get(k, v)}
+    invalid = sorted(passed - valid_kwargs(combo))
+    if not invalid:
+        return
+    parts = [f"{kwarg}= requires one of: {', '.join(f'{t}=' for t in sorted(_owning_triggers(kwarg)))}" for kwarg in invalid]
+    raise ConstructError.build(
+        "; ".join(parts),
+        node=node_label,
+        found=", ".join(f"{k}={kwargs[k]!r}" for k in invalid),
+        hint=f"a {combo.name} node accepts: {sorted(valid_kwargs(combo) - IDENTITY_KWARGS)}",
+    )
+
+
 def derive_combo(kwargs: Mapping[str, Any], *, node_label: str = "?") -> ModifierCombo:
     """Classify which modifiers a ``@node`` kwargs mapping implies.
 

@@ -53,6 +53,7 @@ Design notes
 from __future__ import annotations
 
 import ast
+import functools
 import inspect
 import sys
 import textwrap
@@ -95,6 +96,7 @@ from neograph._node_modifier_kwargs import (  # noqa: E402,F401
     _build_oracle_node,
     _build_portal_kwargs,
     _build_portal_node,
+    _check_kwargs_against_shape,
     _is_trivial_body,
     derive_combo,
 )
@@ -127,6 +129,20 @@ from neograph.modifiers import modifier_names_for_combo
 from neograph.node import Node
 from neograph.renderers import Renderer
 from neograph.tool import Tool
+
+
+@functools.lru_cache(maxsize=1)
+def _node_kwarg_defaults() -> dict[str, Any]:
+    """``node()``'s live signature defaults, keyed by kwarg name (excludes
+    ``fn``). Computed once and cached -- referencing ``node`` here is safe
+    (not a forward-reference cycle): this is only ever CALLED from inside
+    ``decorator(f)``, i.e. after a ``@node``/``@node(...)`` use, by which
+    point the module has finished loading and ``node`` is bound at module
+    scope. ``_check_kwargs_against_shape`` needs these to distinguish an
+    explicitly-default value (accepted) from a genuinely-passed one --
+    ``inspect.signature(node).parameters[name].default``, never a
+    hand-written literal, per _node_modifier_kwargs.py's own docstring."""
+    return {name: p.default for name, p in inspect.signature(node).parameters.items() if name != "fn"}
 
 
 def node(
@@ -542,6 +558,13 @@ def node(
         # structurally unrepresentable here, not merely re-guarded.
         combo = derive_combo(sugar_kwargs, node_label=node_label)
         members = modifier_names_for_combo(combo)
+
+        # Phase 3 strictness gate: a passed kwarg that cannot
+        # reach any modifier `combo` actually carries raises HERE, before any
+        # of the 5 builders below fire a side effect (a rejected node must not
+        # leave a scripted-registry entry or emit a UserWarning behind it --
+        # the same leak class Phase 2 already fixed for oracle+loop/portal).
+        _check_kwargs_against_shape(sugar_kwargs, combo, node_label=node_label, defaults=_node_kwarg_defaults())
 
         if "oracle" in members:
             n = _build_oracle_node(n, node_label=node_label, f=f, kwargs=sugar_kwargs)

@@ -369,6 +369,20 @@ An LLM-mode node (`think`/`agent`/`act`) never runs its body, so — unlike scri
 
 ---
 
+## The `@node` modifier-kwarg registry: `_node_modifier_kwargs.py`
+
+`@node`'s modifier-dispatch sugar (`map_over=`, `loop_when=`, `ensemble_n=`, `interrupt_when=`, `portal=`, and their satellites) is driven by a `ModifierCombo`-keyed registry in `src/neograph/_node_modifier_kwargs.py`, not a flat if/elif chain hand-checking each kwarg:
+
+- **`MODIFIER_KWARGS`** — one `ModifierKwargs` row per modifier (each/oracle/operator/loop/portal), each declaring its `triggers` (any ONE non-`None` means the modifier is requested) and `satellites` (kwargs that configure the modifier once triggered, but never trigger it alone — e.g. `max_iterations`/`on_exhaust` are Loop satellites; `on_exhaust` is ALSO a Portal satellite, since it is shared).
+- **`IDENTITY_KWARGS`** — every `@node` kwarg with no modifier-dispatch meaning (`mode`, `inputs`, `outputs`, `prompt`, etc.) — always valid regardless of combo.
+- **`derive_combo(kwargs, node_label=...)`** — reads which triggers are non-`None`, then resolves the implied modifier-name set through `combo_for_modifier_names` (the one `_COMBO_MAP` validity authority in `modifiers.py`) into a `ModifierCombo`. Raises `ConstructError` for an unrecognized combination.
+- **`valid_kwargs(combo)`** — every kwarg a given `ModifierCombo` legally accepts: `IDENTITY_KWARGS` plus every trigger/satellite of every modifier the combo carries (read via `modifier_names_for_combo`, never a hand-typed combo→kwargs table).
+- **`_check_kwargs_against_shape(kwargs, combo, node_label=, defaults=)`** — the Phase 3 strictness gate: compares each passed kwarg's VALUE against its live signature default (never `is not None` — `map_on_error` is `node()`'s only non-`None` default, so an is-not-None test would reject it on every non-Each node in the codebase) and raises `ConstructError` naming the offending kwarg + its owning trigger(s) if any passed-and-non-default kwarg falls outside `valid_kwargs(combo)`. Called in `decorators.py` between `derive_combo`/`modifier_names_for_combo` and the five modifier builders — BEFORE any builder side effect (a rejected node must not leave a scripted-registry shim or a `UserWarning` behind it).
+
+**The rule for a new `@node` kwarg**: declare its owning row (as a trigger or satellite) in `MODIFIER_KWARGS`, or add it to `IDENTITY_KWARGS` if it carries no modifier-dispatch meaning. `tests/test_guards_modifier_composition_completeness.py` enforces this totality against `inspect.signature(node)` directly — an undeclared 32nd kwarg fails CI.
+
+---
+
 ## Modes and mode inference
 
 `@node` supports five execution modes:

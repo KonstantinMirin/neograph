@@ -1,6 +1,11 @@
 # Valid: the parity kwargs added under neograph-d5pvl — merge_model=
 # (-> Oracle.merge_model) and map_on_error= (-> Each.on_error) — compile
 # through @node. (loop_history= was removed as born-redundant, neograph-eef83.)
+# Extended (Phase 3 strictness gate should_pass twin): merge_pre_process/
+# merge_post_process/merge_fallback each paired with the merge_prompt trigger
+# already on `judge`, and on_exhaust= paired with the loop_when trigger
+# already on `refine` -- every one of Phase 3's 4 newly-gated satellites has
+# a should_pass cell here, alongside the 4 should_fail fixtures.
 from pydantic import BaseModel
 
 from neograph import construct_from_functions, node
@@ -40,6 +45,9 @@ def produce() -> Items:
     ensemble_n=3,
     merge_prompt="merge the verdicts: ${variants}",
     merge_model="fast",
+    merge_pre_process=lambda variants: {"variants": variants},
+    merge_post_process=lambda result, variants: result,
+    merge_fallback=lambda variants, error: variants[0],
 )
 def judge(item: Item) -> Verdict: ...
 
@@ -55,6 +63,7 @@ def seed() -> Draft:
     model="fast",
     loop_when=lambda d: d is None or d.score < 0.8,
     max_iterations=3,
+    on_exhaust="last",
 )
 def refine(seed: Draft) -> Draft: ...
 

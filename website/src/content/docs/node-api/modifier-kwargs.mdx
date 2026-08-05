@@ -451,7 +451,7 @@ def billing(handoff: Handoff) -> Handoff: ...
 | `max_hops=6` | Caps the total hand-offs (the mesh analogue of `max_iterations`). An **entry-only** knob -- declare it on the member that starts the mesh, not on every peer. Defaults to 10. |
 | `on_exhaust="error"` | What happens when the budget is spent: `"error"` (default) raises `ExecutionError`; `"exit"` leaves the mesh cleanly with the last payload. |
 
-The `on_exhaust=` keyword is shared with `Loop` and routed by trigger: with `peers=` it feeds a `Portal` (which accepts `"error"` / `"exit"`), and with `loop_when=` it feeds a `Loop` (which accepts `"error"` / `"last"`). The `Portal` field itself is `Literal["error", "exit"]` -- `"last"` is a `Loop`-only value.
+The `on_exhaust=` keyword is shared with `Loop` and routed by trigger: with `peers=` it feeds a `Portal` (which accepts `"error"` / `"exit"`), and with `loop_when=` it feeds a `Loop` (which accepts `"error"` / `"last"`). The `Portal` field itself is `Literal["error", "exit"]` -- `"last"` is a `Loop`-only value. Passing `on_exhaust=` with NEITHER a `loop_when=`/`portal=` trigger present is a decoration-time `ConstructError` -- the same is true of `max_iterations=` without `loop_when=`, `map_on_error=` (at a non-default value) without `map_over=`, and any of the four `merge_*` hooks without an Oracle trigger.
 
 ### Restrictions
 
