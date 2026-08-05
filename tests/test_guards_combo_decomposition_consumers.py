@@ -389,7 +389,9 @@ class TestComboDispatchScannerMetaTests:
 
     def test_meta_ignores_modifier_presence_read(self):
         """Negative: the presence idiom (_fan_agent.py / __main__.py style, and
-        the sanctioned Each x Oracle fusion co-presence test) is not dispatch."""
+        a co-presence test in this shape -- superseded by decomp.fused, but
+        this scanner's job is only to ignore modifier-PRESENCE reads, not to
+        police which one is canonical) is not dispatch."""
         src = (
             "from neograph.modifiers import classify_modifiers\n"
             "def f(item):\n"

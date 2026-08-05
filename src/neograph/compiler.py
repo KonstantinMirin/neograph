@@ -68,7 +68,6 @@ from neograph.modifiers import (
     SUB_CONSTRUCT_UNSUPPORTED_COMBOS,
     PrimaryShape,
     classify_modifiers,
-    is_each_oracle_fused,
     primary_shape,
 )
 from neograph.naming import field_name_for
@@ -543,9 +542,9 @@ def _add_node_to_graph(
     # Table-driven dispatch: the primary shape from COMBO_DECOMPOSITION drives the
     # match; Operator is the trailing `if operator:` check. Each x Oracle folds to
     # primary=EACH in the table (the fusion is a Node concern), so the fused M x N
-    # topology is split out first via the co-presence of both modifier instances
-    # this arm already consumes — not a second combo enumeration.
-    if is_each_oracle_fused(mods):
+    # topology is split out first via COMBO_DECOMPOSITION[combo].fused -- the
+    # table's own answer to "is this the fusion", not a re-derived check.
+    if COMBO_DECOMPOSITION[combo].fused:
         # Each x Oracle fusion: flat M x N Send topology
         last_name = _add_each_oracle_fused(
             graph,

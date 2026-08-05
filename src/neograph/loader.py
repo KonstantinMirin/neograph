@@ -70,7 +70,6 @@ from neograph.modifiers import (
     Portal,
     PrimaryShape,
     combo_for_modifier_names,
-    is_each_oracle_fused,
 )
 from neograph.naming import field_name_for  # noqa: E402,F401
 from neograph.node import Node
@@ -538,14 +537,10 @@ def from_agent_spec(flow: Any) -> Construct:
 
         item: Any
         # The fusion split runs BEFORE the shape match, exactly as on the export
-        # side, and asks the ONE shared presence predicate rather than open-coding
-        # it -- see neograph-c265k. ``names`` is the recognized modifier-NAME set (the
-        # loader recognizes structure, so it has no Modifier instances to hand
-        # over); ``dict.fromkeys(names, True)`` presents it in the {name: <present>}
-        # mapping shape ``classify_modifiers`` returns. The sentinel must be
-        # non-None: the predicate tests ``mods.get(k) is not None``, so a
-        # None-valued key would read as ABSENT and silently un-fuse the import.
-        if is_each_oracle_fused(dict.fromkeys(names, True)):
+        # side, reading decomp.fused -- the table's own answer, needing no
+        # modifier instances to ask the question of (this loader recognizes
+        # structure, not instances, so it never had any to hand over).
+        if decomp.fused:
             # Fused Each x Oracle -- the MapNode's sub-flow IS an Oracle group.
             item = _reconstruct_fused_each_oracle_node(payload["map_node"], output_types, from_agent_spec)
         else:

@@ -4,9 +4,10 @@
 in `modifiers.py` next to `_COMBO_MAP` as the single source of truth for combo
 *meaning* (decomposition), complementing `_COMBO_MAP`'s single source of truth
 for combo *classification*. These tests pin the table's totality, internal
-consistency, and agreement with `_COMBO_MAP`'s modifier semantics. At this phase
-the table is consumed by nothing yet -- these are the contract for the consumers
-(compiler.py, _agent_spec.py, ...) that migrate onto it in later phases.
+consistency, and agreement with `_COMBO_MAP`'s modifier semantics. They are the
+contract its consumers (compiler.py, state.py, _agent_spec.py, loader.py, ...)
+read the table under -- including the `fused` column, which is the sole authority
+on Each x Oracle fusion (neograph-jtawq.2).
 """
 
 from __future__ import annotations
@@ -52,11 +53,33 @@ class TestComboDecompositionTable:
             assert isinstance(decomp, ComboDecomposition)
             assert isinstance(decomp.primary, PrimaryShape)
             assert isinstance(decomp.has_operator, bool)
+            assert isinstance(decomp.fused, bool)
 
     def test_has_operator_is_true_exactly_for_operator_combos(self) -> None:
         for combo, decomp in COMBO_DECOMPOSITION.items():
             names_the_operator = "OPERATOR" in combo.name.split("_")
             assert decomp.has_operator == names_the_operator, combo
+
+    def test_fused_is_true_exactly_for_the_each_oracle_combos(self) -> None:
+        """G-FUSE: the `fused` column partitions ModifierCombo exactly on
+        Each x Oracle co-membership.
+
+        The expectation is derived from the enum NAME -- the same independent
+        oracle `test_has_operator_is_true_exactly_for_operator_combos` uses --
+        and deliberately NOT from `modifier_names_for_combo` / `_COMBO_MAP`,
+        which is what production derives the column from. Deriving from the
+        production source would be X == X and could never catch a drift.
+        """
+        for combo, decomp in COMBO_DECOMPOSITION.items():
+            names_both = {"EACH", "ORACLE"} <= set(combo.name.split("_"))
+            assert decomp.fused == names_both, combo
+
+    def test_the_fused_partition_is_a_real_split(self) -> None:
+        # Non-vacuity for the derivation above: neither side of the partition
+        # may be empty, or a broken column would satisfy it trivially.
+        fused = {combo for combo, decomp in COMBO_DECOMPOSITION.items() if decomp.fused}
+        assert fused
+        assert fused != set(ModifierCombo)
 
     def test_primary_agrees_with_combo_map_modifier_semantics(self) -> None:
         # Invert _COMBO_MAP (combo -> raw modifier-name frozenset) and confirm
@@ -110,43 +133,48 @@ class TestSubConstructUnsupportedCombos:
         for combo in SUB_CONSTRUCT_UNSUPPORTED_COMBOS:
             assert COMBO_DECOMPOSITION[combo].primary == PrimaryShape.EACH
 
+    def test_equals_the_fused_combos_as_an_intentional_coincidence(self) -> None:
+        """The unsupported set and the `fused` column are two DIFFERENT concepts
+        that happen to share an extension today.
 
-class TestIsEachOracleFused:
-    """`is_each_oracle_fused(mods)` is the ONE named answer to "is this item the
-    fused Each x Oracle node?" (neograph-c265k).
+        "no defined lowering when this combo is attached to a Construct item" is
+        not "carries both Each and Oracle" -- neograph-rh5fb (Loop on a Construct
+        with differing boundary types) is a candidate member that is not a fusion.
+        So `SUB_CONSTRUCT_UNSUPPORTED_COMBOS` stays HAND-WRITTEN and is never
+        derived from `fused`; this pin exists so the day the two concepts diverge
+        fails LOUD here instead of silently redefining one as the other.
+        """
+        assert SUB_CONSTRUCT_UNSUPPORTED_COMBOS == frozenset(
+            combo for combo, decomp in COMBO_DECOMPOSITION.items() if decomp.fused
+        )
 
-    It is deliberately a modifier-PRESENCE read over the dict `classify_modifiers`
-    returns, NOT a decomposition question and NOT a ModifierCombo enumeration:
-    `COMBO_DECOMPOSITION` folds EACH_ORACLE / EACH_ORACLE_OPERATOR to
-    `primary=EACH` (the fusion is a Node concern), so a consumer standing in a
-    `PrimaryShape.EACH` arm needs this second, orthogonal test.
 
-    The import is FUNCTION-LOCAL on purpose. Before the predicate lands these
-    tests fail with `ImportError` (the prescribed TDD-red polarity), and keeping
-    the import out of the module header confines that redness to this class
-    instead of taking the whole file's collection down with it.
+class TestFusedColumn:
+    """`COMBO_DECOMPOSITION[combo].fused` is the ONE answer to "is this the fused
+    Each x Oracle node?" (neograph-jtawq.2, superseding the free-floating
+    `is_each_oracle_fused(mods)` predicate of neograph-c265k).
+
+    Fusion is a fact about the COMBO, not about which Each/Oracle INSTANCES are
+    attached: EACH_ORACLE is fused whichever Each and Oracle it carries. It stays
+    a SECOND, orthogonal question because the table folds EACH_ORACLE /
+    EACH_ORACLE_OPERATOR to `primary=EACH` (the fusion is a Node-level topology
+    concern), so a consumer standing in a `PrimaryShape.EACH` arm still needs it
+    to split a fused node from a plain Each one.
+
+    The exhaustive true/false partition lives in `TestComboDecompositionTable`
+    (G-FUSE), derived from the enum name. The tests here are the readable spot
+    checks plus the end-to-end proof through a real classified Node.
+
+    Gone with the predicate: its `mods.get(name) is not None` slot-polarity test
+    (R-RL2). A column keyed by ModifierCombo has no `mods` dict to be handed a
+    None-valued key, so the failure mode it guarded cannot occur.
     """
 
-    #: combo -> the raw modifier-name frozenset that classifies to it. Inverted
-    #: from `_COMBO_MAP` so the true/false partition below is DERIVED, never
-    #: re-typed -- the same anti-tautology move `_expected_primary` makes.
-    _COMBO_TO_NAMES = {combo: names for names, combo in _COMBO_MAP.items()}
-
-    @staticmethod
-    def _mods_for(names: frozenset[str]) -> dict[str, object]:
-        """A `classify_modifiers`-shaped dict: a key ONLY when the slot is set,
-        each mapping to a non-None modifier stand-in."""
-        return {name: object() for name in names}
-
     def test_is_true_for_the_two_fused_combos(self) -> None:
-        from neograph.modifiers import is_each_oracle_fused
-
         for combo in (ModifierCombo.EACH_ORACLE, ModifierCombo.EACH_ORACLE_OPERATOR):
-            assert is_each_oracle_fused(self._mods_for(self._COMBO_TO_NAMES[combo])) is True, combo
+            assert COMBO_DECOMPOSITION[combo].fused is True, combo
 
     def test_is_false_for_every_non_fused_combo(self) -> None:
-        from neograph.modifiers import is_each_oracle_fused
-
         for combo in (
             ModifierCombo.BARE,
             ModifierCombo.EACH,
@@ -159,63 +187,35 @@ class TestIsEachOracleFused:
             ModifierCombo.PORTAL,
             ModifierCombo.PORTAL_OPERATOR,
         ):
-            assert is_each_oracle_fused(self._mods_for(self._COMBO_TO_NAMES[combo])) is False, combo
+            assert COMBO_DECOMPOSITION[combo].fused is False, combo
 
-    def test_is_true_for_exactly_the_combos_carrying_both_modifiers(self) -> None:
-        """Totality, derived from `_COMBO_MAP`: over EVERY combo the predicate
-        agrees with "the raw modifier names contain both each and oracle".
-
-        This is the load-bearing test -- the two above are readable spot checks
-        of the same partition. Written as a derivation so a new combo added to
-        `_COMBO_MAP` is covered automatically and the pair is never re-typed.
-        """
-        from neograph.modifiers import is_each_oracle_fused
-
-        fused = {combo for combo, names in self._COMBO_TO_NAMES.items() if is_each_oracle_fused(self._mods_for(names))}
-        expected = {combo for combo, names in self._COMBO_TO_NAMES.items() if {"each", "oracle"} <= names}
-        assert fused == expected
-        # ...and the derivation is not vacuous: the partition is a real split.
-        assert fused and fused != set(ModifierCombo)
-
-    def test_is_false_when_a_slot_key_carries_none(self) -> None:
-        """R-RL2: the body is spelled `mods.get(name) is not None`, not
-        `name in mods`. Under `classify_modifiers`'s key-only-when-set contract
-        the two are equivalent; for any OTHER dict (a serialized node spec, a
-        hand-built one) the `.get` form stays correct where membership silently
-        reports a fusion that is not there.
-        """
-        from neograph.modifiers import is_each_oracle_fused
-
-        assert is_each_oracle_fused({"each": None, "oracle": object()}) is False
-        assert is_each_oracle_fused({"each": object(), "oracle": None}) is False
-        assert is_each_oracle_fused({}) is False
-
-    def test_agrees_with_classify_modifiers_on_a_real_fused_node(self) -> None:
+    def test_splits_a_real_fused_node_from_a_real_plain_each_node(self) -> None:
         """End-to-end through the PROGRAMMATIC surface: a genuinely fused Node
         built with `Node.scripted(...) | Oracle(...) | Each(...)`, classified by
-        the real `classify_modifiers`, and handed to the predicate -- not a
-        hand-rolled dict. Pins that the predicate reads the shape the compiler
-        actually meets, and that it agrees with the table's `primary=EACH` fold.
+        the real `classify_modifiers`, then asked through the table -- not a
+        hand-rolled dict. Pins that the column answers for the shape the compiler
+        actually meets, and that it still splits two nodes the `primary=EACH`
+        fold makes indistinguishable.
         """
-        from neograph.modifiers import classify_modifiers, is_each_oracle_fused
+        from neograph.modifiers import classify_modifiers
         from neograph.node import Node
         from tests.fakes import register_scripted
         from tests.schemas import Claims
 
-        register_scripted("c265k_gen", lambda v, c: Claims(items=["a"]))
-        register_scripted("c265k_merge", lambda v, c: v[0])
+        register_scripted("jtawq2_gen", lambda v, c: Claims(items=["a"]))
+        register_scripted("jtawq2_merge", lambda v, c: v[0])
 
         fused = (
-            Node.scripted("c265k_fused", fn="c265k_gen", outputs=Claims)
-            | Oracle(n=2, merge_fn="c265k_merge")
+            Node.scripted("jtawq2_fused", fn="jtawq2_gen", outputs=Claims)
+            | Oracle(n=2, merge_fn="jtawq2_merge")
             | Each(over="x.y", key="k")
         )
-        combo, mods = classify_modifiers(fused)
+        combo, _mods = classify_modifiers(fused)
         assert combo is ModifierCombo.EACH_ORACLE
-        assert COMBO_DECOMPOSITION[combo].primary is PrimaryShape.EACH  # the fold that forces the 2nd test
-        assert is_each_oracle_fused(mods) is True
+        assert COMBO_DECOMPOSITION[combo].primary is PrimaryShape.EACH  # the fold that forces the 2nd question
+        assert COMBO_DECOMPOSITION[combo].fused is True
 
-        plain_each = Node.scripted("c265k_plain", fn="c265k_gen", outputs=Claims) | Each(over="x.y", key="k")
-        plain_combo, plain_mods = classify_modifiers(plain_each)
+        plain_each = Node.scripted("jtawq2_plain", fn="jtawq2_gen", outputs=Claims) | Each(over="x.y", key="k")
+        plain_combo, _plain_mods = classify_modifiers(plain_each)
         assert COMBO_DECOMPOSITION[plain_combo].primary is PrimaryShape.EACH  # SAME primary shape...
-        assert is_each_oracle_fused(plain_mods) is False  # ...and the predicate still splits them
+        assert COMBO_DECOMPOSITION[plain_combo].fused is False  # ...and the column still splits them

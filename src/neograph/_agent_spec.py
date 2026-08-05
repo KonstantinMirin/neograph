@@ -52,7 +52,6 @@ from neograph.modifiers import (
     SUB_CONSTRUCT_UNSUPPORTED_COMBOS,
     PrimaryShape,
     classify_modifiers,
-    is_each_oracle_fused,
 )
 from neograph.naming import field_name_for, split_output_field
 from neograph.node import Node
@@ -224,7 +223,7 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
     # arm, so PORTAL_OPERATOR keeps its specific text rather than a generic one.
     decomp = COMBO_DECOMPOSITION[combo]
 
-    if is_each_oracle_fused(mods):
+    if decomp.fused:
         # Each x Oracle: ONE MapNode whose subflow IS the un-fused Oracle
         # variant-fan-out + merge that _lower_oracle already produces. Composed,
         # not re-implemented — _lower_each grows an optional caller-lowered body

@@ -17,7 +17,6 @@ from neograph.modifiers import (
     Each,
     PrimaryShape,
     classify_modifiers,
-    is_each_oracle_fused,
 )
 from neograph.naming import output_field_name
 from neograph.node import Node, TypeSpecStatic
@@ -85,9 +84,9 @@ def _build_state_update(
     match COMBO_DECOMPOSITION[combo].primary:
         case PrimaryShape.EACH:
             # EACH_ORACLE decomposes to primary=EACH, so the fusion is split out
-            # here by modifier CO-PRESENCE (the idiom compiler.py:622 uses), not
-            # by a second combo enumeration.
-            each_mod = None if is_each_oracle_fused(mods) else mods["each"]
+            # here by reading COMBO_DECOMPOSITION[combo].fused -- the table's
+            # own answer, not a second combo enumeration.
+            each_mod = None if COMBO_DECOMPOSITION[combo].fused else mods["each"]
         case PrimaryShape.BARE | PrimaryShape.ORACLE | PrimaryShape.LOOP | PrimaryShape.PORTAL:
             # PORTAL (with or without an Operator approval gate): a mesh member
             # writes its own output plainly (no Each key-wrapping).

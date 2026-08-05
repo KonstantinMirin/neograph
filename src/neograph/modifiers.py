@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections.abc import (
     Callable,
     Iterable,
-    Mapping,
     Sequence,  # noqa: E402,F401
 )
 from enum import Enum, auto
@@ -100,6 +99,27 @@ _COMBO_MAP: dict[frozenset[str], ModifierCombo] = {
 }
 
 
+def modifier_names_for_combo(combo: ModifierCombo) -> frozenset[str]:
+    """The modifier names a combo is composed of -- the inverse of
+    ``_COMBO_MAP``, and the ONLY sanctioned way to ask "does this combo carry
+    an Each / an Oracle / a Loop?".
+
+    Exists so consumers that need MEMBERSHIP (rather than the decomposed
+    primary shape) read the table instead of hand-typing a combo list.
+    Also the source ``COMBO_DECOMPOSITION``'s ``fused`` column is derived
+    from at table-definition time (neograph-jtawq.2) -- hoisted above the
+    table for exactly that reason; it depends on ``_COMBO_MAP`` only.
+    """
+    for names, value in _COMBO_MAP.items():
+        if value is combo:
+            return names
+    raise ConstructError.build(  # pragma: no cover - unreachable while _COMBO_MAP is total
+        "ModifierCombo missing from _COMBO_MAP",
+        found=combo.name,
+        hint="every ModifierCombo value must appear exactly once in _COMBO_MAP",
+    )
+
+
 class PrimaryShape(Enum):
     """The primary body-shape a ModifierCombo decomposes to, orthogonal to
     the Operator wrapper. Every combo reduces to exactly one of these five."""
@@ -113,13 +133,15 @@ class PrimaryShape(Enum):
 
 class ComboDecomposition(NamedTuple):
     """How a ModifierCombo decomposes into a primary body-shape plus an
-    optional orthogonal Operator wrapper. This is the ONE place that answers
-    "what does this combo mean"; consumers (compiler.py, _agent_spec.py, and
-    the other combo-dispatch sites) consult it instead of re-deriving it.
+    optional orthogonal Operator wrapper, plus whether it is the fused
+    Each x Oracle combo. This is the ONE place that answers "what does this
+    combo mean"; consumers (compiler.py, _agent_spec.py, and the other
+    combo-dispatch sites) consult it instead of re-deriving it.
     """
 
     primary: PrimaryShape  # BARE | EACH | ORACLE | LOOP | PORTAL
     has_operator: bool  # True for every *_OPERATOR combo
+    fused: bool  # True for EACH_ORACLE / EACH_ORACLE_OPERATOR (neograph-jtawq.2)
 
 
 # Single source of truth for combo *meaning* (decomposition), complementing
@@ -128,20 +150,31 @@ class ComboDecomposition(NamedTuple):
 # by a partition guard the same shape as _COMBO_MAP's own exhaustiveness.
 # EACH_ORACLE/EACH_ORACLE_OPERATOR are primary=EACH because compiler.py fuses
 # them (a single Node's map_over/ensemble_n M x N Send topology) rather than
-# nesting -- the fusion, not a table gap.
+# nesting -- the fusion, not a table gap. `fused` is DERIVED from
+# modifier_names_for_combo (never hand-set) so it can never drift from what
+# the table's own membership authority says (neograph-jtawq.2).
+_COMBO_PRIMARY_OPERATOR: dict[ModifierCombo, tuple[PrimaryShape, bool]] = {
+    ModifierCombo.BARE: (PrimaryShape.BARE, False),
+    ModifierCombo.EACH: (PrimaryShape.EACH, False),
+    ModifierCombo.ORACLE: (PrimaryShape.ORACLE, False),
+    ModifierCombo.LOOP: (PrimaryShape.LOOP, False),
+    ModifierCombo.OPERATOR: (PrimaryShape.BARE, True),
+    ModifierCombo.PORTAL: (PrimaryShape.PORTAL, False),
+    ModifierCombo.EACH_ORACLE: (PrimaryShape.EACH, False),  # fused
+    ModifierCombo.EACH_OPERATOR: (PrimaryShape.EACH, True),
+    ModifierCombo.ORACLE_OPERATOR: (PrimaryShape.ORACLE, True),
+    ModifierCombo.LOOP_OPERATOR: (PrimaryShape.LOOP, True),
+    ModifierCombo.EACH_ORACLE_OPERATOR: (PrimaryShape.EACH, True),  # fused + operator
+    ModifierCombo.PORTAL_OPERATOR: (PrimaryShape.PORTAL, True),
+}
+
 COMBO_DECOMPOSITION: dict[ModifierCombo, ComboDecomposition] = {
-    ModifierCombo.BARE: ComboDecomposition(PrimaryShape.BARE, False),
-    ModifierCombo.EACH: ComboDecomposition(PrimaryShape.EACH, False),
-    ModifierCombo.ORACLE: ComboDecomposition(PrimaryShape.ORACLE, False),
-    ModifierCombo.LOOP: ComboDecomposition(PrimaryShape.LOOP, False),
-    ModifierCombo.OPERATOR: ComboDecomposition(PrimaryShape.BARE, True),
-    ModifierCombo.PORTAL: ComboDecomposition(PrimaryShape.PORTAL, False),
-    ModifierCombo.EACH_ORACLE: ComboDecomposition(PrimaryShape.EACH, False),  # fused
-    ModifierCombo.EACH_OPERATOR: ComboDecomposition(PrimaryShape.EACH, True),
-    ModifierCombo.ORACLE_OPERATOR: ComboDecomposition(PrimaryShape.ORACLE, True),
-    ModifierCombo.LOOP_OPERATOR: ComboDecomposition(PrimaryShape.LOOP, True),
-    ModifierCombo.EACH_ORACLE_OPERATOR: ComboDecomposition(PrimaryShape.EACH, True),  # fused + operator
-    ModifierCombo.PORTAL_OPERATOR: ComboDecomposition(PrimaryShape.PORTAL, True),
+    combo: ComboDecomposition(
+        primary,
+        has_operator,
+        {"each", "oracle"} <= modifier_names_for_combo(combo),
+    )
+    for combo, (primary, has_operator) in _COMBO_PRIMARY_OPERATOR.items()
 }
 
 
@@ -251,26 +284,6 @@ def combo_for_modifier_names(names: Iterable[str], *, context: str = "?") -> Mod
     return combo
 
 
-def modifier_names_for_combo(combo: ModifierCombo) -> frozenset[str]:
-    """The modifier names a combo is composed of -- the inverse of
-    ``_COMBO_MAP``, and the ONLY sanctioned way to ask "does this combo carry
-    an Each / an Oracle / a Loop?".
-
-    Exists so consumers that need MEMBERSHIP (rather than the decomposed
-    primary shape) read the table instead of hand-typing a combo list.
-    ``COMBO_DECOMPOSITION`` cannot answer this: EACH_ORACLE decomposes to
-    primary=EACH with has_operator=False, so the Oracle is invisible there.
-    """
-    for names, value in _COMBO_MAP.items():
-        if value is combo:
-            return names
-    raise ConstructError.build(  # pragma: no cover - unreachable while _COMBO_MAP is total
-        "ModifierCombo missing from _COMBO_MAP",
-        found=combo.name,
-        hint="every ModifierCombo value must appear exactly once in _COMBO_MAP",
-    )
-
-
 def primary_shape(item: ConstructItem) -> PrimaryShape:
     """The primary body-shape `item`'s modifier combo decomposes to.
 
@@ -283,26 +296,6 @@ def primary_shape(item: ConstructItem) -> PrimaryShape:
     rather than re-classifying.
     """
     return COMBO_DECOMPOSITION[classify_modifiers(item)[0]].primary
-
-
-def is_each_oracle_fused(mods: Mapping[str, object]) -> bool:
-    """True when this item carries BOTH Each and Oracle -- the fused M x N Send
-    topology ``compiler.py``'s ``_add_each_oracle_fused`` lowers.
-
-    A modifier-PRESENCE read, deliberately NOT a decomposition question.
-    ``COMBO_DECOMPOSITION`` folds EACH_ORACLE / EACH_ORACLE_OPERATOR to
-    ``primary=EACH`` (the fusion is a Node-level concern), so a consumer standing
-    in a ``PrimaryShape.EACH`` arm needs this second, orthogonal test to tell a
-    fused node from a plain Each one. ``mods`` is the dict ``classify_modifiers``
-    returns.
-
-    Inside a ``PrimaryShape.EACH`` arm the ``each`` half is redundant-but-true
-    (every EACH-primary combo contains ``each``). It is kept so this ONE definition
-    also reads correctly at ``compiler.py``'s pre-``match`` call site, and so the
-    concept has a single spelling rather than two. Do NOT "optimize" a call site
-    back to a bare ``"oracle" in mods``.
-    """
-    return mods.get("each") is not None and mods.get("oracle") is not None
 
 
 class _PathRecorder:

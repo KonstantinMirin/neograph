@@ -223,8 +223,6 @@ def build_cell(mode: str, combo: ModifierCombo, config: str | None, shape: str) 
 
     # Which modifiers this cell must carry is DERIVED from the single _COMBO_MAP
     # (via modifier_names_for_combo), never from a second hand-typed combo list.
-    # COMBO_DECOMPOSITION cannot answer it: EACH_ORACLE folds to primary=EACH with
-    # has_operator=False, so the Oracle is invisible there. neograph-s7zt3.10.
     names = modifier_names_for_combo(combo)
     wants_each = "each" in names
     wants_oracle = "oracle" in names

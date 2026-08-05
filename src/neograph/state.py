@@ -47,7 +47,6 @@ from neograph.modifiers import (
     PrimaryShape,
     _group_portal_members,
     classify_modifiers,
-    is_each_oracle_fused,
     primary_shape,
 )
 from neograph.node import Node
@@ -395,9 +394,9 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
 
     # Dict-form outputs: one state field per key (neograph-1bp.2).
     if no.is_dict_form:
-        combo, mods = classify_modifiers(node)
+        combo, _ = classify_modifiers(node)
         match COMBO_DECOMPOSITION[combo].primary:
-            case PrimaryShape.EACH if is_each_oracle_fused(mods):
+            case PrimaryShape.EACH if COMBO_DECOMPOSITION[combo].fused:
                 # Each×Oracle fusion + dict-form: tagged collector + dict output
                 # per key. Same as single-type fusion but per-key.
                 #
@@ -452,14 +451,14 @@ def _add_single_output_field(
     fields: dict[str, Any],
 ) -> None:
     """Add one output field to the state model, applying modifier wrapping."""
-    combo, mods = classify_modifiers(node)
+    combo, _ = classify_modifiers(node)
     match COMBO_DECOMPOSITION[combo].primary:
         case PrimaryShape.EACH:
             # The Each×Oracle fusion adds a tagged collector; its FINAL output
             # field is otherwise identical to plain Each's (dict[str, merged]),
             # so the two paths share the field build rather than duplicating it.
-            # Split by modifier co-presence, not by a second combo enumeration.
-            if is_each_oracle_fused(mods):
+            # Split by COMBO_DECOMPOSITION[combo].fused, the table's own answer.
+            if COMBO_DECOMPOSITION[combo].fused:
                 collector_field = StateKeys.eachoracle_collector(field_name)
                 fields[collector_field] = (
                     Annotated[list, _concat_reducer],
