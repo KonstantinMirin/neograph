@@ -731,6 +731,10 @@ class TestAgentSpecRoundTripMatrix:
 
         construct = build_cell(mode, combo, config, shape)
         flow = to_agent_spec(construct)
+        # WIRE tier (neograph-dgbqv.1): every GREEN cell round-trips through the
+        # actual serialization boundary, not just the in-memory Flow object --
+        # the same hop a real Agent Spec consumer would make.
+        flow = type(flow).from_dict(flow.to_dict())
         imported = from_agent_spec(flow)
         assert isinstance(imported, Construct)
         assert imported.nodes
