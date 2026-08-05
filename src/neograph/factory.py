@@ -15,6 +15,7 @@ from langgraph.types import Command, interrupt
 from pydantic import BaseModel, ValidationError
 
 from neograph._agent_cycle import cycle_names, make_agent_cycle_bodies
+from neograph._agent_spec_markers import import_pyagentspec
 from neograph._dispatch import _dispatch_for_mode
 from neograph._execute import _aexecute_node, _execute_node, _type_name
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
@@ -816,21 +817,15 @@ def make_portal_dispatch_fn(
         # compiler.py imports _wiring -> factory, so a module-level `from
         # neograph.compiler import compile` would cycle. `AgentSpecDeserializer`
         # is function-local for the OTHER reason function-local imports are
-        # allowlisted: an optional-dependency guard (mirrors
-        # `_agent_spec._import_agent_spec_flow_classes()`) -- src/neograph stays
-        # Agent-Spec-free by default. from_agent_spec / _scan_subgraph_output /
+        # allowlisted: an optional-dependency guard, now routed through the
+        # shared `import_pyagentspec` helper (neograph-jtawq.7) -- src/neograph
+        # stays Agent-Spec-free by default. from_agent_spec / _scan_subgraph_output /
         # lookup_type are module-level (their modules do not import factory).
         from neograph.compiler import compile as compile_construct
 
-        try:
-            from pyagentspec.serialization import AgentSpecDeserializer
-        except ImportError as exc:
-            raise ConfigurationError.build(
-                "pyagentspec is not installed",
-                expected="the [agent-spec] optional extra",
-                found="ImportError on pyagentspec.serialization",
-                hint="install with: uv sync --extra agent-spec (or pip install neograph[agent-spec])",
-            ) from exc
+        AgentSpecDeserializer = import_pyagentspec(
+            "pyagentspec.serialization", found="ImportError on pyagentspec.serialization"
+        ).AgentSpecDeserializer
 
         decision = update[payload_field]
         spec_dict = getattr(decision, spec_field)

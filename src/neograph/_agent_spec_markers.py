@@ -40,25 +40,43 @@ _MARK_PORTAL_OPERATOR_SPEC = "neograph/portal_operator_spec"
 _MARK_PROMPT_SPEC = "neograph/prompt_spec"
 
 
-def _import_agent_spec_flow_classes() -> Any:
-    """Function-local import of pyagentspec's Flow/node/edge classes.
+def import_pyagentspec(*module_paths: str, found: str | None = None) -> Any:
+    """The one shared guarded-import helper for reaching the optional
+    ``pyagentspec`` dependency from anywhere in ``src/neograph``.
 
-    Copies ``spec_types._import_agent_spec_property_classes()``'s exact
-    import-guard shape so ``src/neograph`` core stays Agent-Spec-free by
-    default — only calling ``to_agent_spec()`` pulls in the optional
-    ``[agent-spec]`` extra.
+    Every call site that used to hand-roll its own ``try: import
+    pyagentspec.x ... except ImportError: raise ConfigurationError(...)``
+    block calls this instead, so the message/hint shape can never drift
+    per-site. Imports each dotted module path in ``module_paths`` (via
+    ``importlib``, so the import stays function-local to THIS call and never
+    reaches module level); returns the single imported module when only one
+    path is given, or a tuple of modules in the same order otherwise.
     """
+    import importlib
+
     try:
-        import pyagentspec.flows.edges as edges_mod
-        import pyagentspec.flows.flow as flow_mod
-        import pyagentspec.flows.nodes as nodes_mod
-        import pyagentspec.property as property_mod
-        import pyagentspec.tools as tools_mod
+        modules = tuple(importlib.import_module(path) for path in module_paths)
     except ImportError as exc:
         raise ConfigurationError.build(
             "pyagentspec is not installed",
             expected="the [agent-spec] optional extra",
-            found="ImportError on pyagentspec.flows/property/tools",
+            found=found or f"ImportError on {'/'.join(module_paths)}",
             hint="install with: uv sync --extra agent-spec (or pip install neograph[agent-spec])",
         ) from exc
-    return nodes_mod, flow_mod, edges_mod, property_mod, tools_mod
+    return modules[0] if len(modules) == 1 else modules
+
+
+def _import_agent_spec_flow_classes() -> Any:
+    """Function-local import of pyagentspec's Flow/node/edge classes.
+
+    Thin wrapper over ``import_pyagentspec`` -- only calling ``to_agent_spec()``
+    pulls in the optional ``[agent-spec]`` extra.
+    """
+    return import_pyagentspec(
+        "pyagentspec.flows.nodes",
+        "pyagentspec.flows.flow",
+        "pyagentspec.flows.edges",
+        "pyagentspec.property",
+        "pyagentspec.tools",
+        found="ImportError on pyagentspec.flows/property/tools",
+    )

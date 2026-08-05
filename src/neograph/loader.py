@@ -35,6 +35,7 @@ from neograph._agent_spec_markers import (
     _MARK_PORTAL_OPERATOR_SPEC,
     _MARK_PORTAL_SPEC,
     _MARK_PROMPT_SPEC,
+    import_pyagentspec,
 )
 from neograph._normalize import (
     _with_declared_io,
@@ -83,21 +84,10 @@ log = structlog.get_logger()
 def _import_agent_spec_import_classes() -> Any:
     """Function-local import of pyagentspec's Flow/node classes for import.
 
-    Copies ``_agent_spec._import_agent_spec_flow_classes()``'s exact
-    import-guard shape so ``src/neograph`` core stays Agent-Spec-free by
-    default -- only calling ``from_agent_spec()`` pulls in the optional
-    ``[agent-spec]`` extra.
+    Thin wrapper over ``import_pyagentspec`` -- only calling
+    ``from_agent_spec()`` pulls in the optional ``[agent-spec]`` extra.
     """
-    try:
-        import pyagentspec.flows.nodes as nodes_mod
-    except ImportError as exc:
-        raise ConfigurationError.build(
-            "pyagentspec is not installed",
-            expected="the [agent-spec] optional extra",
-            found="ImportError on pyagentspec.flows.nodes",
-            hint="install with: uv sync --extra agent-spec (or pip install neograph[agent-spec])",
-        ) from exc
-    return nodes_mod
+    return import_pyagentspec("pyagentspec.flows.nodes", found="ImportError on pyagentspec.flows.nodes")
 
 
 # Per-family endpoint attribute names for the client-initiated remote-agent

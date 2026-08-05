@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, create_model
 
+from neograph._agent_spec_markers import import_pyagentspec
 from neograph.errors import ConfigurationError
 from neograph.spec_types import _REF_POINTER_PREFIX, _no_repr_check, lookup_type, register_type
 
@@ -40,20 +41,10 @@ if TYPE_CHECKING:
 def _import_agent_spec_property_classes() -> Any:
     """Function-local import of pyagentspec's Property classes.
 
-    Import-guarded so ``src/neograph`` core stays Agent-Spec-free by
-    default -- only calling one of the two bridge functions below pulls in
-    the optional ``[agent-spec]`` extra.
+    Thin wrapper over ``import_pyagentspec`` -- only calling one of the two
+    bridge functions below pulls in the optional ``[agent-spec]`` extra.
     """
-    try:
-        import pyagentspec.property as pyagentspec_property
-    except ImportError as exc:
-        raise ConfigurationError.build(
-            "pyagentspec is not installed",
-            expected="the [agent-spec] optional extra",
-            found="ImportError on pyagentspec.property",
-            hint="install with: uv sync --extra agent-spec (or pip install neograph[agent-spec])",
-        ) from exc
-    return pyagentspec_property
+    return import_pyagentspec("pyagentspec.property", found="ImportError on pyagentspec.property")
 
 
 def _normalize_erased_property(prop: Property) -> Property:
