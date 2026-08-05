@@ -1,0 +1,754 @@
+<title>Schematic: Agent Spec Export</title>
+<style>
+  /* ---------- tokens ---------- */
+  :root{
+    --bg:#EEF1EE; --bg-raised:#E4E8E3; --bg-sunk:#E2E6DF;
+    --ink:#1A1E1B; --muted:#55605A; --line:#C7CFC7; --line-strong:#9DA89F;
+    --brass:#8C6226; --rust:#A2483A; --pine:#2E6E5F;
+    --code-bg:#E2E6DF; --code-ink:#20241F;
+    --font-display: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --font-body: Charter, "Iowan Old Style", Georgia, "Times New Roman", serif;
+    --font-mono: var(--font-display);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#14181A; --bg-raised:#1B2022; --bg-sunk:#171C1D;
+      --ink:#E7ECE7; --muted:#9AA79E; --line:#2B3230; --line-strong:#3A423F;
+      --brass:#C99A4E; --rust:#D07B6C; --pine:#63B39F;
+      --code-bg:#0F1314; --code-ink:#D8E0DA;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#14181A; --bg-raised:#1B2022; --bg-sunk:#171C1D;
+    --ink:#E7ECE7; --muted:#9AA79E; --line:#2B3230; --line-strong:#3A423F;
+    --brass:#C99A4E; --rust:#D07B6C; --pine:#63B39F;
+    --code-bg:#0F1314; --code-ink:#D8E0DA;
+  }
+  :root[data-theme="light"]{
+    --bg:#EEF1EE; --bg-raised:#E4E8E3; --bg-sunk:#E2E6DF;
+    --ink:#1A1E1B; --muted:#55605A; --line:#C7CFC7; --line-strong:#9DA89F;
+    --brass:#8C6226; --rust:#A2483A; --pine:#2E6E5F;
+    --code-bg:#E2E6DF; --code-ink:#20241F;
+  }
+
+  *{box-sizing:border-box}
+  html{background:var(--bg)}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--font-body); font-size:16.5px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  @media (prefers-reduced-motion:no-preference){ html{scroll-behavior:smooth} }
+  a{color:var(--brass)}
+  a:focus-visible, button:focus-visible, [tabindex]:focus-visible{
+    outline:2px solid var(--brass); outline-offset:2px;
+  }
+
+  h1,h2,h3,.eyebrow,.label,.plate figcaption .fig-id,nav.toc{ font-family:var(--font-display); }
+  h1,h2,h3{ text-wrap:balance; font-weight:700; letter-spacing:-0.01em; }
+  h1{ font-size:1.9rem; margin:0 0 .25rem; }
+  h2{ font-size:1.15rem; margin:0 0 1rem; text-transform:uppercase; letter-spacing:.04em; }
+  h3{ font-size:1rem; margin:1.6rem 0 .6rem; color:var(--ink); }
+  p{ margin:0 0 1rem; text-wrap:pretty; }
+  strong{ color:var(--ink); }
+  code, .mono{ font-family:var(--font-mono); font-size:.88em; }
+
+  .eyebrow{
+    display:block; font-size:.72rem; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--muted); margin-bottom:.6rem;
+  }
+
+  /* ---------- layout ---------- */
+  .layout{
+    max-width:1120px; margin:0 auto; padding:2.4rem 1.5rem 6rem;
+    display:grid; grid-template-columns:210px minmax(0,1fr); gap:3rem;
+  }
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; padding-top:0; }
+  }
+  .prose{ max-width:40rem; }
+  .plate{ max-width:none; }
+
+  /* ---------- title block ---------- */
+  .titleblock{
+    grid-column:1/-1; border:1px solid var(--line-strong); background:var(--bg-raised);
+    padding:1.6rem 1.8rem; margin-bottom:.5rem;
+  }
+  .titleblock h1{ font-size:2rem; }
+  .titleblock .sub{ font-family:var(--font-body); font-style:italic; color:var(--muted); max-width:44rem; margin-top:.4rem; }
+  .tb-meta{
+    display:flex; flex-wrap:wrap; gap:1.2rem 2rem; margin-top:1.4rem; padding-top:1rem;
+    border-top:1px solid var(--line); font-family:var(--font-mono); font-size:.78rem;
+    letter-spacing:.03em; color:var(--muted);
+  }
+  .tb-meta b{ color:var(--ink); font-weight:600; }
+  .legend{ display:flex; gap:1.4rem; align-items:center; flex-wrap:wrap; }
+  .legend .swatch{ display:inline-flex; align-items:center; gap:.45rem; }
+  .legend i{
+    width:.9em; height:.9em; display:inline-block; border-radius:1px; flex:none;
+  }
+  .legend i.broken{ background:var(--rust); }
+  .legend i.fixed{ background:var(--pine); }
+  .legend i.neutral{ background:var(--line-strong); }
+
+  /* ---------- toc ---------- */
+  nav.toc{ position:sticky; top:2rem; align-self:start; font-size:.78rem; }
+  nav.toc ol{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.15rem; }
+  nav.toc a{
+    display:block; padding:.35rem .1rem; color:var(--muted); text-decoration:none;
+    border-left:2px solid transparent; padding-left:.7rem; letter-spacing:.02em;
+  }
+  nav.toc a:hover, nav.toc a:focus-visible{ color:var(--ink); border-left-color:var(--line-strong); }
+  nav.toc .toc-head{
+    text-transform:uppercase; letter-spacing:.12em; color:var(--muted); font-size:.68rem;
+    margin-bottom:.6rem; display:block;
+  }
+  @media (max-width:900px){
+    nav.toc{
+      position:sticky; top:0; z-index:5; background:var(--bg); border-bottom:1px solid var(--line);
+      padding:.8rem 1.5rem; margin:0 -1.5rem 1.5rem;
+    }
+    nav.toc ol{ flex-direction:row; overflow-x:auto; gap:1.1rem; padding-bottom:.2rem; }
+    nav.toc a{ white-space:nowrap; border-left:none; padding-left:0; border-bottom:2px solid transparent; }
+    nav.toc a:hover{ border-bottom-color:var(--line-strong); }
+    nav.toc .toc-head{ display:none; }
+  }
+
+  main{ display:flex; flex-direction:column; gap:4.2rem; min-width:0; }
+  section{ scroll-margin-top:1.5rem; }
+  section > .eyebrow .n{ color:var(--brass); }
+
+  /* ---------- plates (diagrams / code / tables) ---------- */
+  figure.plate{
+    margin:1.4rem 0; border:1px solid var(--line); background:var(--bg-raised);
+  }
+  figure.plate .plate-body{ padding:1.2rem 1.3rem; overflow-x:auto; }
+  figure.plate figcaption{
+    display:flex; gap:.6rem; align-items:baseline; padding:.55rem 1.3rem;
+    border-top:1px solid var(--line); font-size:.78rem; color:var(--muted);
+    font-family:var(--font-mono);
+  }
+  figure.plate figcaption .fig-id{ color:var(--brass); font-weight:700; flex:none; }
+  svg.diagram{ display:block; width:100%; height:auto; font-family:var(--font-mono); }
+  svg.diagram text{ fill:var(--ink); }
+  svg.diagram .muted-text{ fill:var(--muted); }
+  svg.diagram .node{ fill:var(--bg-sunk); stroke:var(--line-strong); stroke-width:1.4; }
+  svg.diagram .node.broken{ stroke:var(--rust); }
+  svg.diagram .node.fixed{ stroke:var(--pine); }
+  svg.diagram .node.unreached{ fill:none; stroke:var(--line); stroke-dasharray:3 3; }
+  svg.diagram .edge{ fill:none; stroke:var(--line-strong); stroke-width:1.4; }
+  svg.diagram .edge.broken{ stroke:var(--rust); stroke-dasharray:5 4; }
+  svg.diagram .edge.fixed{ stroke:var(--pine); }
+  svg.diagram .edge-label{ fill:var(--muted); font-size:9.5px; }
+  svg.diagram .cap{ fill:var(--rust); font-weight:700; }
+
+  .pair{ display:flex; gap:1.6rem; flex-wrap:wrap; }
+  .pair > figure{ flex:1 1 300px; margin:1rem 0; }
+  .pair-tag{
+    display:inline-block; font-family:var(--font-mono); font-size:.68rem; letter-spacing:.1em;
+    text-transform:uppercase; padding:.15rem .5rem; margin-bottom:.7rem; border:1px solid currentColor;
+  }
+  .pair-tag.broken{ color:var(--rust); }
+  .pair-tag.fixed{ color:var(--pine); }
+
+  pre.code{
+    margin:0; background:var(--code-bg); color:var(--code-ink); padding:1rem 1.1rem;
+    font-family:var(--font-mono); font-size:.82rem; line-height:1.55; overflow-x:auto;
+    border-left:3px solid var(--line-strong);
+  }
+  pre.code.broken{ border-left-color:var(--rust); }
+  pre.code.fixed{ border-left-color:var(--pine); }
+  pre.code .c{ color:var(--muted); font-style:italic; }
+  pre.code .s{ color:var(--pine); }
+  pre.code .err{ color:var(--rust); }
+
+  table.spec{ border-collapse:collapse; width:100%; font-size:.86rem; }
+  table.spec th, table.spec td{
+    border-bottom:1px solid var(--line); padding:.55rem .7rem; text-align:left; vertical-align:top;
+  }
+  table.spec thead th{
+    font-family:var(--font-mono); font-size:.68rem; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--muted); border-bottom:1px solid var(--line-strong);
+  }
+  table.spec td code{ white-space:nowrap; }
+  table.spec tr:last-child td{ border-bottom:none; }
+
+  .disposition td.who{ font-family:var(--font-mono); font-weight:700; color:var(--brass); white-space:nowrap; }
+
+  .callout{
+    border-left:3px solid var(--brass); background:var(--bg-raised); padding:.9rem 1.1rem;
+    margin:1.2rem 0; font-size:.94rem;
+  }
+  .callout .eyebrow{ margin-bottom:.3rem; color:var(--brass); }
+
+  .grid-2{ display:grid; grid-template-columns:1fr 1fr; gap:1.6rem; }
+  @media (max-width:640px){ .grid-2{ grid-template-columns:1fr; } }
+  .card{ border:1px solid var(--line); padding:1.1rem 1.2rem; }
+  .card h3{ margin-top:0; }
+  .card ul{ margin:0; padding-left:1.1rem; }
+  .card li{ margin-bottom:.55rem; }
+  .card.keep{ border-top:3px solid var(--pine); }
+  .card.broken-pattern{ border-top:3px solid var(--rust); }
+
+  hr.rule{ border:none; border-top:1px solid var(--line); margin:2.5rem 0; }
+
+  footer{
+    grid-column:1/-1; margin-top:1rem; padding-top:1.5rem; border-top:1px solid var(--line);
+    font-family:var(--font-mono); font-size:.75rem; color:var(--muted);
+  }
+</style>
+
+<div class="layout">
+
+  <div class="titleblock">
+    <span class="eyebrow">Architecture explainer &middot; neograph &harr; Open Agent Spec</span>
+    <h1>Why the exported graph ran the wrong program</h1>
+    <p class="sub">A shared state bus and a typed wire diagram look similar enough to confuse an exporter.
+    Five real bugs came from that confusion. This is the mental model, the failures, the root cause,
+    and the fix that makes the next one loud instead of quiet.</p>
+    <div class="tb-meta">
+      <span>STATUS &middot; <b>SOUND, as corrected</b></span>
+      <span>SCOPE &middot; <b>_agent_spec.py and 9 dispatch consumers</b></span>
+      <span>REV &middot; <b>2026&#8209;08&#8209;03</b></span>
+      <div class="legend">
+        <span class="swatch"><i class="broken"></i>before / broken</span>
+        <span class="swatch"><i class="fixed"></i>after / fixed</span>
+        <span class="swatch"><i class="neutral"></i>unaffected</span>
+      </div>
+    </div>
+  </div>
+
+  <nav class="toc" aria-label="Table of contents">
+    <span class="toc-head">Contents</span>
+    <ol>
+      <li><a href="#mismatch">01&nbsp; Two mental models</a></li>
+      <li><a href="#gallery">02&nbsp; Bug gallery</a></li>
+      <li><a href="#disease">03&nbsp; The root disease</a></li>
+      <li><a href="#fix">04&nbsp; The fix, three pillars</a></li>
+      <li><a href="#patterns">05&nbsp; Patterns kept / broken</a></li>
+      <li><a href="#next">06&nbsp; What changes next</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <section id="mismatch">
+      <span class="eyebrow"><span class="n">01</span> &middot; The two systems don't agree on what a "graph" is</span>
+      <div class="prose">
+        <p>neograph compiles to <strong>LangGraph</strong>, and separately exports to
+        <strong>Open Agent Spec</strong> (pyagentspec's <code>Flow</code>). Both call themselves graphs.
+        They do not mean the same thing by it, and the exporter was written as if they did.</p>
+        <p><strong>LangGraph's state is a shared, accumulating bus.</strong> Every node reads and writes
+        named fields on one dict-like object. A "loop back to this node" edge is pure control &mdash; it
+        says <em>run this node again</em>, nothing more. Whatever named field a node needs, it reads off
+        the bus by name; a field simply persists until something overwrites it.</p>
+        <p><strong>Agent Spec's <code>Flow</code> is a typed wire diagram.</strong> A <code>DataFlowEdge</code>
+        names a source property and a destination property and asserts they're compatible &mdash; the
+        edge <em>is</em> the plumbing, not a hint about it. A <code>ControlFlowEdge</code> is a separate,
+        literal instruction: a real executor walks these edges to decide what runs next.</p>
+        <p>The exporter's job is to describe LangGraph's loose, name-based bus using Agent Spec's strict,
+        wire-typed vocabulary. Every bug below is a place that translation assumed the wire model applied
+        when the state-bus model was actually what neograph runs.</p>
+      </div>
+
+      <figure class="plate">
+        <div class="plate-body">
+          <div class="pair">
+            <svg class="diagram" viewBox="0 0 300 190" role="img" aria-label="LangGraph state bus diagram">
+              <text x="10" y="20" font-size="11" font-weight="700">LangGraph &middot; shared bus</text>
+              <rect class="node" x="10" y="40" width="280" height="34" rx="2"/>
+              <text x="150" y="61" text-anchor="middle" font-size="10.5">state = { v: "seed", w: "&hellip;" }</text>
+              <text x="20" y="92" class="muted-text" font-size="9.5">field v &mdash; written once, persists</text>
+              <text x="20" y="106" class="muted-text" font-size="9.5">field w &mdash; own slot, separate</text>
+              <rect class="node fixed" x="90" y="122" width="110" height="34" rx="2"/>
+              <text x="145" y="143" text-anchor="middle" font-size="10.5">sub</text>
+              <path class="edge fixed" d="M 200 139 C 235 139 235 100 235 100 C 235 100 200 100 200 122"
+                    marker-end="url(#arrow-fixed)"/>
+              <text x="240" y="103" font-size="9" class="edge-label">control only, re-enter</text>
+            </svg>
+            <svg class="diagram" viewBox="0 0 300 190" role="img" aria-label="Agent Spec wire diagram">
+              <text x="10" y="20" font-size="11" font-weight="700">Agent Spec &middot; typed wires</text>
+              <rect class="node" x="20" y="50" width="100" height="34" rx="2"/>
+              <text x="70" y="71" text-anchor="middle" font-size="10">in: v:str</text>
+              <rect class="node" x="180" y="50" width="100" height="34" rx="2"/>
+              <text x="230" y="71" text-anchor="middle" font-size="10">out: w:str</text>
+              <path class="edge broken" d="M 180 67 C 150 67 150 67 120 67" marker-end="url(#arrow-broken)"/>
+              <text x="150" y="45" text-anchor="middle" class="cap" font-size="9">DataFlowEdge w&rarr;v ?</text>
+              <text x="80" y="120" class="muted-text" font-size="9.5" text-anchor="middle">no property "w"</text>
+              <text x="80" y="132" class="muted-text" font-size="9.5" text-anchor="middle">on this port &mdash; rejected</text>
+            </svg>
+          </div>
+          <defs>
+            <marker id="arrow-fixed" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--pine)"/></marker>
+            <marker id="arrow-broken" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--rust)"/></marker>
+          </defs>
+        </div>
+        <figcaption><span class="fig-id">FIG&nbsp;1</span> LangGraph re-enters a node under pure control flow; Agent Spec insists every edge carry a typed field mapping. Forcing the second shape onto the first is where every bug in &sect;02 starts.</figcaption>
+      </figure>
+    </section>
+
+    <section id="gallery">
+      <span class="eyebrow"><span class="n">02</span> &middot; Five bugs, one family</span>
+      <div class="prose">
+        <p>Filed independently, over several weeks, each discovered while fixing the previous one &mdash;
+        not predicted by the architecture audit that preceded them. Read in sequence, the family
+        resemblance is the point.</p>
+      </div>
+
+      <h3>2.1 &middot; Loop self-edge aliases a field that doesn't exist <span class="mono" style="color:var(--muted);font-weight:400;font-size:.7em">neograph&#8209;rh5fb</span></h3>
+      <div class="prose">
+        <p>A <code>Loop</code>-wrapped sub-construct whose input type <code>A{v}</code> differs from its
+        output type <code>B{w}</code> compiles and runs in neograph fine &mdash; per <strong>Fig&nbsp;1</strong>,
+        LangGraph just re-enters the node; <code>v</code> persists, <code>w</code> sits in its own slot.
+        The exporter, though, built the self-loop edge from the output field's name and pointed it at the
+        input port:</p>
+      </div>
+      <div class="pair">
+        <figure>
+          <span class="pair-tag broken">before</span>
+<pre class="code broken"><code>pydantic ValidationError: 1 validation error for DataFlowEdge
+Value error, Flow data connection named
+<span class="err">sub__loop_self_w</span> is connected to a property
+named <span class="err">w</span> of the destination node <span class="err">sub</span>,
+but the node does not have any property with that name.</code></pre>
+        </figure>
+        <figure>
+          <span class="pair-tag fixed">after</span>
+<pre class="code fixed"><code><span class="c"># the actual LangGraph runtime this was standing in for</span>
+<span class="c"># (src/neograph/_wiring_loop.py) &mdash; a pure control re-entry,</span>
+<span class="c"># no data edge to alias at all:</span>
+router = _make_loop_router(
+    reenter_target=sub.name,   <span class="c"># same node, no field rename</span>
+    unwrap_fn=_construct_loop_unwrap,
+)
+graph.add_conditional_edges(
+    sub.name, router,
+    path_map=[sub.name, exit_name],
+)</code></pre>
+        </figure>
+      </div>
+      <div class="prose">
+        <p>The fix: export the self-loop as a control-only edge with no field mapping whenever the
+        boundary types differ, mapping only fields that are structurally identical otherwise. No new
+        mapping DSL &mdash; it mirrors what LangGraph was already doing.</p>
+      </div>
+
+      <h3>2.2 &middot; Control edges that skip the node they're supposed to run <span class="mono" style="color:var(--muted);font-weight:400;font-size:.7em">neograph&#8209;s7zt3.15</span></h3>
+      <div class="prose">
+        <p>For an <code>Operator</code> (human-approval gate) item, the top-level incoming edge went
+        straight to the approval check, bypassing the body it was supposed to guard. The pause node had
+        no outgoing edge &mdash; a literal dead end. A fused Each&times;Oracle's variant nodes had
+        <em>no inbound edge at all</em>. None of this broke neograph's own round-trip, because its
+        importer reads <code>neograph/*</code> markers and never walks the edges to execute them. A real
+        Agent Spec runtime, walking the graph literally, would.</p>
+      </div>
+      <div class="pair">
+        <figure>
+          <span class="pair-tag broken">before</span>
+          <svg class="diagram" viewBox="0 0 300 150" role="img" aria-label="Operator topology before fix, body unreachable">
+            <rect class="node" x="4" y="58" width="60" height="30" rx="2"/><text x="34" y="77" text-anchor="middle" font-size="9.5">prev</text>
+            <rect class="node unreached" x="100" y="12" width="70" height="30" rx="2"/><text x="135" y="31" text-anchor="middle" font-size="9" class="muted-text">body</text>
+            <rect class="node" x="100" y="58" width="70" height="30" rx="2"/><text x="135" y="77" text-anchor="middle" font-size="9">check</text>
+            <rect class="node" x="220" y="58" width="70" height="30" rx="2"/><text x="255" y="77" text-anchor="middle" font-size="9">pause</text>
+            <path class="edge" d="M64,73 H100" marker-end="url(#arrow-n1)"/>
+            <path class="edge" d="M170,73 H220" marker-end="url(#arrow-n1)"/>
+            <text x="60" y="30" class="muted-text" font-size="9">unreached &mdash; no inbound edge</text>
+            <path class="edge" d="M60,42 Q80,42 96,28" marker-end="url(#arrow-n1)" opacity="0"/>
+            <text x="255" y="115" class="cap" font-size="9" text-anchor="middle">dead end &mdash; no outgoing edge</text>
+          </svg>
+        </figure>
+        <figure>
+          <span class="pair-tag fixed">after</span>
+          <svg class="diagram" viewBox="0 0 300 150" role="img" aria-label="Operator topology after fix, body reachable and pause reconverges">
+            <rect class="node" x="4" y="58" width="50" height="30" rx="2"/><text x="29" y="77" text-anchor="middle" font-size="9.5">prev</text>
+            <rect class="node fixed" x="90" y="58" width="60" height="30" rx="2"/><text x="120" y="77" text-anchor="middle" font-size="9">body</text>
+            <rect class="node fixed" x="185" y="58" width="55" height="30" rx="2"/><text x="212" y="77" text-anchor="middle" font-size="9">check</text>
+            <rect class="node fixed" x="185" y="14" width="55" height="30" rx="2"/><text x="212" y="33" text-anchor="middle" font-size="9">pause</text>
+            <rect class="node" x="270" y="58" width="20" height="30" rx="2"/>
+            <path class="edge fixed" d="M54,73 H90" marker-end="url(#arrow-fixed)"/>
+            <path class="edge fixed" d="M150,73 H185" marker-end="url(#arrow-fixed)"/>
+            <path class="edge fixed" d="M212,58 V44" marker-end="url(#arrow-fixed)"/>
+            <path class="edge fixed" d="M212,29 Q250,29 250,58 Q250,73 270,73" marker-end="url(#arrow-fixed)"/>
+            <path class="edge fixed" d="M240,73 H270" marker-end="url(#arrow-fixed)"/>
+            <text x="212" y="100" text-anchor="middle" font-size="8" class="edge-label">approve &rarr;</text>
+            <text x="245" y="45" text-anchor="middle" font-size="8" class="edge-label">resume &rarr;</text>
+          </svg>
+        </figure>
+      </div>
+      <div class="prose">
+        <p>The fix generalizes: split each item's single "primary node" into an explicit <em>entry</em>
+        plus a list of <em>exits</em>, and chain every exit of item&nbsp;N to the entry of item&nbsp;N+1.
+        Every arm the item guards gets a real inbound edge; every pause reconverges on the real successor.
+        The same do&#8209;while vs while&#8209;do entry bug in plain <code>Loop</code> export &mdash; entered at
+        the check instead of the body &mdash; was caught by the same fix, because it's the identical
+        mistake in a simpler shape.</p>
+      </div>
+
+      <h3>2.3 &middot; A dropped branch sentinel runs both sides of an <code>if</code> <span class="mono" style="color:var(--muted);font-weight:400;font-size:.7em">neograph&#8209;s7zt3.17</span></h3>
+      <div class="prose">
+        <p>The sharpest one. <code>ForwardConstruct</code> branches compile to a real conditional in
+        LangGraph. The exporter walked the IR with a helper (<code>iter_with_arms</code>) that flattens
+        both arms into the surrounding item list <em>in place</em> &mdash; convenient for other lowerings,
+        fatal here, because the branch boundary itself disappears before the exporter ever sees it.</p>
+      </div>
+      <div class="pair">
+        <figure>
+          <span class="pair-tag broken">before</span>
+          <svg class="diagram" viewBox="0 0 300 110" role="img" aria-label="Branch flattened to a straight line, both arms run unconditionally">
+            <rect class="node" x="4" y="40" width="55" height="30" rx="2"/><text x="31" y="59" text-anchor="middle" font-size="9">seed</text>
+            <rect class="node broken" x="90" y="40" width="55" height="30" rx="2"/><text x="117" y="59" text-anchor="middle" font-size="9">arm_a</text>
+            <rect class="node broken" x="176" y="40" width="55" height="30" rx="2"/><text x="203" y="59" text-anchor="middle" font-size="9">arm_b</text>
+            <rect class="node" x="262" y="40" width="34" height="30" rx="2"/><text x="279" y="59" text-anchor="middle" font-size="8">end</text>
+            <path class="edge broken" d="M59,55 H90" marker-end="url(#arrow-broken)"/>
+            <path class="edge broken" d="M145,55 H176" marker-end="url(#arrow-broken)"/>
+            <path class="edge broken" d="M231,55 H262" marker-end="url(#arrow-broken)"/>
+            <text x="150" y="25" text-anchor="middle" class="cap" font-size="9">no BranchingNode &mdash; straight line, sequential</text>
+          </svg>
+        </figure>
+        <figure>
+          <span class="pair-tag fixed">after</span>
+          <svg class="diagram" viewBox="0 0 300 130" role="img" aria-label="Real branch with true and false control edges reconverging">
+            <rect class="node" x="4" y="50" width="55" height="30" rx="2"/><text x="31" y="69" text-anchor="middle" font-size="9">seed</text>
+            <rect class="node fixed" x="90" y="50" width="55" height="30" rx="2"/><text x="117" y="69" text-anchor="middle" font-size="8.5">branch?</text>
+            <rect class="node fixed" x="185" y="14" width="55" height="30" rx="2"/><text x="212" y="33" text-anchor="middle" font-size="9">arm_a</text>
+            <rect class="node fixed" x="185" y="86" width="55" height="30" rx="2"/><text x="212" y="105" text-anchor="middle" font-size="9">arm_b</text>
+            <rect class="node" x="272" y="50" width="24" height="30" rx="2"/>
+            <path class="edge fixed" d="M59,65 H90" marker-end="url(#arrow-fixed)"/>
+            <path class="edge fixed" d="M145,60 Q165,29 185,29" marker-end="url(#arrow-fixed)"/>
+            <path class="edge fixed" d="M145,70 Q165,101 185,101" marker-end="url(#arrow-fixed)"/>
+            <path class="edge fixed" d="M240,29 Q275,29 275,65 Q275,65 272,65" marker-end="url(#arrow-fixed)"/>
+            <path class="edge fixed" d="M240,101 Q272,101 272,65" marker-end="url(#arrow-fixed)"/>
+            <text x="165" y="20" font-size="8" class="edge-label">true</text>
+            <text x="165" y="118" font-size="8" class="edge-label">false</text>
+          </svg>
+        </figure>
+      </div>
+      <div class="prose">
+        <p>The lesson generalizes beyond this one bug: the reachability tests written for &sect;2.2 pass on
+        this broken export <em>as-is</em> &mdash; a flattened straight line is fully reachable. Reachability
+        is necessary, not sufficient; see Pillar C in &sect;04.</p>
+      </div>
+
+      <h3>2.4 &nbsp;&amp;&nbsp; 2.5 &middot; Two schema-level collapses <span class="mono" style="color:var(--muted);font-weight:400;font-size:.7em">neograph&#8209;p7dyq, neograph&#8209;8zvd1</span></h3>
+      <div class="grid-2">
+        <div class="card broken-pattern">
+          <h3 style="margin-top:0">p7dyq &middot; title inherited from the wrong owner</h3>
+          <p style="font-size:.9rem">Two sibling fields of the same nested-model shape:</p>
+<pre class="code broken" style="font-size:.78rem"><code>class Leaf(BaseModel): x: int
+class Shared(BaseModel):
+    a: Leaf
+    b: Leaf</code></pre>
+          <p style="font-size:.9rem;margin-top:.7rem">exported with titles <code>['Leaf','Leaf']</code> &mdash;
+          the field's own name (<code>a</code>, <code>b</code>) was overwritten by the referenced
+          definition's title. On import, two fields silently collapsed into one.</p>
+        </div>
+        <div class="card broken-pattern">
+          <h3 style="margin-top:0">8zvd1 &middot; a mutation the validator never saw</h3>
+          <p style="font-size:.9rem">Dict-form fan-in titles were qualified <em>after</em> construction:</p>
+<pre class="code broken" style="font-size:.78rem"><code>p.title = f"{key}.{p.title}"  <span class="c"># mutate post-hoc</span></code></pre>
+          <p style="font-size:.9rem;margin-top:.7rem">pyagentspec only validates a title's shape <em>at
+          construction</em> (no <code>validate_assignment</code>), so the dot slipped past the very rule
+          that would have rejected it &mdash; then the wire read of that same property failed:</p>
+<pre class="code broken" style="font-size:.76rem"><code><span class="err">Titles of properties should not contain special
+characters or blank space. Found: 'seed.entries'</span></code></pre>
+        </div>
+      </div>
+      <div class="prose">
+        <p>The fix for both: qualify at <em>construction</em>, through one shared helper each caller reads
+        &mdash; never a post-hoc field mutation that can outrun the object's own validation.</p>
+      </div>
+    </section>
+
+    <section id="disease">
+      <span class="eyebrow"><span class="n">03</span> &middot; The root disease</span>
+      <div class="prose">
+        <p>All five bugs reduce to one sentence:</p>
+      </div>
+      <div class="callout">
+        <span class="eyebrow">the pattern</span>
+        <p style="margin:0">A fact about the compiled graph is re-derived locally by every consumer that
+        needs it, instead of being read from one declared authority &mdash; and the only check that the
+        re-derivations still agree is another consumer, re-deriving it just as leniently.</p>
+      </div>
+      <div class="prose">
+        <p>Take one concrete fact: <em>is this modifier combination an Each&times;Oracle fusion?</em> At
+        the time these bugs were found, that single question had three independent answers living in the
+        codebase at once:</p>
+      </div>
+      <figure class="plate">
+        <div class="plate-body">
+<pre class="code" style="font-size:.78rem"><code><span class="c"># modifiers.py &mdash; a predicate over the modifier set in hand</span>
+def is_each_oracle_fused(mods) -> bool: ...
+
+<span class="c"># modifiers.py &mdash; a table-derived membership check, self-described</span>
+<span class="c"># as "the ONLY sanctioned way" to ask the same question</span>
+def modifier_names_for_combo(combo: ModifierCombo) -> frozenset[str]: ...
+
+<span class="c"># loader.py &mdash; a third, ad hoc shim</span>
+fused = dict.fromkeys(...)  <span class="c"># re-derives it a third way</span></code></pre>
+        </div>
+        <figcaption><span class="fig-id">FIG&nbsp;2</span> Three real, currently-live spellings of one yes/no question. A new fused combo can trip none of them &mdash; no <code>assert_never</code>, no guard, silent divergence.</figcaption>
+      </figure>
+      <div class="prose">
+        <p>The same shape recurs for <em>modifier pair legality</em> (three separate encodings inside one
+        file, kept in sync only by a code comment admitting the hazard) and for <em>what kind of Portal
+        mesh member is this node</em> (independently re-derived across seven source files, plus an eighth
+        way in the importer).</p>
+      </div>
+      <figure class="plate">
+        <div class="plate-body">
+          <div class="pair">
+            <figure>
+              <span class="pair-tag broken">before</span>
+              <svg class="diagram" viewBox="0 0 300 210" role="img" aria-label="Seven modules independently re-deriving one fact">
+                <text x="150" y="16" text-anchor="middle" font-size="9.5" font-weight="700">"is this fused?"</text>
+                <circle class="node broken" cx="150" cy="42" r="16"/>
+                <g font-size="8">
+                  <rect class="node broken" x="8" y="80" width="66" height="24" rx="2"/><text x="41" y="96" text-anchor="middle">compiler.py</text>
+                  <rect class="node broken" x="8" y="112" width="66" height="24" rx="2"/><text x="41" y="128" text-anchor="middle">agent_spec.py</text>
+                  <rect class="node broken" x="8" y="144" width="66" height="24" rx="2"/><text x="41" y="160" text-anchor="middle">loader.py</text>
+                  <rect class="node broken" x="117" y="150" width="66" height="24" rx="2"/><text x="150" y="166" text-anchor="middle">state.py &times;2</text>
+                  <rect class="node broken" x="226" y="80" width="66" height="24" rx="2"/><text x="259" y="96" text-anchor="middle">state_write.py</text>
+                  <rect class="node broken" x="226" y="112" width="66" height="24" rx="2"/><text x="259" y="128" text-anchor="middle">subconstruct.py</text>
+                </g>
+                <path class="edge broken" d="M136,50 L41,80" marker-end="url(#arrow-broken)"/>
+                <path class="edge broken" d="M138,54 L41,112" marker-end="url(#arrow-broken)"/>
+                <path class="edge broken" d="M140,58 L45,144" marker-end="url(#arrow-broken)"/>
+                <path class="edge broken" d="M150,58 L150,150" marker-end="url(#arrow-broken)"/>
+                <path class="edge broken" d="M160,54 L259,80" marker-end="url(#arrow-broken)"/>
+                <path class="edge broken" d="M163,50 L259,112" marker-end="url(#arrow-broken)"/>
+                <text x="150" y="196" text-anchor="middle" class="cap" font-size="8.5">6 private re-derivations, no oracle</text>
+              </svg>
+            </figure>
+            <figure>
+              <span class="pair-tag fixed">after</span>
+              <svg class="diagram" viewBox="0 0 300 210" role="img" aria-label="One table read by all six consumers">
+                <text x="150" y="16" text-anchor="middle" font-size="9" font-weight="700">ComboDecomposition.fused</text>
+                <rect class="node fixed" x="105" y="30" width="90" height="26" rx="2"/><text x="150" y="47" text-anchor="middle" font-size="8.5">one table</text>
+                <g font-size="8">
+                  <rect class="node fixed" x="8" y="90" width="66" height="24" rx="2"/><text x="41" y="106" text-anchor="middle">compiler.py</text>
+                  <rect class="node fixed" x="8" y="122" width="66" height="24" rx="2"/><text x="41" y="138" text-anchor="middle">agent_spec.py</text>
+                  <rect class="node fixed" x="8" y="154" width="66" height="24" rx="2"/><text x="41" y="170" text-anchor="middle">loader.py</text>
+                  <rect class="node fixed" x="117" y="160" width="66" height="24" rx="2"/><text x="150" y="176" text-anchor="middle">state.py &times;2</text>
+                  <rect class="node fixed" x="226" y="90" width="66" height="24" rx="2"/><text x="259" y="106" text-anchor="middle">state_write.py</text>
+                  <rect class="node fixed" x="226" y="122" width="66" height="24" rx="2"/><text x="259" y="138" text-anchor="middle">subconstruct.py</text>
+                </g>
+                <path class="edge fixed" d="M120,56 L45,90" marker-end="url(#arrow-fixed)"/>
+                <path class="edge fixed" d="M125,56 L45,122" marker-end="url(#arrow-fixed)"/>
+                <path class="edge fixed" d="M130,56 L48,154" marker-end="url(#arrow-fixed)"/>
+                <path class="edge fixed" d="M150,56 L150,160" marker-end="url(#arrow-fixed)"/>
+                <path class="edge fixed" d="M175,56 L259,90" marker-end="url(#arrow-fixed)"/>
+                <path class="edge fixed" d="M180,56 L259,122" marker-end="url(#arrow-fixed)"/>
+                <text x="150" y="196" text-anchor="middle" font-size="8.5">reads, never re-derives &mdash; guarded, ratcheted</text>
+              </svg>
+            </figure>
+          </div>
+        </div>
+        <figcaption><span class="fig-id">FIG&nbsp;3</span> The Portal rollout applied single-writer discipline to two IR fields (guard&nbsp;G3), but never to <em>dispatch logic</em> &mdash; "what does this combination mean, and who needs to know" was never centralized. This is the same disease, codebase-wide, that the export bugs are one visible symptom of.</figcaption>
+      </figure>
+      <div class="prose">
+        <p>There is a second altitude to the same disease, specific to export: the 16&#8209;agent
+        architecture audit that preceded these fixes claimed a "complete matrix, every cell verified, none
+        TODO" &mdash; and was true only in the sense that every cell was verified <em>against neograph's own
+        importer</em>, which never executes a control edge and so is structurally blind to exactly the
+        defects in &sect;2.2 and &sect;2.3. A completeness claim checked by a lenient reader is not a
+        completeness claim.</p>
+      </div>
+    </section>
+
+    <section id="fix">
+      <span class="eyebrow"><span class="n">04</span> &middot; The fix, three pillars</span>
+
+      <h3>Pillar A &middot; finish the classification layer</h3>
+      <div class="prose">
+        <p><code>modifiers.py</code> already owns two authorities correctly: which modifier sets are legal,
+        and what a legal combination decomposes into. The fix extends that same table rather than adding a
+        parallel one &mdash; a <code>fused</code> column, <em>derived at definition</em> from the existing
+        sanctioned membership function, with a partition guard pinning that the two never drift apart
+        again:</p>
+      </div>
+      <figure class="plate">
+        <div class="plate-body">
+<pre class="code fixed"><code>class ComboDecomposition(NamedTuple):
+    primary: PrimaryShape
+    has_operator: bool
+    fused: bool   <span class="c"># new &mdash; derived, not hand-set</span>
+
+<span class="c"># a guard, not a comment, keeps the two in lockstep:</span>
+<span class="c">assert all(</span>
+<span class="c">    COMBO_DECOMPOSITION[c].fused ==</span>
+<span class="c">        ({'each','oracle'} &lt;= modifier_names_for_combo(c))</span>
+<span class="c">    for c in ModifierCombo</span>
+<span class="c">)</span></code></pre>
+        </div>
+        <figcaption><span class="fig-id">FIG&nbsp;4</span> One field, one partition guard. Every one of the six re-derivations in Fig&nbsp;3 becomes a read of <code>decomp.fused</code>.</figcaption>
+      </figure>
+
+      <h3>Pillar B &middot; one bridge, layered</h3>
+      <div class="prose">
+        <p>The export/import surface currently mixes a native-Spec type registry, the Agent-Spec bridge,
+        loader dispatch, and Portal-dispatch plumbing inside modules that also do unrelated work
+        (<code>factory.py</code>'s Command-construction monopoly, in particular, must never be diluted).
+        The target is a strict, acyclic layering &mdash; each module receives what it needs by injection,
+        never by importing sideways:</p>
+      </div>
+      <figure class="plate">
+        <div class="plate-body">
+          <svg class="diagram" viewBox="0 0 560 230" role="img" aria-label="Layered module dependency map">
+            <g font-size="9.5">
+              <rect class="node fixed" x="20" y="10" width="150" height="28" rx="2"/><text x="95" y="28" text-anchor="middle">factory.py</text>
+              <rect class="node fixed" x="20" y="54" width="150" height="28" rx="2"/><text x="95" y="72" text-anchor="middle">_agent_spec_dispatch.py</text>
+              <rect class="node fixed" x="20" y="98" width="150" height="28" rx="2"/><text x="95" y="116" text-anchor="middle">loader.py</text>
+              <rect class="node fixed" x="20" y="142" width="150" height="28" rx="2"/><text x="95" y="160" text-anchor="middle">_agent_spec_swarm_import.py</text>
+              <rect class="node fixed" x="20" y="186" width="150" height="28" rx="2"/><text x="95" y="204" text-anchor="middle">_agent_spec_group_import.py</text>
+            </g>
+            <path class="edge fixed" d="M95,38 V54" marker-end="url(#arrow-fixed)"/>
+            <path class="edge fixed" d="M95,82 V98" marker-end="url(#arrow-fixed)"/>
+            <path class="edge fixed" d="M95,126 V142" marker-end="url(#arrow-fixed)"/>
+            <path class="edge fixed" d="M95,170 V186" marker-end="url(#arrow-fixed)"/>
+            <g font-size="9.5">
+              <rect class="node" x="220" y="186" width="150" height="28" rx="2"/><text x="295" y="204" text-anchor="middle">_agent_spec_node_import.py</text>
+              <rect class="node" x="220" y="142" width="80" height="28" rx="2"/><text x="260" y="160" text-anchor="middle" font-size="8.5">_agent_spec_types.py</text>
+              <rect class="node" x="310" y="142" width="80" height="28" rx="2"/><text x="350" y="160" text-anchor="middle" font-size="8.5">_agent_spec_markers.py</text>
+              <rect class="node" x="260" y="98" width="130" height="28" rx="2"/><text x="325" y="116" text-anchor="middle">spec_types.py (native)</text>
+            </g>
+            <path class="edge" d="M220,200 H170" marker-end="url(#arrow-n1)"/>
+            <path class="edge" d="M260,186 V170" marker-end="url(#arrow-n1)"/>
+            <path class="edge" d="M350,186 V170" marker-end="url(#arrow-n1)"/>
+            <path class="edge" d="M295,142 V126" marker-end="url(#arrow-n1)"/>
+            <g font-size="9.5">
+              <rect class="node" x="410" y="54" width="130" height="28" rx="2"/><text x="475" y="72" text-anchor="middle" font-size="8.5">_agent_spec.py (export)</text>
+              <rect class="node" x="410" y="98" width="130" height="28" rx="2"/><text x="475" y="116" text-anchor="middle" font-size="8.2">_agent_spec_*_lowering.py</text>
+              <rect class="node" x="410" y="142" width="130" height="28" rx="2"/><text x="475" y="160" text-anchor="middle" font-size="8.5">_agent_spec_portal.py</text>
+            </g>
+            <path class="edge" d="M475,82 V98" marker-end="url(#arrow-n1)"/>
+            <path class="edge" d="M475,126 V142" marker-end="url(#arrow-n1)"/>
+            <path class="edge" d="M410,156 H350" marker-end="url(#arrow-n1)"/>
+            <text x="475" y="20" text-anchor="middle" class="muted-text" font-size="8">export side</text>
+            <text x="95" y="222" text-anchor="middle" class="muted-text" font-size="8">import / dispatch side, top depends on bottom</text>
+          </svg>
+        </div>
+        <figcaption><span class="fig-id">FIG&nbsp;5</span> <code>factory.py</code> keeps its Command-construction monopoly untouched; the Agent-Spec dispatch <em>gate</em> (no Command inside it) is the only new module in that chain. Extracted import modules receive <code>from_spec</code> by injection &mdash; they never import <code>loader</code> back.</figcaption>
+      </figure>
+
+      <h3>Pillar C &middot; the oracle the audit didn't have</h3>
+      <div class="prose">
+        <p>The 2026-07 audit's blind spot was structural: its only check was neograph's own forgiving
+        importer. The fix adds a genuine, independent oracle in three escalating tiers, over the same
+        mechanically-generated cell matrix the audit used &mdash; so a new bug in this family fails a test
+        the day it's introduced, not weeks later while fixing something else.</p>
+      </div>
+      <figure class="plate">
+        <div class="plate-body">
+          <svg class="diagram" viewBox="0 0 560 150" role="img" aria-label="Three-tier differential execution oracle">
+            <rect class="node fixed" x="10" y="10" width="170" height="40" rx="2"/>
+            <text x="95" y="28" text-anchor="middle" font-size="10" font-weight="700">WIRE</text>
+            <text x="95" y="42" text-anchor="middle" font-size="8" class="muted-text">Flow.from_dict round trip</text>
+            <rect class="node fixed" x="195" y="10" width="170" height="40" rx="2"/>
+            <text x="280" y="28" text-anchor="middle" font-size="10" font-weight="700">EXECUTE</text>
+            <text x="280" y="42" text-anchor="middle" font-size="8" class="muted-text">literal control-edge walk, evaluates conditions</text>
+            <rect class="node fixed" x="380" y="10" width="170" height="40" rx="2"/>
+            <text x="465" y="28" text-anchor="middle" font-size="10" font-weight="700">COMPARE</text>
+            <text x="465" y="42" text-anchor="middle" font-size="8" class="muted-text">output == real compile()+run()</text>
+            <path class="edge fixed" d="M180,30 H195" marker-end="url(#arrow-fixed)"/>
+            <path class="edge fixed" d="M365,30 H380" marker-end="url(#arrow-fixed)"/>
+            <text x="95" y="78" text-anchor="middle" font-size="8.5">catches &sect;2.4 / &sect;2.5</text>
+            <text x="280" y="78" text-anchor="middle" font-size="8.5">catches &sect;2.1 / &sect;2.2 / &sect;2.3</text>
+            <text x="465" y="78" text-anchor="middle" font-size="8.5">catches semantic drift</text>
+            <text x="95" y="94" text-anchor="middle" class="muted-text" font-size="8">every GREEN cell, day one</text>
+            <text x="280" y="94" text-anchor="middle" class="muted-text" font-size="8">the reachability suite alone missed &sect;2.3</text>
+            <text x="465" y="94" text-anchor="middle" class="muted-text" font-size="8">scripted cells first, LLM cells ratcheted in</text>
+          </svg>
+        </div>
+        <figcaption><span class="fig-id">FIG&nbsp;6</span> A reachability check alone is necessary but not sufficient &mdash; the &sect;2.3 branch-flattening bug is fully <em>reachable</em>. Only a walk that actually <em>evaluates</em> the branch condition sees the missing decision.</figcaption>
+      </figure>
+    </section>
+
+    <section id="patterns">
+      <span class="eyebrow"><span class="n">05</span> &middot; Patterns worth keeping, patterns that broke this</span>
+      <div class="grid-2">
+        <div class="card keep">
+          <h3>Keep enforcing</h3>
+          <ul>
+            <li><strong>Single writer per fact.</strong> One table or function owns each classification
+            question; every consumer reads it, none re-derive it.</li>
+            <li><strong>Ratchets that can only shrink.</strong> A guard's exemption list moves toward
+            <code>frozenset()</code> and never grows back &mdash; the same discipline as the file-size
+            ceiling allowlist.</li>
+            <li><strong>Structural discrimination over function-local imports.</strong> When a lower-layer
+            module needs to ask "is this a Construct?", it duck-types the shape rather than importing the
+            higher-layer type &mdash; a function-local import to dodge a cycle just grows an allowlist that
+            should never grow.</li>
+            <li><strong>Guard-first, failing before it's fixed.</strong> Every fix above shipped its
+            regression test red, then green, then a structural guard to keep it green.</li>
+            <li><strong>Refuse a split that changes behavior.</strong> A "pure" file move that would widen
+            a capability monopoly (Command construction, IR single-writer fields) is declined; a smaller
+            extraction is taken instead.</li>
+          </ul>
+        </div>
+        <div class="card broken-pattern">
+          <h3>What was actually broken</h3>
+          <ul>
+            <li><strong>Mutating state after construction to dodge a validator</strong> (&sect;2.5) &mdash;
+            the qualification happened after the very check meant to catch it.</li>
+            <li><strong>Verifying only against your own lenient reader</strong> (&sect;03) &mdash; a
+            completeness claim is only as strong as the harshest oracle that checked it.</li>
+            <li><strong>An IR walk that silently drops a sentinel</strong> (&sect;2.3) &mdash; convenient for
+            every consumer that didn't need the branch boundary, catastrophic for the one that did.</li>
+            <li><strong>Per-consumer hand-rolled dispatch</strong> (&sect;03, Fig&nbsp;3) &mdash; the same
+            question answered a different way in six different files, agreeing by accident.</li>
+            <li><strong>Single-writer discipline applied to fields but not to dispatch</strong> &mdash; the
+            Portal rollout got IR fields right and dispatch logic wrong, in the same commit.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="next">
+      <span class="eyebrow"><span class="n">06</span> &middot; What changes, concretely</span>
+      <div class="prose">
+        <p>The remaining tickets stop being independent patches and become dispositions of one design.
+        Two are already resolved by fixes that landed upstream of this pass; the rest reshape into a
+        twelve-phase build ordered bookkeeping &rarr; vocabulary &rarr; movers &rarr; features, with the
+        oracle running as an early parallel track.</p>
+      </div>
+      <figure class="plate">
+        <div class="plate-body">
+          <table class="spec disposition">
+            <thead>
+              <tr><th>Ticket</th><th>Disposition</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="who">jtawq.1</td><td>Reshaped into three axes &mdash; member&#8209;class taxonomy, routing plumbing, export/import table &mdash; each a phase of Pillars A/B.</td></tr>
+              <tr><td class="who">jtawq.2</td><td>Mostly already landed; residual is the <code>fused</code> column of Fig&nbsp;4. Closes once that lands.</td></tr>
+              <tr><td class="who">jtawq.3</td><td>The one ticket whose original diagnosis still matches: three pair-legality encodings collapse to one gate function.</td></tr>
+              <tr><td class="who">jtawq.7</td><td>Remainder only &mdash; one shared import-guard helper across four call sites.</td></tr>
+              <tr><td class="who">jtawq.9</td><td>Extract the no-Command Agent-Spec gate cluster; the Command-construction monopoly (guard G1) never widens.</td></tr>
+              <tr><td class="who">jtawq.10</td><td>The injection seam this ticket asked for already exists elsewhere &mdash; remaining work is a mechanical move.</td></tr>
+              <tr><td class="who">wq9nn</td><td><strong>Closed as fixed</strong> &mdash; verified by fresh repro against a prior, unrelated fix.</td></tr>
+              <tr><td class="who">qtfof</td><td>Scope collapses to one live item: a silent lossy re-export path for imported remote agents.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <figcaption><span class="fig-id">FIG&nbsp;7</span> Every remaining item is now a phase of one architecture, not a separate design problem.</figcaption>
+      </figure>
+      <div class="callout">
+        <span class="eyebrow">why this matters</span>
+        <p style="margin:0">The standing rule this project holds itself to: anything that compiles to
+        LangGraph must be representable in Agent Spec, or the design is wrong. Every bug in &sect;02 was a
+        place that rule was silently not true. The fix is not five patches &mdash; it's making the next
+        violation of that rule fail loud, automatically, before it ships.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>neograph &middot; Agent Spec / Portal architecture &middot; explainer compiled 2026&#8209;08&#8209;03</footer>
+
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <marker id="arrow-n1" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--line-strong)"/></marker>
+    </defs>
+  </svg>
+
+</div>
