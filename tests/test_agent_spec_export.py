@@ -12,7 +12,7 @@ with::
 Per the ratification's residual/unverified item (agent-spec-ratification-
 2026-07-13.md s6) and i3zsh's own "Risks & Edge Cases" note: the whole
 Layer A/B ``neograph/``-prefixed ``metadata`` marker round-trip strategy
-(stamping ``metadata["neograph/modifier"]`` etc. on lowered nodes so an
+(stamping ``metadata[_MARK_MODIFIER]`` etc. on lowered nodes so an
 export stays a lossless neograph round-trip source) depends on
 ``Component.metadata`` actually surviving a real ``pyagentspec``
 ``to_dict -> from_dict`` cycle -- including disaggregated-component export,
@@ -41,6 +41,17 @@ import pytest
 pytest.importorskip("pyagentspec")
 
 from neograph import Construct  # noqa: E402
+from neograph._agent_spec import (  # noqa: E402
+    _MARK_AGENT_SPEC,
+    _MARK_EACH_SPEC,
+    _MARK_GROUP_ID,
+    _MARK_LOOP_SPEC,
+    _MARK_MODIFIER,
+    _MARK_OPERATOR_SPEC,
+    _MARK_PORTAL_SPEC,
+    _MARK_TOOL_SPEC,
+    _MARK_VARIANT,
+)
 
 from .schemas import Claims, ClusterGroup, Clusters, MatchResult, RawText, _consumer, _producer  # noqa: E402
 
@@ -75,7 +86,7 @@ class TestMetadataMarkerRoundTripSurvivesRealPyagentspec:
         tool_node = ToolNode(
             name="compute_node",
             tool=tool,
-            metadata={"neograph/modifier": "oracle", "neograph/group_id": "g1"},
+            metadata={_MARK_MODIFIER: "oracle", _MARK_GROUP_ID: "g1"},
         )
         flow = Flow(
             name="minimal flow",
@@ -118,8 +129,8 @@ class TestMetadataMarkerRoundTripSurvivesRealPyagentspec:
         assert rebuilt.metadata == {"neograph/source": "FLOW_LEVEL_MARKER"}
         rebuilt_tool_node = next(n for n in rebuilt.nodes if n.name == "compute_node")
         assert rebuilt_tool_node.metadata == {
-            "neograph/modifier": "oracle",
-            "neograph/group_id": "g1",
+            _MARK_MODIFIER: "oracle",
+            _MARK_GROUP_ID: "g1",
         }
 
     def test_metadata_survives_disaggregated_component_round_trip(self):
@@ -142,8 +153,8 @@ class TestMetadataMarkerRoundTripSurvivesRealPyagentspec:
         assert rebuilt.metadata == {"neograph/source": "FLOW_LEVEL_MARKER"}
         rebuilt_tool_node = next(n for n in rebuilt.nodes if n.name == "compute_node")
         assert rebuilt_tool_node.metadata == {
-            "neograph/modifier": "oracle",
-            "neograph/group_id": "g1",
+            _MARK_MODIFIER: "oracle",
+            _MARK_GROUP_ID: "g1",
         }
         assert rebuilt_tool_node.tool.metadata == {"neograph/tool_marker": "present"}
 
@@ -375,7 +386,7 @@ class TestToAgentSpecLowersAgentActMode:
         flow = to_agent_spec(pipeline)
 
         spec_node = next(n for n in flow.nodes if n.name == "explore")
-        marker = spec_node.metadata["neograph/agent_spec"]
+        marker = spec_node.metadata[_MARK_AGENT_SPEC]
 
         assert marker["mode"] == mode
         assert marker["prompt"] == "explore the codebase"
@@ -540,7 +551,7 @@ class TestToolToServerToolExportOnlySlice:
             f"exports (MCP-bound or not), got {type(server_tool).__name__}"
         )
 
-        marker = server_tool.metadata["neograph/tool_spec"]
+        marker = server_tool.metadata[_MARK_TOOL_SPEC]
         assert marker == {
             "name": "search_code",
             "budget": 5,
@@ -564,7 +575,7 @@ class TestToolToServerToolExportOnlySlice:
         import pyagentspec.tools as tools_mod
 
         server_tool = _tool_to_server_tool(tool, tools_mod)
-        marker = server_tool.metadata["neograph/tool_spec"]
+        marker = server_tool.metadata[_MARK_TOOL_SPEC]
 
         assert "_bound_tool" not in marker
         assert not any(callable(v) for v in marker.values()), (
@@ -613,9 +624,9 @@ class TestToAgentSpecLowersModifiers:
 
         flow = to_agent_spec(pipeline)
 
-        oracle_nodes = [n for n in flow.nodes if n.metadata and n.metadata.get("neograph/modifier") == "oracle"]
+        oracle_nodes = [n for n in flow.nodes if n.metadata and n.metadata.get(_MARK_MODIFIER) == "oracle"]
         assert len(oracle_nodes) == 3, "expected 2 variant nodes + 1 merge node, all marker-stamped"
-        group_ids = {n.metadata["neograph/group_id"] for n in oracle_nodes}
+        group_ids = {n.metadata[_MARK_GROUP_ID] for n in oracle_nodes}
         assert len(group_ids) == 1, "all Oracle-group nodes must share one group_id"
 
     def test_oracle_scripted_mode_variants_lower_to_tool_node_not_llm_node(self):
@@ -643,7 +654,7 @@ class TestToAgentSpecLowersModifiers:
         variant_nodes = [
             n
             for n in flow.nodes
-            if n.metadata and n.metadata.get("neograph/modifier") == "oracle" and "neograph/variant" in n.metadata
+            if n.metadata and n.metadata.get(_MARK_MODIFIER) == "oracle" and _MARK_VARIANT in n.metadata
         ]
         assert len(variant_nodes) == 2, "expected 2 scripted-mode Oracle variants"
         for variant in variant_nodes:
@@ -688,8 +699,8 @@ class TestToAgentSpecLowersModifiers:
 
         map_nodes = [n for n in flow.nodes if isinstance(n, MapNode)]
         assert len(map_nodes) == 1
-        assert map_nodes[0].metadata["neograph/modifier"] == "each"
-        assert map_nodes[0].metadata["neograph/each_spec"]["over"] == "items"
+        assert map_nodes[0].metadata[_MARK_MODIFIER] == "each"
+        assert map_nodes[0].metadata[_MARK_EACH_SPEC]["over"] == "items"
 
     def test_map_over_dict_form_fan_out_receiver_exports_without_error(self):
         """neograph-qtfof.1: @node's map_over= sugar (dict-form inputs where
@@ -759,10 +770,10 @@ class TestToAgentSpecLowersModifiers:
         flow = to_agent_spec(pipeline)
 
         branch_nodes = [
-            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get("neograph/modifier") == "loop"
+            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get(_MARK_MODIFIER) == "loop"
         ]
         assert len(branch_nodes) == 1
-        assert branch_nodes[0].metadata["neograph/loop_spec"]["when"] == "claims_incomplete"
+        assert branch_nodes[0].metadata[_MARK_LOOP_SPEC]["when"] == "claims_incomplete"
         back_edges = [
             e
             for e in flow.control_flow_connections
@@ -794,7 +805,7 @@ class TestToAgentSpecLowersModifiers:
         from pyagentspec.flows.nodes import BranchingNode
 
         branch_nodes = [
-            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get("neograph/modifier") == "loop"
+            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get(_MARK_MODIFIER) == "loop"
         ]
         assert len(branch_nodes) == 1
 
@@ -825,10 +836,10 @@ class TestToAgentSpecLowersModifiers:
         flow = to_agent_spec(pipeline)
 
         checks = [
-            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get("neograph/modifier") == "operator"
+            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get(_MARK_MODIFIER) == "operator"
         ]
         assert len(checks) == 1
-        assert checks[0].metadata["neograph/operator_spec"]["when"] == "needs_review"
+        assert checks[0].metadata[_MARK_OPERATOR_SPEC]["when"] == "needs_review"
         assert checks[0].mapping["true"] == "pause"
 
         pause_nodes = [n for n in flow.nodes if isinstance(n, InputMessageNode)]
@@ -989,7 +1000,7 @@ class TestToAgentSpecLowersModifiers:
         flow = to_agent_spec(pipeline)
 
         loop_branch_nodes = [
-            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get("neograph/modifier") == "loop"
+            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get(_MARK_MODIFIER) == "loop"
         ]
         assert len(loop_branch_nodes) == 1, (
             "expected the arm's Loop-wrapped node to lower to its own BranchingNode+back-edge, "
@@ -1041,8 +1052,8 @@ class TestConstructItemModifierExport:
 
         map_nodes = [n for n in flow.nodes if isinstance(n, MapNode)]
         assert len(map_nodes) == 1, "Each on a Construct item must lower to a MapNode, not a bare FlowNode"
-        assert map_nodes[0].metadata["neograph/modifier"] == "each"
-        assert map_nodes[0].metadata["neograph/each_spec"]["over"] == "items"
+        assert map_nodes[0].metadata[_MARK_MODIFIER] == "each"
+        assert map_nodes[0].metadata[_MARK_EACH_SPEC]["over"] == "items"
 
     def test_oracle_on_construct_item_lowers_to_variant_flow_nodes_plus_merge(self):
         from pyagentspec.flows.nodes import FlowNode
@@ -1056,14 +1067,14 @@ class TestConstructItemModifierExport:
 
         flow = to_agent_spec(parent)
 
-        oracle_nodes = [n for n in flow.nodes if n.metadata and n.metadata.get("neograph/modifier") == "oracle"]
+        oracle_nodes = [n for n in flow.nodes if n.metadata and n.metadata.get(_MARK_MODIFIER) == "oracle"]
         assert len(oracle_nodes) == 3, "expected 2 variant nodes + 1 merge node, all marker-stamped"
-        variant_nodes = [n for n in oracle_nodes if "neograph/variant" in (n.metadata or {})]
+        variant_nodes = [n for n in oracle_nodes if _MARK_VARIANT in (n.metadata or {})]
         assert len(variant_nodes) == 2
         assert all(isinstance(v, FlowNode) for v in variant_nodes), (
             "a Construct-item Oracle variant is a copy of the sub-flow -- a FlowNode over the exported sub-Flow"
         )
-        group_ids = {n.metadata["neograph/group_id"] for n in oracle_nodes}
+        group_ids = {n.metadata[_MARK_GROUP_ID] for n in oracle_nodes}
         assert len(group_ids) == 1, "all Oracle-group nodes must share one group_id"
 
     def test_oracle_on_construct_item_gives_each_variant_its_own_subflow_object(self):
@@ -1089,7 +1100,7 @@ class TestConstructItemModifierExport:
 
         flow = to_agent_spec(parent)
 
-        variants = [n for n in flow.nodes if "neograph/variant" in (n.metadata or {})]
+        variants = [n for n in flow.nodes if _MARK_VARIANT in (n.metadata or {})]
         assert len(variants) == 3
         subflows = [v.subflow for v in variants]
         assert len({id(s) for s in subflows}) == 3, "each variant must wrap its own sub-Flow object"
@@ -1112,10 +1123,10 @@ class TestConstructItemModifierExport:
         # The looped body is the Construct's FlowNode; the check is a marker-stamped BranchingNode.
         assert any(isinstance(n, FlowNode) and n.name == "sub" for n in flow.nodes)
         branch_nodes = [
-            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get("neograph/modifier") == "loop"
+            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get(_MARK_MODIFIER) == "loop"
         ]
         assert len(branch_nodes) == 1
-        assert branch_nodes[0].metadata["neograph/loop_spec"]["when"] == "claims_incomplete"
+        assert branch_nodes[0].metadata[_MARK_LOOP_SPEC]["when"] == "claims_incomplete"
         back_edges = [
             e
             for e in flow.control_flow_connections
@@ -1179,7 +1190,7 @@ class TestConstructItemModifierExport:
             "-- the loop-back must export as a control-only edge"
         )
         branch = next(
-            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get("neograph/modifier") == "loop"
+            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get(_MARK_MODIFIER) == "loop"
         )
         back_edges = [
             e
@@ -1201,10 +1212,10 @@ class TestConstructItemModifierExport:
         flow = to_agent_spec(parent)
 
         checks = [
-            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get("neograph/modifier") == "operator"
+            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get(_MARK_MODIFIER) == "operator"
         ]
         assert len(checks) == 1
-        assert checks[0].metadata["neograph/operator_spec"]["when"] == "needs_review"
+        assert checks[0].metadata[_MARK_OPERATOR_SPEC]["when"] == "needs_review"
         assert checks[0].mapping["true"] == "pause"
         assert len([n for n in flow.nodes if isinstance(n, InputMessageNode)]) == 1
 
@@ -1317,7 +1328,7 @@ class TestPortalMeshExportsToSwarm:
         # Entry-only knobs (max_hops/on_exhaust) and the routing field name
         # ride a neograph/portal_spec marker -- Swarm has no native field for
         # any of them.
-        marker = swarm.metadata["neograph/portal_spec"]
+        marker = swarm.metadata[_MARK_PORTAL_SPEC]
         assert marker["max_hops"] == 6
         assert marker["on_exhaust"] == "exit"
         assert marker["route"] == "goto"

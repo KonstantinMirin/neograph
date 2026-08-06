@@ -55,7 +55,7 @@ from pydantic import BaseModel
 pytest.importorskip("pyagentspec")
 
 from neograph import Construct, Node, compile, run  # noqa: E402
-from neograph._agent_spec import to_agent_spec  # noqa: E402
+from neograph._agent_spec import _MARK_MODIFIER, _MARK_TOOL_SPEC, to_agent_spec  # noqa: E402
 from neograph.loader import from_agent_spec  # noqa: E402
 from neograph.modifiers import Each, Loop, ModifierCombo, Oracle, classify_modifiers  # noqa: E402
 from neograph.tool import Tool  # noqa: E402
@@ -557,7 +557,7 @@ class TestStaleMarkerDoesNotSilentlyReconstruct:
         # only 2 of the 3 declared variants are actually present, while the
         # merge node's neograph/oracle_spec still claims n=3.
         variant_nodes = [
-            n for n in flow.nodes if n.metadata and n.metadata.get("neograph/modifier") == "oracle" and "__variant_" in n.name
+            n for n in flow.nodes if n.metadata and n.metadata.get(_MARK_MODIFIER) == "oracle" and "__variant_" in n.name
         ]
         assert len(variant_nodes) == 3
         flow.nodes.remove(variant_nodes[0])
@@ -666,7 +666,7 @@ class TestAgentNodeRoundTripLosslessness:
 
         agent_node = next(n for n in rebuilt.nodes if type(n).__name__ == "AgentNode")
         server_tool = next(t for t in agent_node.agent.tools if t.name == "search_code")
-        tool_spec = server_tool.metadata["neograph/tool_spec"]
+        tool_spec = server_tool.metadata[_MARK_TOOL_SPEC]
         assert tool_spec["budget"] == 5
         assert tool_spec["idempotent"] is True
         assert tool_spec["config"] == {"depth": 2}

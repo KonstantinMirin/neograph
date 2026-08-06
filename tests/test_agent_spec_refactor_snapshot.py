@@ -142,7 +142,7 @@ import pytest
 
 pytest.importorskip("pyagentspec")
 
-from neograph._agent_spec import to_agent_spec  # noqa: E402
+from neograph._agent_spec import _MARK_MODIFIER, _MARK_VARIANT, to_agent_spec  # noqa: E402
 
 # Reuse the matrix's mechanically-derived cell builder (NOT hand-typed constructs
 # -- the builder IS the factory, per the test conventions' factory/builder rule).
@@ -376,16 +376,16 @@ class TestScriptedMetadataAndDescriptionTraps:
             for n in flow.nodes
             if isinstance(n, ToolNode)
             and n.metadata
-            and n.metadata.get("neograph/modifier") == "oracle"
-            and "neograph/variant" in n.metadata
+            and n.metadata.get(_MARK_MODIFIER) == "oracle"
+            and _MARK_VARIANT in n.metadata
         ]
         assert len(variants) == 2, "expected 2 scripted Oracle variant ToolNodes"
-        for i, variant in enumerate(sorted(variants, key=lambda n: n.metadata["neograph/variant"])):
+        for i, variant in enumerate(sorted(variants, key=lambda n: n.metadata[_MARK_VARIANT])):
             assert variant.metadata is not None and variant.metadata != {}, (
                 "the _lower_oracle scripted-variant ToolNode carries the NON-empty "
                 "neograph/variant marker dict (never None, never bare {})"
             )
-            assert variant.metadata["neograph/variant"] == i
+            assert variant.metadata[_MARK_VARIANT] == i
             assert variant.tool.description == f"Oracle variant {i} for 'gen'", (
                 "the per-variant ServerTool description on the _lower_oracle scripted path must be preserved"
             )
