@@ -12,7 +12,9 @@ not import ``loader``. It is also why the seam lives here and not in ``loader``
 one-way property would break.
 
 Layer order, verified from the AST: ``_agent_spec_node_import`` <- this module
-<- ``loader``. No back-edges.
+<- ``_agent_spec_swarm_import`` <- ``loader``. No back-edges. (The swarm-import
+module became a second importer of ``_construct_from_subflow`` when the
+Swarm-import cluster moved out of ``loader.py``, neograph-jtawq.10.)
 """
 
 from __future__ import annotations

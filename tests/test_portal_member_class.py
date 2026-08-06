@@ -334,6 +334,6 @@ class TestClassifierDoesNotAbsorbOtherAuthorities:
             return  # rejecting outright is the stronger, equally acceptable contract
         assert result is None, (
             "A foreign object with no .modifier_set must raise or classify as None, "
-            f"never as a member class. Got {result!r}. This is the loader.py:363 "
-            "shape that neograph-dgbqv.5 owns."
+            f"never as a member class. Got {result!r}. This is the "
+            "_agent_spec_swarm_import.py shape that neograph-dgbqv.5 owns."
         )

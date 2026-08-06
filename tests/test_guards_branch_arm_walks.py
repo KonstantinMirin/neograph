@@ -165,8 +165,15 @@ _ALLOWLIST: Counter = Counter(
         # Construct.nodes -- there is no _BranchNode/arm concept on the Agent Spec
         # side for iter_with_arms to apply to. Same false-positive category as the
         # map_node.subflow.nodes entry above.
-        ("loader.py", 'agent_nodes = [n for n in flow.nodes if type(n).__name__ == "AgentNode"]'): 1,
-        ("loader.py", '(n for n in flow.nodes if (n.metadata or {}).get(_MARK_MODIFIER) == "portal_operator"),'): 1,
+        # RE-KEYED (neograph-jtawq.10): the Swarm-import cluster moved to
+        # _agent_spec_swarm_import.py. The old loader.py key is REMOVED, not kept
+        # alongside -- leaving it would grant a permission to a file that no
+        # longer does the thing.
+        ("_agent_spec_swarm_import.py", 'agent_nodes = [n for n in flow.nodes if type(n).__name__ == "AgentNode"]'): 1,
+        (
+            "_agent_spec_swarm_import.py",
+            '(n for n in flow.nodes if (n.metadata or {}).get(_MARK_MODIFIER) == "portal_operator"),',
+        ): 1,
         # Same reconstructor's per-member Operator re-attach walk over the
         # reconstructed mesh Construct's node list. DELIBERATELY TOP-LEVEL only
         # (mirrors the state.py "Portal mesh-member partition" entry above): a
@@ -178,7 +185,7 @@ _ALLOWLIST: Counter = Counter(
         # isinstance(member, Node) guard at the call site further confirms only
         # atomic top-level members are gated (a Construct mesh member cannot carry
         # Operator per _validation_portal.py, so it is never in `gated`).
-        ("loader.py", "for member in base.nodes"): 1,
+        ("_agent_spec_swarm_import.py", "for member in base.nodes"): 1,
     }
 )
 

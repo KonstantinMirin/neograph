@@ -129,7 +129,10 @@ EXEMPT_FILES: dict[str, str] = {
     # in PENDING, so PENDING's emptiness never overstates completeness
     # (architect review yf2ar.28; Refined Plan item 4). The exemplar guard uses
     # this same pre-declaration idiom.
-    "loader.py": "foreign pyagentspec object, no .modifier_set -- owned by neograph-dgbqv.5 (P10)",
+    # RE-KEYED (neograph-jtawq.10): the Swarm-import cluster (including this
+    # derivation) moved from loader.py to _agent_spec_swarm_import.py. The old
+    # loader.py key is REMOVED, not kept alongside.
+    "_agent_spec_swarm_import.py": "foreign pyagentspec object, no .modifier_set -- owned by neograph-dgbqv.5 (P10)",
 }
 
 #: Site-level exemptions inside MIGRATED files, keyed
@@ -184,8 +187,9 @@ EXEMPT: dict[tuple[str, str, str], str] = {
 #: assertion (c) stays a strict EQUALITY rather than a one-directional subset
 #: check (the anti-tautology lesson from tests/test_guards_parity_ratchet.py).
 #: SHRINK-ONLY: ``_recursion_budget.py`` leaves this set the moment it imports
-#: the classifier (post-migration); ``loader.py`` stays until neograph-dgbqv.5.
-NO_DISCRIMINATOR_ATTR_SITES: frozenset[str] = frozenset({"loader.py"})
+#: the classifier (post-migration); ``_agent_spec_swarm_import.py`` (RE-KEYED
+#: from ``loader.py``, neograph-jtawq.10) stays until neograph-dgbqv.5.
+NO_DISCRIMINATOR_ATTR_SITES: frozenset[str] = frozenset({"_agent_spec_swarm_import.py"})
 
 #: The classifier's public symbols. A MIGRATED file must import-and-USE at
 #: least one (a dead import does not count).

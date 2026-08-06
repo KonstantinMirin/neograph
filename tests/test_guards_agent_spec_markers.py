@@ -46,6 +46,7 @@ SCANNED = [
     SRC / "_agent_spec_modifier_lowering.py",
     SRC / "_agent_spec_portal.py",
     SRC / "loader.py",
+    SRC / "_agent_spec_swarm_import.py",
 ]
 
 # A double-quoted marker literal (the disease shape -- all 23 current instances

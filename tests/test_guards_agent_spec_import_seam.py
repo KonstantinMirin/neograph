@@ -40,13 +40,14 @@ import pathlib
 
 _SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
 
-# The Agent Spec import path. All three are scanned, not just the module that
+# The Agent Spec import path. All four are scanned, not just the module that
 # currently owns the seam: a recursion re-inlined back into loader.py must fail
 # here too, or the guard silently narrows to wherever the code happens to live.
 IMPORT_PATH_FILES = [
     _SRC / "loader.py",
     _SRC / "_agent_spec_node_import.py",
     _SRC / "_agent_spec_group_import.py",
+    _SRC / "_agent_spec_swarm_import.py",
 ]
 
 # The ONE function permitted to recurse into a sub-flow.
