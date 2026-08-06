@@ -444,7 +444,9 @@ class TestDictFormFanInRoundTrip:
             f"the dict-form upstream key must be carried in the SERIALIZED title, got {titles}"
         )
 
-        dest_inputs = {e["destination_input"] for e in exported["data_flow_connections"]}
+        dest_inputs = {
+            e["destination_input"] for e in (exported.get("data_flow_connections") or [])
+        }
         assert dest_inputs <= titles, (
             f"every DataFlowEdge destination_input must name a real input Property; "
             f"edges target {dest_inputs}, node declares {titles}"

@@ -182,7 +182,7 @@ class TestToAgentSpecExportsFlow:
             e.from_node.name == "seed" and e.to_node.name == "summarize" for e in control_edges
         ), "expected an explicit ControlFlowEdge seed -> summarize, one per Construct.nodes order"
 
-        data_edges = [e for e in flow.data_flow_connections if isinstance(e, DataFlowEdge)]
+        data_edges = [e for e in (flow.data_flow_connections or []) if isinstance(e, DataFlowEdge)]
         assert any(
             e.source_node.name == "seed" and e.destination_node.name == "summarize"
             for e in data_edges
@@ -237,7 +237,7 @@ class TestToAgentSpecExportsDictFormFanIn:
         seed_output_titles = {p.title for p in (seed_spec_node.outputs or [])}
         assert seed_output_titles, "expected 'seed' to export at least one output Property"
 
-        data_edges = [e for e in flow.data_flow_connections if isinstance(e, DataFlowEdge)]
+        data_edges = [e for e in (flow.data_flow_connections or []) if isinstance(e, DataFlowEdge)]
         fanin_edge = next(
             e for e in data_edges if e.source_node.name == "seed" and e.destination_node.name == "summarize"
         )

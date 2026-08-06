@@ -86,7 +86,7 @@ class TestUnreferencedInputRoundTrip:
             f"'prod_text' Property (not the unreferenced 'unused' input), got {titles!r}"
         )
 
-        data_edges = [e for e in flow.data_flow_connections if isinstance(e, DataFlowEdge)]
+        data_edges = [e for e in (flow.data_flow_connections or []) if isinstance(e, DataFlowEdge)]
         assert not any(
             e.source_node.name == "unused" and e.destination_node.name == "summarize"
             for e in data_edges
