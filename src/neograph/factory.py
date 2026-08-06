@@ -14,12 +14,13 @@ from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langgraph.types import Command, interrupt
 from pydantic import BaseModel
 
-from neograph._agent_cycle import cycle_names, make_agent_cycle_bodies
+from neograph._agent_cycle import make_agent_cycle_bodies
 from neograph._agent_spec_dispatch import make_dispatch_gate
 from neograph._dispatch import _dispatch_for_mode
 from neograph._execute import _aexecute_node, _execute_node, _type_name
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import primary_output_field
+from neograph._portal_route import MeshContext, PortalRouteSpec
 
 # --- extracted cluster (neograph-3ffdg.6), re-exported so existing
 # --- `from neograph.factory import ...` call sites keep resolving unchanged.
@@ -114,17 +115,12 @@ def make_node_fn(
 def make_portal_fn(
     node: Node,
     portal: Portal,
-    entry_field: str,
-    exit_name: str,
+    spec: PortalRouteSpec,
+    ctx: MeshContext,
     *,
-    max_hops: int,
-    on_exhaust: str,
-    entry_name: str,
     runtime: LlmRuntime = EMPTY_RUNTIME,
     scripted_lookup: dict[str, Callable] | None = None,
     tool_factory_lookup: dict[str, Callable] | None = None,
-    target_resolve: dict[str, str] | None = None,
-    approve_name: str | None = None,
 ) -> Runnable:
     """Build a Portal mesh-member function (design §4.1, decision D3/D10).
 
@@ -141,37 +137,13 @@ def make_portal_fn(
     goto is emitted — instead of LangGraph silently dropping the update
     (``_algo.py:312``, the research's #1 constraint).
 
-    ``entry_field`` keys the shared channel (``StateKeys.handoff_payload``), so
-    EVERY member of the mesh WRITES the SAME channel regardless of its own field
-    (one mesh per level — D-SINGLE-MESH). The READ side is symmetric but
-    node-self-contained: the normalizer stamps the same key onto each member's
-    ``handoff_channel`` and ``_extract_input`` reads it there (decision D10), so
-    no channel key is threaded into ``make_node_fn`` here. ``HANDOFF_END`` is
-    byte-identical to LangGraph's ``END`` sentinel, so it is mapped to the
-    pass-through ``exit_name`` node rather than terminating the whole graph.
-
-    HOP BUDGET (design §3.4, decision D11/D12): ``max_hops``/``on_exhaust`` are
-    ENTRY-only knobs, but this wrapper runs per MEMBER — so ``_add_portal_mesh``
-    sources them from the mesh entry (``members[0]``) plus the entry's name (for
-    the error ``node=``) and threads them into EVERY member's wrapper as closure
-    params (same closure-capture threading as ``entry_field``/``exit_name``). A
-    "hop" is a member routing to a PEER (mesh continuation); routing to
-    ``HANDOFF_END`` leaves the mesh cleanly and is NOT budget-gated and does NOT
-    increment the counter. The shared, entry-keyed counter
-    ``StateKeys.handoff_hops(entry_field)`` is read from the INCOMING ``state``
-    (not the local ``update`` dict) so hops accumulate across DIFFERENT members;
-    the check is BEFORE emitting the peer goto (``count >= max_hops`` — Loop
-    parity), so ``max_hops=N`` allows exactly N peer-hops. ``on_exhaust=="error"``
-    raises ``ExecutionError`` naming the entry (no new exception class, Loop
-    parity); ``"exit"`` routes to ``exit_name`` with the last payload on the bus.
+    ``spec``/``ctx`` (neograph-dgbqv.4, P9) are the frozen routing bundles
+    ``_add_portal_mesh`` builds ONCE per mesh (``ctx``) and once per member
+    (``spec``) — see ``_portal_route.py``. Everything this wrapper used to
+    derive itself (``StateKeys.handoff_payload``/``handoff_hops``, the
+    payload/route field names, the valid-target set, the proposed-field key)
+    now lives on one of those two bundles.
     """
-    channel_key = StateKeys.handoff_payload(entry_field)
-    count_field = StateKeys.handoff_hops(entry_field)
-    payload_field = primary_output_field(field_name_for(node.name), node.outputs)
-    route_field = portal.route
-    valid_targets = set(portal.to or ()) | {HANDOFF_END}
-    proposed_field = StateKeys.portal_proposed_target(field_name_for(node.name)) if approve_name else None
-
     inner = make_node_fn(
         node,
         runtime=runtime,
@@ -180,42 +152,10 @@ def make_portal_fn(
     )
 
     def portal_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
-        return _portal_route_to_command(
-            inner.invoke(state, config),
-            state,
-            payload_field=payload_field,
-            route_field=route_field,
-            valid_targets=valid_targets,
-            channel_key=channel_key,
-            count_field=count_field,
-            max_hops=max_hops,
-            on_exhaust=on_exhaust,
-            exit_name=exit_name,
-            node_name=node.name,
-            entry_name=entry_name,
-            target_resolve=target_resolve,
-            approve_name=approve_name,
-            proposed_field=proposed_field,
-        )
+        return _portal_route_to_command(inner.invoke(state, config), state, spec, ctx)
 
     async def aportal_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
-        return _portal_route_to_command(
-            await inner.ainvoke(state, config),
-            state,
-            payload_field=payload_field,
-            route_field=route_field,
-            valid_targets=valid_targets,
-            channel_key=channel_key,
-            count_field=count_field,
-            max_hops=max_hops,
-            on_exhaust=on_exhaust,
-            exit_name=exit_name,
-            node_name=node.name,
-            entry_name=entry_name,
-            target_resolve=target_resolve,
-            approve_name=approve_name,
-            proposed_field=proposed_field,
-        )
+        return _portal_route_to_command(await inner.ainvoke(state, config), state, spec, ctx)
 
     wrapper = RunnableLambda(portal_wrapper, afunc=aportal_wrapper)
     return named(wrapper, node.name, mode="portal", output_type=_type_name(node.outputs))
@@ -224,20 +164,8 @@ def make_portal_fn(
 def _portal_route_to_command(
     update: dict[str, Any],
     state: BaseModel,
-    *,
-    payload_field: str,
-    route_field: str,
-    valid_targets: set[str],
-    channel_key: str,
-    count_field: str,
-    max_hops: int,
-    on_exhaust: str,
-    exit_name: str,
-    node_name: str,
-    entry_name: str,
-    target_resolve: dict[str, str] | None = None,
-    approve_name: str | None = None,
-    proposed_field: str | None = None,
+    spec: PortalRouteSpec,
+    ctx: MeshContext,
 ) -> Command:
     """Shared Portal routing decision: state-update dict -> ``Command(goto=...)``.
 
@@ -249,78 +177,70 @@ def _portal_route_to_command(
     Still lives in factory.py only, per guard G1
     (``TestCommandConstructionMonopoly``).
 
-    ``target_resolve`` maps a DX-visible peer name to its real LangGraph node
-    name (the entry-label map, design portal-addressability-2026-07-15.md
-    mechanism 1) — atomic peers map to themselves; an agent/act peer's real
-    entry is ``{peer}__agent``. Defaults to identity when omitted (v1 atomic
-    mesh, unaffected by nnds9).
+    ``ctx.entry_label_map`` maps a DX-visible peer name to its real LangGraph
+    node name (design portal-addressability-2026-07-15.md mechanism 1) —
+    atomic peers map to themselves; an agent/act peer's real entry is
+    ``{peer}__agent``.
 
-    ``approve_name``/``proposed_field``: when the member
-    carries an Operator approval gate, a PEER route (never HANDOFF_END —
-    "leaving the mesh is not a handoff") detours to ``{member}__approve``
-    INSTEAD of the peer directly, carrying the proposed (already hop-budget-
-    checked) target on ``proposed_field`` — the hop counter is NOT
-    incremented here; ``make_portal_approval_fn`` increments it ONLY on
-    approval, so a rejected hop costs nothing.
+    ``spec.approve_name``/``spec.proposed_field``: when the member carries an
+    Operator approval gate, a PEER route (never HANDOFF_END — "leaving the
+    mesh is not a handoff") detours to ``{member}__approve`` INSTEAD of the
+    peer directly, carrying the proposed (already hop-budget-checked) target
+    on ``proposed_field`` — the hop counter is NOT incremented here;
+    ``make_portal_approval_fn`` increments it ONLY on approval, so a rejected
+    hop costs nothing.
     """
-    payload = update[payload_field]
-    target = getattr(payload, route_field)
-    if target not in valid_targets:
+    payload = update[spec.payload_field]
+    target = getattr(payload, spec.route_field)
+    if target not in spec.valid_targets:
         raise ExecutionError.build(
             "Portal route target is not a declared peer",
-            expected=f"one of {sorted(valid_targets)}",
-            found=f"route field '{route_field}'={target!r}",
-            node=node_name,
+            expected=f"one of {sorted(spec.valid_targets)}",
+            found=f"route field '{spec.route_field}'={target!r}",
+            node=spec.node_name,
             hint="a mesh member may route only to a declared peer or HANDOFF_END",
         )
     # HANDOFF_END is a clean mesh exit — never budget-gated, never counted,
     # and never approval-guarded (Operator guards the HANDOFF, not the exit).
     if target == HANDOFF_END:
-        return Command(goto=exit_name, update={**update, channel_key: payload})
-    resolved_target = (target_resolve or {}).get(target, target)
+        return Command(goto=ctx.exit_name, update={**update, ctx.channel_key: payload})
+    resolved_target = ctx.entry_label_map.get(target, target)
     # Peer continuation: enforce the entry's hop budget BEFORE emitting the
     # goto (or the approval detour). Counter bootstrap (absent/None -> 0) lives
     # in StateBus.get_counter; read the SHARED counter from incoming state so
     # hops accumulate across members (the update dict never carries it — a
     # from-update read would always bootstrap 0 and break accumulation).
-    current = adapt_state(state).get_counter(count_field)
-    if current >= max_hops:
-        if on_exhaust == "exit":
+    current = adapt_state(state).get_counter(ctx.count_field)
+    if current >= ctx.max_hops:
+        if ctx.on_exhaust == "exit":
             return Command(
-                goto=exit_name,
-                update={**update, channel_key: payload, count_field: current},
+                goto=ctx.exit_name,
+                update={**update, ctx.channel_key: payload, ctx.count_field: current},
             )
         raise ExecutionError.build(
             "Portal handoff exceeded max_hops",
-            expected=f"convergence within {max_hops} hops",
-            found=f"{max_hops} hops exhausted",
-            node=entry_name,
+            expected=f"convergence within {ctx.max_hops} hops",
+            found=f"{ctx.max_hops} hops exhausted",
+            node=ctx.entry_name,
             hint="raise the entry's max_hops or route to HANDOFF_END sooner",
         )
-    if approve_name is not None:
-        assert proposed_field is not None
+    if spec.approve_name is not None:
+        assert spec.proposed_field is not None
         return Command(
-            goto=approve_name,
-            update={**update, channel_key: payload, proposed_field: resolved_target},
+            goto=spec.approve_name,
+            update={**update, ctx.channel_key: payload, spec.proposed_field: resolved_target},
         )
     return Command(
         goto=resolved_target,
-        update={**update, channel_key: payload, count_field: current + 1},
+        update={**update, ctx.channel_key: payload, ctx.count_field: current + 1},
     )
 
 
 def _tool_handoff_to_command(
     update: dict[str, Any],
     state: BaseModel,
-    *,
-    handoff_target_key: str,
-    loopback_target: str,
-    count_field: str,
-    max_hops: int,
-    on_exhaust: str,
-    exit_name: str,
-    entry_name: str,
-    target_resolve: dict[str, str] | None = None,
+    spec: PortalRouteSpec,
+    ctx: MeshContext,
 ) -> Command:
     """Tool-triggered-handoff routing decision (design portal-tool-triggered-handoff
     §3.3): a tool-triggered agent member's ``{node}__tools`` update dict ->
@@ -330,44 +250,47 @@ def _tool_handoff_to_command(
     ``payload_field``/``route_field`` because there is NO typed payload to read a
     route off of: the routing target is a synthesized ``transfer_to_<peer>`` tool
     call the tools body already resolved to a peer name and stamped onto the
-    TRANSIENT ``handoff_target_key`` sentinel. This function pops that sentinel
-    back OUT before building the ``Command(update=...)``, so it never enters
-    LangGraph state (design §6). Absent a handoff call (``target is None``) it
-    emits ``Command(goto=loopback_target)`` — the ordinary ReAct loopback,
-    expressed as a dynamic goto because a tool-triggered tools node has NO static
-    out-edge (LangGraph would silently double-execute both, design §3.4).
+    TRANSIENT ``spec.handoff_target_key`` sentinel. This function pops that
+    sentinel back OUT before building the ``Command(update=...)``, so it never
+    enters LangGraph state (design §6). Absent a handoff call (``target is
+    None``) it emits ``Command(goto=spec.loopback_target)`` — the ordinary
+    ReAct loopback, expressed as a dynamic goto because a tool-triggered tools
+    node has NO static out-edge (LangGraph would silently double-execute both,
+    design §3.4).
 
     Reuses the SAME hop-budget / ``HANDOFF_END`` / entry-label machinery as
     :func:`_portal_route_to_command`: a peer hop is budget-gated
     (``count >= max_hops`` before emitting the goto — Loop parity), resolved
-    through ``target_resolve`` to the peer's real entry node. Confined to
+    through ``ctx.entry_label_map`` to the peer's real entry node. Confined to
     factory.py per guard G1 (``TestCommandConstructionMonopoly``).
     """
-    target = update.pop(handoff_target_key, None)
+    assert spec.handoff_target_key is not None
+    assert spec.loopback_target is not None
+    target = update.pop(spec.handoff_target_key, None)
     if target is None:
         # No handoff this turn — the ordinary ReAct loopback (design §3.4).
-        return Command(goto=loopback_target, update=update)
+        return Command(goto=spec.loopback_target, update=update)
     # HANDOFF_END parity with _portal_route_to_command (a clean mesh exit, never
     # budget-gated). A synthesized handoff tool only ever names a real peer, so
     # this stays a defensive mirror of the sibling function's shape.
     if target == HANDOFF_END:
-        return Command(goto=exit_name, update=update)
-    resolved_target = (target_resolve or {}).get(target, target)
+        return Command(goto=ctx.exit_name, update=update)
+    resolved_target = ctx.entry_label_map.get(target, target)
     # Peer continuation: enforce the entry's hop budget BEFORE emitting the goto.
     # Read the SHARED counter from incoming state so hops accumulate across
     # members (the update dict never carries it).
-    current = adapt_state(state).get_counter(count_field)
-    if current >= max_hops:
-        if on_exhaust == "exit":
-            return Command(goto=exit_name, update=update)
+    current = adapt_state(state).get_counter(ctx.count_field)
+    if current >= ctx.max_hops:
+        if ctx.on_exhaust == "exit":
+            return Command(goto=ctx.exit_name, update=update)
         raise ExecutionError.build(
             "Portal handoff exceeded max_hops",
-            expected=f"convergence within {max_hops} hops",
-            found=f"{max_hops} hops exhausted",
-            node=entry_name,
+            expected=f"convergence within {ctx.max_hops} hops",
+            found=f"{ctx.max_hops} hops exhausted",
+            node=ctx.entry_name,
             hint="raise the entry's max_hops or route to HANDOFF_END sooner",
         )
-    return Command(goto=resolved_target, update={**update, count_field: current + 1})
+    return Command(goto=resolved_target, update={**update, ctx.count_field: current + 1})
 
 
 def make_portal_approval_fn(
@@ -430,13 +353,8 @@ def make_portal_subgraph_fn(
     sub: Construct,
     sub_graph: CompiledStateGraph,
     portal: Portal,
-    entry_field: str,
-    exit_name: str,
-    *,
-    max_hops: int,
-    on_exhaust: str,
-    entry_name: str,
-    target_resolve: dict[str, str] | None = None,
+    spec: PortalRouteSpec,
+    ctx: MeshContext,
 ) -> Runnable:
     """Build a sub-construct Portal mesh-member function (do0d9, §3.1 site 1).
 
@@ -454,10 +372,11 @@ def make_portal_subgraph_fn(
     to the already-existing ``_portal_route_to_command`` — so NO new ``Command(``
     literal is added at all (guard G1 satisfied, §4 Q5).
 
-    The payload is keyed off :func:`make_subgraph_fn`'s update dict —
+    ``spec.payload_field`` is keyed off :func:`make_subgraph_fn`'s update dict —
     ``{field_name_for(sub.name): payload}`` — NOT ``node.outputs`` (a ``Construct``
-    has no ``.outputs``; its boundary output is ``.output``, singular). The
-    boundary INPUT is sourced deterministically from the parent handoff channel
+    has no ``.outputs``; its boundary output is ``.output``, singular), built by
+    :meth:`PortalRouteSpec.for_sub_construct`. The boundary INPUT is sourced
+    deterministically from the parent handoff channel
     (``make_subgraph_fn(handoff_channel=...)``, §3.1 site 7), never a blind
     reverse type-scan that could feed a same-typed decoy.
 
@@ -465,50 +384,13 @@ def make_portal_subgraph_fn(
     through the sync/async pair already present in ``_portal_route_to_command``'s
     callers (mirrors :func:`make_portal_fn`).
     """
-    channel_key = StateKeys.handoff_payload(entry_field)
-    count_field = StateKeys.handoff_hops(entry_field)
-    # A Construct writes its declared output to the bare field_name (no dict-form
-    # analog); make_subgraph_fn's _build_update returns {field_name_for(sub.name):
-    # payload}. Key the routing read off that same field (LOW note, §3.1).
-    payload_field = field_name_for(sub.name)
-    route_field = portal.route
-    valid_targets = set(portal.to or ()) | {HANDOFF_END}
-
-    inner = make_subgraph_fn(sub, sub_graph, handoff_channel=channel_key)
+    inner = make_subgraph_fn(sub, sub_graph, handoff_channel=ctx.channel_key)
 
     def portal_subgraph_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
-        return _portal_route_to_command(
-            inner.invoke(state, config),
-            state,
-            payload_field=payload_field,
-            route_field=route_field,
-            valid_targets=valid_targets,
-            channel_key=channel_key,
-            count_field=count_field,
-            max_hops=max_hops,
-            on_exhaust=on_exhaust,
-            exit_name=exit_name,
-            node_name=sub.name,
-            entry_name=entry_name,
-            target_resolve=target_resolve,
-        )
+        return _portal_route_to_command(inner.invoke(state, config), state, spec, ctx)
 
     async def aportal_subgraph_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
-        return _portal_route_to_command(
-            await inner.ainvoke(state, config),
-            state,
-            payload_field=payload_field,
-            route_field=route_field,
-            valid_targets=valid_targets,
-            channel_key=channel_key,
-            count_field=count_field,
-            max_hops=max_hops,
-            on_exhaust=on_exhaust,
-            exit_name=exit_name,
-            node_name=sub.name,
-            entry_name=entry_name,
-            target_resolve=target_resolve,
-        )
+        return _portal_route_to_command(await inner.ainvoke(state, config), state, spec, ctx)
 
     wrapper = RunnableLambda(portal_subgraph_wrapper, afunc=aportal_subgraph_wrapper)
     output_name = sub.output.__name__ if sub.output is not None else None
@@ -518,15 +400,11 @@ def make_portal_subgraph_fn(
 def make_portal_agent_cycle_fn(
     node: Node,
     portal: Portal,
-    entry_field: str,
-    exit_name: str,
+    spec: PortalRouteSpec,
+    ctx: MeshContext,
     *,
-    max_hops: int,
-    on_exhaust: str,
-    entry_name: str,
     runtime: LlmRuntime = EMPTY_RUNTIME,
     tool_factory_lookup: dict[str, Callable] | None = None,
-    target_resolve: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build an agent/act Portal mesh-member's ReAct-cycle bodies.
 
@@ -553,48 +431,14 @@ def make_portal_agent_cycle_fn(
     agent/tools/parse bodies themselves (``_agent_cycle.py``) never construct
     one.
     """
-    channel_key = StateKeys.handoff_payload(entry_field)
-    count_field = StateKeys.handoff_hops(entry_field)
-    payload_field = primary_output_field(field_name_for(node.name), node.outputs)
-    route_field = portal.route
-    valid_targets = set(portal.to or ()) | {HANDOFF_END}
-
     parts = make_agent_cycle_bodies(node, runtime=runtime, tool_factory_lookup=tool_factory_lookup)
     parse_sync, parse_async = parts["parse"]
 
     def parse_and_route(state: BaseModel, config: RunnableConfig) -> Command:
-        return _portal_route_to_command(
-            parse_sync(state, config),
-            state,
-            payload_field=payload_field,
-            route_field=route_field,
-            valid_targets=valid_targets,
-            channel_key=channel_key,
-            count_field=count_field,
-            max_hops=max_hops,
-            on_exhaust=on_exhaust,
-            exit_name=exit_name,
-            node_name=node.name,
-            entry_name=entry_name,
-            target_resolve=target_resolve,
-        )
+        return _portal_route_to_command(parse_sync(state, config), state, spec, ctx)
 
     async def aparse_and_route(state: BaseModel, config: RunnableConfig) -> Command:
-        return _portal_route_to_command(
-            await parse_async(state, config),
-            state,
-            payload_field=payload_field,
-            route_field=route_field,
-            valid_targets=valid_targets,
-            channel_key=channel_key,
-            count_field=count_field,
-            max_hops=max_hops,
-            on_exhaust=on_exhaust,
-            exit_name=exit_name,
-            node_name=node.name,
-            entry_name=entry_name,
-            target_resolve=target_resolve,
-        )
+        return _portal_route_to_command(await parse_async(state, config), state, spec, ctx)
 
     return {
         "names": parts["names"],
@@ -608,15 +452,11 @@ def make_portal_agent_cycle_fn(
 def make_portal_agent_cycle_tool_handoff_fn(
     node: Node,
     portal: Portal,
-    entry_field: str,
-    exit_name: str,
+    spec: PortalRouteSpec,
+    ctx: MeshContext,
     *,
-    max_hops: int,
-    on_exhaust: str,
-    entry_name: str,
     runtime: LlmRuntime = EMPTY_RUNTIME,
     tool_factory_lookup: dict[str, Callable] | None = None,
-    target_resolve: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build a tool-triggered agent/act Portal mesh member's ReAct-cycle bodies
     (design portal-tool-triggered-handoff §3.3).
@@ -636,17 +476,13 @@ def make_portal_agent_cycle_tool_handoff_fn(
       "no more tool calls" completion path (a tool-triggered member may still
       complete normally without ever calling a handoff tool — both exits coexist).
 
+    ``spec`` (built by :meth:`PortalRouteSpec.for_tool_member`) carries BOTH
+    the routing fields ``parse``/``aparse`` need (payload_field/route_field/
+    valid_targets) AND the tool-handoff fields ``tools``/``atools`` need
+    (handoff_target_key/loopback_target) — one bundle serves both exits.
+
     Any ``Command(`` construction stays HERE (factory.py) per guard G1.
     """
-    field_name = field_name_for(node.name)
-    channel_key = StateKeys.handoff_payload(entry_field)
-    count_field = StateKeys.handoff_hops(entry_field)
-    handoff_target_key = StateKeys.handoff_tool_target(field_name)
-    payload_field = primary_output_field(field_name, node.outputs)
-    route_field = portal.route
-    valid_targets = set(portal.to or ()) | {HANDOFF_END}
-    loopback_target = cycle_names(node.name).agent
-
     parts = make_agent_cycle_bodies(
         node, runtime=runtime, tool_factory_lookup=tool_factory_lookup, handoff_portal=portal
     )
@@ -654,66 +490,16 @@ def make_portal_agent_cycle_tool_handoff_fn(
     parse_sync, parse_async = parts["parse"]
 
     def tools_and_route(state: BaseModel, config: RunnableConfig) -> Command:
-        return _tool_handoff_to_command(
-            tools_sync(state, config),
-            state,
-            handoff_target_key=handoff_target_key,
-            loopback_target=loopback_target,
-            count_field=count_field,
-            max_hops=max_hops,
-            on_exhaust=on_exhaust,
-            exit_name=exit_name,
-            entry_name=entry_name,
-            target_resolve=target_resolve,
-        )
+        return _tool_handoff_to_command(tools_sync(state, config), state, spec, ctx)
 
     async def atools_and_route(state: BaseModel, config: RunnableConfig) -> Command:
-        return _tool_handoff_to_command(
-            await tools_async(state, config),
-            state,
-            handoff_target_key=handoff_target_key,
-            loopback_target=loopback_target,
-            count_field=count_field,
-            max_hops=max_hops,
-            on_exhaust=on_exhaust,
-            exit_name=exit_name,
-            entry_name=entry_name,
-            target_resolve=target_resolve,
-        )
+        return _tool_handoff_to_command(await tools_async(state, config), state, spec, ctx)
 
     def parse_and_route(state: BaseModel, config: RunnableConfig) -> Command:
-        return _portal_route_to_command(
-            parse_sync(state, config),
-            state,
-            payload_field=payload_field,
-            route_field=route_field,
-            valid_targets=valid_targets,
-            channel_key=channel_key,
-            count_field=count_field,
-            max_hops=max_hops,
-            on_exhaust=on_exhaust,
-            exit_name=exit_name,
-            node_name=node.name,
-            entry_name=entry_name,
-            target_resolve=target_resolve,
-        )
+        return _portal_route_to_command(parse_sync(state, config), state, spec, ctx)
 
     async def aparse_and_route(state: BaseModel, config: RunnableConfig) -> Command:
-        return _portal_route_to_command(
-            await parse_async(state, config),
-            state,
-            payload_field=payload_field,
-            route_field=route_field,
-            valid_targets=valid_targets,
-            channel_key=channel_key,
-            count_field=count_field,
-            max_hops=max_hops,
-            on_exhaust=on_exhaust,
-            exit_name=exit_name,
-            node_name=node.name,
-            entry_name=entry_name,
-            target_resolve=target_resolve,
-        )
+        return _portal_route_to_command(await parse_async(state, config), state, spec, ctx)
 
     return {
         "names": parts["names"],

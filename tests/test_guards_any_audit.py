@@ -45,6 +45,10 @@ ANY_AUDIT_MODULES = (
     # _walk_public_functions (module-level scan only) never sees them --
     # zero new ANY_ALLOWLIST entries.
     "_agent_spec_dispatch.py",
+    # MeshContext/PortalRouteSpec/MeshDeps -- the Portal routing-plumbing
+    # collapse (neograph-dgbqv.4, P9). checkpointer is TYPE_CHECKING-typed,
+    # not Any -- so its "Any-free" claim is a guard, not a promise.
+    "_portal_route.py",
     # Note: _normalize.py (the sibling normalized-view helper) is intentionally
     # NOT in scope — it is a pre-existing input/output-shape adapter whose Any
     # uses carry user-declared types throughout; bringing it under the
@@ -154,7 +158,6 @@ ANY_ALLOWLIST: dict[str, str] = {
     "_wiring.py:_add_branch_to_graph:checkpointer": "LangGraph checkpointer (BaseCheckpointSaver | None) threaded opaquely into the arm sub-construct compile; mirrors _add_subgraph's checkpointer: Any (neograph-faf8)",
     "_wiring.py:_add_arm_nodes:checkpointer": "LangGraph checkpointer (BaseCheckpointSaver | None) threaded opaquely into the arm sub-construct compile; extracted verbatim from _add_branch_to_graph:checkpointer (DRY-07 dedup, neograph-7w0d)",
     "_wiring.py:_add_portal_mesh:checkpointer": "LangGraph checkpointer (BaseCheckpointSaver | None) threaded opaquely into a sub-construct Portal mesh member's compile; mirrors _add_subgraph's checkpointer: Any (do0d9)",
-    "_wiring.py:_make_portal_subgraph_member_fn:checkpointer": "LangGraph checkpointer (BaseCheckpointSaver | None) threaded opaquely into the sub-construct mesh-member compile; mirrors _add_subgraph's checkpointer: Any (do0d9)",
     # ── _ir_normalize.py — IrNormalizer.apply update dict ──
     "_ir_normalize.py:IrNormalizer.apply:return": "model_copy update dict; heterogeneous IR field values (str fan_out_param, type[BaseModel] oracle_gen_type)",
 }

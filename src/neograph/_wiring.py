@@ -20,6 +20,7 @@ from neograph._agent_cycle import make_agent_cycle_bodies, make_tool_gate_bodies
 from neograph._ir_protocols import ConstructItem
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._portal_member import PortalMemberClass, portal_member_class
+from neograph._portal_route import MeshContext, MeshDeps, PortalRouteSpec
 from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
 from neograph._trace import named
@@ -208,19 +209,8 @@ def _contiguous_portal_mesh(nodes: list[ConstructItem], entry: Node) -> list[Con
 def _make_portal_subgraph_member_fn(
     sub: Construct,
     portal: Portal,
-    entry_field: str,
-    exit_name: str,
-    *,
-    max_hops: int,
-    on_exhaust: str,
-    entry_name: str,
-    target_resolve: dict[str, str],
-    checkpointer: Any = None,
-    parent_state_model: type[BaseModel] | None = None,
-    runtime: LlmRuntime = EMPTY_RUNTIME,
-    scripted_lookup: dict[str, Callable] | None = None,
-    condition_lookup: dict[str, Callable] | None = None,
-    tool_factory_lookup: dict[str, Callable] | None = None,
+    ctx: MeshContext,
+    deps: MeshDeps,
 ) -> Runnable:
     """Compile a sub-Construct mesh member and wrap its boundary as a Portal fn.
 
@@ -238,33 +228,113 @@ def _make_portal_subgraph_member_fn(
     # Build context_types from the parent state model so context fields get their
     # concrete parent types instead of Any (parity with _add_subgraph).
     _context_types: dict[str, type] | None = None
-    if parent_state_model is not None:
+    if deps.parent_state_model is not None:
         _context_types = {
             fname: finfo.annotation
-            for fname, finfo in parent_state_model.model_fields.items()
+            for fname, finfo in deps.parent_state_model.model_fields.items()
             if finfo.annotation is not None
         }
 
     sub_graph = _compile(
         sub,
-        checkpointer=checkpointer,
+        checkpointer=deps.checkpointer,
         _context_types=_context_types,
-        _runtime=runtime,
-        _scripted_lookup=scripted_lookup,
-        conditions=condition_lookup,
-        tool_factories=tool_factory_lookup,
+        _runtime=deps.runtime,
+        _scripted_lookup=deps.scripted_lookup,
+        conditions=deps.condition_lookup,
+        tool_factories=deps.tool_factory_lookup,
     )
-    return make_portal_subgraph_fn(
-        sub,
-        sub_graph.graph,
+    spec = PortalRouteSpec.for_sub_construct(sub, portal, ctx)
+    return make_portal_subgraph_fn(sub, sub_graph.graph, portal, spec, ctx)
+
+
+# --- Portal member-class adapter table (neograph-dgbqv.4, P9) ----------------
+#
+# Replaces a hand-written if/elif chain in `_add_portal_mesh` with a table
+# total over every REACHABLE `PortalMemberClass` (DISPATCH is excluded --
+# `_contiguous_portal_mesh` breaks on a dispatch-mode Portal, so it can never
+# be a mesh member; see `_portal_member.py`'s module docstring). A sixth
+# member class therefore cannot be added without an adapter -- the table's
+# totality is enforced by `tests/test_guards_portal_route_plumbing.py`.
+#
+# Each adapter has ONE uniform signature `(graph, member, portal, ctx, deps)
+# -> None`. ATOMIC and ATOMIC_OPERATOR share `_atomic_adapter`: the body
+# already branches on `member.modifier_set.operator is not None`, so the two
+# classes need no separate code path -- only two separate table KEYS pointing
+# at it (keeping the split at the table, not inside the body). Likewise
+# AGENT_CYCLE_OUTPUT and AGENT_CYCLE_TOOL share `_agent_cycle_adapter`, which
+# defers to `_add_portal_agent_cycle_member`'s own `portal_member_class`
+# check for the tool-vs-output distinction.
+
+
+def _atomic_adapter(graph: StateGraph, member: ConstructItem, portal: Portal, ctx: MeshContext, deps: MeshDeps) -> None:
+    """ATOMIC and ATOMIC_OPERATOR: a plain node, or one with an Operator
+    approval gate spliced onto its outgoing routes (neograph-kdr1u, D4)."""
+    assert isinstance(member, Node)
+    operator = member.modifier_set.operator
+    approve_name = f"{member.name}__approve" if operator is not None else None
+    spec = PortalRouteSpec.for_node(member, portal, ctx, approve_name=approve_name)
+    member_fn = make_portal_fn(
+        member,
         portal,
-        entry_field,
-        exit_name,
-        max_hops=max_hops,
-        on_exhaust=on_exhaust,
-        entry_name=entry_name,
-        target_resolve=target_resolve,
+        spec,
+        ctx,
+        runtime=deps.runtime,
+        scripted_lookup=deps.scripted_lookup,
+        tool_factory_lookup=deps.tool_factory_lookup,
     )
+    if approve_name is not None:
+        assert operator is not None  # approve_name is derived from operator above
+        # neograph-kdr1u (D4 lift): the member's OWN destinations become
+        # ONLY the approval node + exit -- ALL peer routes now detour
+        # through {member}__approve (HANDOFF_END stays direct/unguarded,
+        # wired inside the member's own Command via _portal_route_to_command).
+        # The approval node's OWN destinations are the declared peers ∪
+        # {exit} (whichever peer gets approved).
+        assert spec.proposed_field is not None
+        approval_fn = make_portal_approval_fn(
+            member.name,
+            operator,
+            count_field=ctx.count_field,
+            proposed_field=spec.proposed_field,
+            exit_name=ctx.exit_name,
+            condition_lookup=deps.condition_lookup,
+        )
+        approval_destinations = ctx.destinations_for(portal)
+        graph.add_node(approve_name, cast(Any, approval_fn), destinations=approval_destinations)
+        graph.add_node(member.name, cast(Any, member_fn), destinations=(approve_name, ctx.exit_name))
+    else:
+        # destinations = declared peers ∪ {exit}, resolved through the
+        # entry-label map so an agent/act peer's destination is its real
+        # entry node name. HANDOFF_END is a route VALUE mapped to exit_name
+        # inside the wrapper, so exit_name (not HANDOFF_END) is the goto
+        # target that must appear here.
+        graph.add_node(member.name, cast(Any, member_fn), destinations=ctx.destinations_for(portal))
+
+
+def _agent_cycle_adapter(graph: StateGraph, member: ConstructItem, portal: Portal, ctx: MeshContext, deps: MeshDeps) -> None:
+    """AGENT_CYCLE_OUTPUT and AGENT_CYCLE_TOOL: an agent/act mesh member's
+    ReAct cycle. The mesh entry edge is wired once, below -- not per member."""
+    assert isinstance(member, Node)
+    _add_portal_agent_cycle_member(graph, member, portal, ctx, deps, prev_node=None)
+
+
+def _sub_construct_adapter(graph: StateGraph, member: ConstructItem, portal: Portal, ctx: MeshContext, deps: MeshDeps) -> None:
+    """SUB_CONSTRUCT: a whole ``Construct`` mesh member (do0d9, §3.1 site 4)."""
+    assert isinstance(member, Construct)
+    subgraph_fn = _make_portal_subgraph_member_fn(member, portal, ctx, deps)
+    graph.add_node(member.name, cast(Any, subgraph_fn), destinations=ctx.destinations_for(portal))
+
+
+Adapter = Callable[[StateGraph, ConstructItem, Portal, MeshContext, MeshDeps], None]
+
+_PORTAL_MEMBER_ADAPTERS: dict[PortalMemberClass, Adapter] = {
+    PortalMemberClass.ATOMIC: _atomic_adapter,
+    PortalMemberClass.ATOMIC_OPERATOR: _atomic_adapter,
+    PortalMemberClass.AGENT_CYCLE_OUTPUT: _agent_cycle_adapter,
+    PortalMemberClass.AGENT_CYCLE_TOOL: _agent_cycle_adapter,
+    PortalMemberClass.SUB_CONSTRUCT: _sub_construct_adapter,
+}
 
 
 def _add_portal_mesh(
@@ -291,150 +361,52 @@ def _add_portal_mesh(
     linear chain resumes, so the compile walk threads ``prev_node`` forward from
     it unchanged. Returns the exit node name.
 
-    ENTRY-LABEL MAP (mesh-local): a DX-visible peer name
-    (``member.name``) may not be the member's real LangGraph node name — an
-    agent/act member's real entry is ``{member.name}__agent`` (its Portal-
-    visible boundary port, per the Core Invariant: routing resolves to an
-    entry, never a region's interior ``__tools``/loopback nodes). Every
-    ``Command(goto=...)`` target AND the mesh's own static entry edge
-    (``prev → entry``, below) resolve through this ONE map — atomic members
-    map to themselves. Built as a plain local dict scoped to this mesh; the
-    graph-wide generalization (reused across sub-construct boundaries) is
-    left to neograph-do0d9/a37vk, not built here.
+    Every fact the mesh members need (the entry-label map, the hop budget, the
+    shared channel/counter keys, the resolved destination tuples) is derived
+    ONCE into a ``MeshContext`` (neograph-dgbqv.4, P9) rather than re-derived
+    per member -- dispatch to the right per-member wiring is a table lookup on
+    ``PortalMemberClass``, not an if/elif chain.
     """
-    entry = members[0]
-    entry_field = field_name_for(entry.name)
-    exit_name = f"__handoff_exit_{entry.name}"
-
-    # ENTRY-LABEL MAP: a DX-visible peer name may not be its real LangGraph node
-    # name. An agent/act member's real entry is ``{name}__agent``; an atomic Node
-    # OR a sub-``Construct`` member maps to ITSELF (a Construct compiles to ONE
-    # opaque boundary node added under ``sub.name`` — do0d9). ``getattr(...,
-    # "mode")`` because a ``Construct`` has no ``.mode`` field.
-    entry_label_map = {
-        member.name: (f"{member.name}__agent" if getattr(member, "mode", None) in ("agent", "act") else member.name)
-        for member in members
-    }
-
-    # max_hops/on_exhaust are ENTRY-only knobs (T1 validation), but the wrapper
-    # runs per member — source the budget from the entry and thread it into every
-    # member's wrapper as closure params (design §3.4, decisions D11/D12).
-    entry_portal = entry.modifier_set.portal
-    assert isinstance(entry_portal, Portal)
-    entry_max_hops = entry_portal.max_hops
-    entry_on_exhaust = entry_portal.on_exhaust
+    ctx = MeshContext.build(members)
+    deps = MeshDeps(
+        checkpointer=checkpointer,
+        parent_state_model=parent_state_model,
+        runtime=runtime,
+        scripted_lookup=scripted_lookup,
+        condition_lookup=condition_lookup,
+        tool_factory_lookup=tool_factory_lookup,
+    )
 
     # Pass-through exit node — the mesh's single re-join point (design §3.1 r2).
     def handoff_exit(state: Any) -> dict:
         return {}
 
-    graph.add_node(exit_name, handoff_exit)
+    graph.add_node(ctx.exit_name, handoff_exit)
 
     for member in members:
         portal = member.modifier_set.portal
         assert isinstance(portal, Portal)  # collected as Portal-modified
-        if isinstance(member, Construct):
-            # A sub-Construct mesh member (do0d9, §3.1 site 4): compile the
-            # sub-construct into its OWN isolated graph exactly as _add_subgraph
-            # does (threading checkpointer + runtime + lookups), then wrap the
-            # boundary node with make_portal_subgraph_fn so its declared-output
-            # payload drives parent routing through the SAME Command(goto) path.
-            subgraph_fn = _make_portal_subgraph_member_fn(
-                member,
-                portal,
-                entry_field,
-                exit_name,
-                max_hops=entry_max_hops,
-                on_exhaust=entry_on_exhaust,
-                entry_name=entry.name,
-                target_resolve=entry_label_map,
-                checkpointer=checkpointer,
-                parent_state_model=parent_state_model,
-                runtime=runtime,
-                scripted_lookup=scripted_lookup,
-                condition_lookup=condition_lookup,
-                tool_factory_lookup=tool_factory_lookup,
+        member_class = portal_member_class(member)
+        adapter = _PORTAL_MEMBER_ADAPTERS.get(member_class) if member_class is not None else None
+        if adapter is None:
+            raise ConfigurationError.build(
+                "Unreachable PortalMemberClass in a mesh",
+                found=f"{member_class!r} for member {member.name!r}",
+                hint="DISPATCH cannot be a mesh member; every other class has a declared adapter",
             )
-            destinations = tuple(entry_label_map.get(t, t) for t in (portal.to or ())) + (exit_name,)
-            graph.add_node(member.name, cast(Any, subgraph_fn), destinations=destinations)
-            continue
-        # Past the Construct branch every remaining member is a Portal-modified
-        # Node (atomic or agent/act) — narrow for the Node-typed wiring calls.
-        assert isinstance(member, Node)
-        if portal_member_class(member) in (PortalMemberClass.AGENT_CYCLE_OUTPUT, PortalMemberClass.AGENT_CYCLE_TOOL):
-            _add_portal_agent_cycle_member(
-                graph,
-                member,
-                portal,
-                entry_field,
-                exit_name,
-                prev_node=None,  # the mesh entry edge is wired once, below — not per member
-                max_hops=entry_max_hops,
-                on_exhaust=entry_on_exhaust,
-                entry_name=entry.name,
-                runtime=runtime,
-                tool_factory_lookup=tool_factory_lookup,
-                condition_lookup=condition_lookup,
-                target_resolve=entry_label_map,
-            )
-            continue
-        operator = member.modifier_set.operator
-        approve_name = f"{member.name}__approve" if operator is not None else None
-        member_fn = make_portal_fn(
-            member,
-            portal,
-            entry_field,
-            exit_name,
-            max_hops=entry_max_hops,
-            on_exhaust=entry_on_exhaust,
-            entry_name=entry.name,
-            runtime=runtime,
-            scripted_lookup=scripted_lookup,
-            tool_factory_lookup=tool_factory_lookup,
-            target_resolve=entry_label_map,
-            approve_name=approve_name,
-        )
-        if approve_name is not None:
-            assert operator is not None  # approve_name is derived from operator above
-            # neograph-kdr1u (D4 lift): the member's OWN destinations become
-            # ONLY the approval node + exit -- ALL peer routes now detour
-            # through {member}__approve (HANDOFF_END stays direct/unguarded,
-            # wired inside the member's own Command via _portal_route_to_command).
-            # The approval node's OWN destinations are the declared peers ∪
-            # {exit} (whichever peer gets approved).
-            proposed_field = StateKeys.portal_proposed_target(field_name_for(member.name))
-            count_field = StateKeys.handoff_hops(entry_field)
-            approval_fn = make_portal_approval_fn(
-                member.name,
-                operator,
-                count_field=count_field,
-                proposed_field=proposed_field,
-                exit_name=exit_name,
-                condition_lookup=condition_lookup,
-            )
-            approval_destinations = tuple(entry_label_map.get(t, t) for t in (portal.to or ())) + (exit_name,)
-            graph.add_node(approve_name, cast(Any, approval_fn), destinations=approval_destinations)
-            graph.add_node(member.name, cast(Any, member_fn), destinations=(approve_name, exit_name))
-        else:
-            # destinations = declared peers ∪ {exit}, resolved through the
-            # entry-label map so an agent/act peer's destination is its real
-            # entry node name. HANDOFF_END is a route VALUE mapped to exit_name
-            # inside the wrapper, so exit_name (not HANDOFF_END) is the goto
-            # target that must appear here.
-            destinations = tuple(entry_label_map.get(t, t) for t in (portal.to or ())) + (exit_name,)
-            graph.add_node(member.name, cast(Any, member_fn), destinations=destinations)
+        adapter(graph, member, portal, ctx, deps)
 
     # The only static edge into the mesh: prev → entry, resolved through the
     # SAME entry-label map — an agent/act ENTRY's real node is
     # {entry.name}__agent, not entry.name (this is the same map applied to
     # the entry as well as every peer, not a separate mechanism).
-    entry_target = entry_label_map[entry.name]
+    entry_target = ctx.entry_label_map[ctx.entry_name]
     if prev_node:
         graph.add_edge(prev_node, entry_target)
     else:
         graph.add_edge(START, entry_target)
 
-    return exit_name
+    return ctx.exit_name
 
 
 def _add_portal_dispatch(
@@ -706,25 +678,18 @@ def _add_portal_agent_cycle_member(
     graph: StateGraph,
     node: Node,
     portal: Portal,
-    entry_field: str,
-    exit_name: str,
-    prev_node: str | None,
+    ctx: MeshContext,
+    deps: MeshDeps,
     *,
-    max_hops: int,
-    on_exhaust: str,
-    entry_name: str,
-    runtime: LlmRuntime = EMPTY_RUNTIME,
-    tool_factory_lookup: dict[str, Callable] | None = None,
-    condition_lookup: dict[str, Callable] | None = None,
-    target_resolve: dict[str, str] | None = None,
+    prev_node: str | None,
 ) -> None:
     """Wire an agent/act Portal mesh member's ReAct cycle.
 
     The mesh-member counterpart of ``_add_portal_mesh``'s per-member
     ``make_portal_fn`` call for atomic members: the member's DX-visible
     Portal identity is its entry (``{node}__agent``, the destination other
-    peers' ``Command(goto=...)`` must resolve to via ``target_resolve``) and
-    its reconverging exit (``{node}__parse``, the ONLY node that returns a
+    peers' ``Command(goto=...)`` must resolve to via ``ctx.entry_label_map``)
+    and its reconverging exit (``{node}__parse``, the ONLY node that returns a
     mesh ``Command`` — the interior ``__tools``/loopback nodes never do),
     per the Core Invariant (route-to-entry-port, emit-from-exit-port).
     Reuses ``_wire_agent_cycle_body`` for everything except the parse node's
@@ -737,43 +702,34 @@ def _add_portal_agent_cycle_member(
     with NO static ``tools -> agent`` edge; its ``parse`` node is still wired
     exactly like a ``trigger="output"`` member (the normal-completion exit).
     """
-    # destinations = declared peers ∪ {exit}, resolved through the entry-label
-    # map so an agent/act peer's destination is its real entry node name —
+    # parse_destinations = declared peers ∪ {exit} for BOTH trigger kinds —
     # mirrors the atomic member's `graph.add_node(member.name, fn,
     # destinations=...)` in `_add_portal_mesh`.
-    resolve = target_resolve or {}
-    peer_targets = tuple(resolve.get(t, t) for t in (portal.to or ()))
-    parse_destinations = peer_targets + (exit_name,)
+    parse_destinations = ctx.destinations_for(portal)
     tools_destinations: tuple[str, ...] | None = None
     if portal_member_class(node) is PortalMemberClass.AGENT_CYCLE_TOOL:
+        spec = PortalRouteSpec.for_tool_member(node, portal, ctx)
         parts = make_portal_agent_cycle_tool_handoff_fn(
             node,
             portal,
-            entry_field,
-            exit_name,
-            max_hops=max_hops,
-            on_exhaust=on_exhaust,
-            entry_name=entry_name,
-            runtime=runtime,
-            tool_factory_lookup=tool_factory_lookup,
-            target_resolve=target_resolve,
+            spec,
+            ctx,
+            runtime=deps.runtime,
+            tool_factory_lookup=deps.tool_factory_lookup,
         )
         # The tools node routes to a peer's real entry (handoff) OR loops back to
         # {node}__agent (no handoff this turn) — both are dynamic Command targets,
         # so the static tools -> agent edge is dropped (design §3.4).
-        tools_destinations = peer_targets + (parts["names"].agent,)
+        tools_destinations = ctx.resolved_peers(portal) + (parts["names"].agent,)
     else:
+        spec = PortalRouteSpec.for_node(node, portal, ctx)
         parts = make_portal_agent_cycle_fn(
             node,
             portal,
-            entry_field,
-            exit_name,
-            max_hops=max_hops,
-            on_exhaust=on_exhaust,
-            entry_name=entry_name,
-            runtime=runtime,
-            tool_factory_lookup=tool_factory_lookup,
-            target_resolve=target_resolve,
+            spec,
+            ctx,
+            runtime=deps.runtime,
+            tool_factory_lookup=deps.tool_factory_lookup,
         )
     # A Portal mesh member (entry or peer) is never reached via a static
     # prev-node edge — the mesh's single static edge (prev -> entry) is
@@ -785,7 +741,7 @@ def _add_portal_agent_cycle_member(
         node,
         parts,
         prev_node,
-        condition_lookup=condition_lookup,
+        condition_lookup=deps.condition_lookup,
         parse_destinations=parse_destinations,
         tools_destinations=tools_destinations,
         add_static_entry_edge=False,

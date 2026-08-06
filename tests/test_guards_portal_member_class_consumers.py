@@ -104,6 +104,10 @@ MIGRATED: frozenset[str] = frozenset(
         # The private `_is_dispatch` helper, the member filter, and the
         # Operator-guarded proposed-target field (the ATOMIC_OPERATOR axis).
         "state.py",
+        # MeshContext.build's entry_label_map derivation -- the classifier
+        # call that replaces _wiring.py:315's getattr(member, 'mode')
+        # re-derivation (neograph-dgbqv.4, P9).
+        "_portal_route.py",
     }
 )
 
@@ -234,14 +238,44 @@ def _discriminator_sites(source: str) -> list[tuple[str, int, str]]:
     return sorted(hits)
 
 
+def _reads_mode(operand: ast.expr) -> bool:
+    """True if ``operand`` reads a ``.mode`` — as an attribute access OR via
+    ``getattr(x, "mode", ...)``.
+
+    The ``getattr`` arm was added by neograph-dgbqv.4 (P9). It closes a hole
+    this axis was structurally blind to: ``_wiring.py:315`` built its
+    entry-label map with ``getattr(member, "mode", None) in ("agent", "act")``,
+    and because a ``getattr`` call is an ``ast.Call`` rather than an
+    ``ast.Attribute``, the live disease site inside a MIGRATED file slipped
+    straight through. A ``Construct`` has no ``.mode`` field, which is exactly
+    why a re-derivation reaches for the defaulted form — so the defaulted form
+    is the one most likely to regrow.
+
+    Tightening this cost nothing: a tree-wide sweep finds exactly TWO
+    ``getattr(x, "mode")`` sites in ``src/``, and the other is the classifier's
+    own definition (``_portal_member.py:94``), which compares against a NAME
+    rather than a string literal and sits outside MIGRATED on both counts.
+    """
+    if isinstance(operand, ast.Attribute) and operand.attr == "mode":
+        return True
+    return (
+        isinstance(operand, ast.Call)
+        and isinstance(operand.func, ast.Name)
+        and operand.func.id == "getattr"
+        and len(operand.args) >= 2
+        and isinstance(operand.args[1], ast.Constant)
+        and operand.args[1].value == "mode"
+    )
+
+
 def _agent_mode_sites(source: str) -> list[tuple[str, int, tuple[str, ...]]]:
     """Axis B: ``(function, lineno, literals)`` for every ``.mode`` compare naming
     ``"agent"`` or ``"act"``.
 
-    Covers ``node.mode in ("agent", "act")``, ``item.mode == "agent"``, and the
-    ``not in``/``!=`` negations — one side must be an ``.mode`` attribute access
-    and the other must name an agent-cycle mode, directly or inside a
-    tuple/list/set literal.
+    Covers ``node.mode in ("agent", "act")``, ``item.mode == "agent"``,
+    ``getattr(m, "mode", None) in ("agent", "act")``, and the ``not in``/``!=``
+    negations — one side must READ a mode (see ``_reads_mode``) and the other
+    must name an agent-cycle mode, directly or inside a tuple/list/set literal.
     """
     tree = ast.parse(source)
     where = _enclosing_functions(tree)
@@ -252,7 +286,7 @@ def _agent_mode_sites(source: str) -> list[tuple[str, int, tuple[str, ...]]]:
         if not any(isinstance(op, (ast.Eq, ast.NotEq, ast.In, ast.NotIn)) for op in node.ops):
             continue
         operands = [node.left, *node.comparators]
-        if not any(isinstance(o, ast.Attribute) and o.attr == "mode" for o in operands):
+        if not any(_reads_mode(o) for o in operands):
             continue
         literals: set[str] = set()
         for operand in operands:
@@ -551,6 +585,42 @@ class TestAgentModeScannerMetaTests:
         )
         assert [fn for fn, _l, _lits in _agent_mode_sites(src)] == ["f"]
 
+    def test_meta_flags_the_getattr_membership_form(self):
+        """POSITIVE meta-test for the neograph-dgbqv.4 scanner extension.
+
+        The real shape at ``_wiring.py:315``, which the ``ast.Attribute``-only
+        scanner could not see. A scanner extension without its own meta-test is
+        unpinned.
+        """
+        src = 'def f(m):\n    return getattr(m, "mode", None) in ("agent", "act")\n'
+        assert [(fn, lits) for fn, _l, lits in _agent_mode_sites(src)] == [("f", ("act", "agent"))]
+
+    def test_meta_flags_the_getattr_equality_form(self):
+        src = 'def f(m):\n    return getattr(m, "mode", None) == "agent"\n'
+        assert [lits for _fn, _l, lits in _agent_mode_sites(src)] == [("agent",)]
+
+    def test_meta_flags_the_getattr_form_inside_a_comprehension(self):
+        """``_wiring.py:315`` sits inside a dict comprehension — the walk must
+        reach it there, not only in a statement position."""
+        src = 'def f(ms):\n    return {m.name: getattr(m, "mode", None) in ("agent", "act") for m in ms}\n'
+        assert [fn for fn, _l, _lits in _agent_mode_sites(src)] == ["f"]
+
+    def test_meta_ignores_getattr_on_another_attribute(self):
+        src = 'def f(m):\n    return getattr(m, "route", None) == "agent"\n'
+        assert _agent_mode_sites(src) == []
+
+    def test_meta_ignores_the_classifier_own_definition_shape(self):
+        """The ONLY other ``getattr(x, "mode")`` in ``src/``
+        (``_portal_member.py:94``) compares against a NAME, not a string
+        literal, so tightening axis B has zero collateral. Pinned so the
+        "zero collateral" claim stays true rather than remembered."""
+        src = (
+            '_AGENT_CYCLE_MODES = frozenset({"agent", "act"})\n'
+            "def portal_member_class(item):\n"
+            '    return getattr(item, "mode", None) in _AGENT_CYCLE_MODES\n'
+        )
+        assert _agent_mode_sites(src) == []
+
     def test_meta_ignores_non_agent_mode_compares(self):
         """``mode == "scripted"`` and the think axis are not member-class
         questions -- axis B keys on the agent-cycle modes only."""
@@ -632,6 +702,19 @@ class TestGuardIsNotVacuous:
             '    if isinstance(member, Node) and member.mode in ("agent", "act"):\n'
             "        return 43\n"
             "    return 1\n"
+        )
+        assert len(_agent_mode_sites(src)) == 1
+
+    def test_agent_mode_scanner_matches_the_getattr_disease_form(self):
+        """Anti-vacuity for the neograph-dgbqv.4 extension, written against the
+        PREDICATE. If the ``getattr`` arm ever stops matching, this fails even
+        though the tree is clean."""
+        src = (
+            "def add_portal_mesh(members):\n"
+            "    return {\n"
+            '        m.name: (f"{m.name}__agent" if getattr(m, "mode", None) in ("agent", "act") else m.name)\n'
+            "        for m in members\n"
+            "    }\n"
         )
         assert len(_agent_mode_sites(src)) == 1
 
