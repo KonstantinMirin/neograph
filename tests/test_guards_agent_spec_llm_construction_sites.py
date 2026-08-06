@@ -176,9 +176,20 @@ NODE_SITE_EXEMPTIONS: frozenset[tuple[str, str]] = frozenset({("InputMessageNode
 # lineno heuristic (the InputMessageNode carries no ${var} -- outputs-only, like
 # _lower_operator's -- so its "paired" tag is a benign over-count, not a safety
 # concern). Neither can leak an untranslated ${var} to the wire.
-EXPECTED_NODE_SITES = 6
+# neograph-qtfof.5: _lower_generation_step's scripted/raw fallback adds a THIRD
+# AgentNode site -- wrapping a reconstructed pyagentspec RemoteAgent (A2AAgent/
+# OciAgent) from a Node's _remote_agent_endpoint sidecar, so a re-exported
+# client-initiated remote agent round-trips instead of silently downgrading to a
+# bare ToolNode. It carries NO neograph-authored ${var} prompt text (the wrapped
+# RemoteAgent's config was captured verbatim on import, never rendered from a
+# neograph prompt string) -- it lands textually AFTER the agent/act branch's own
+# _translate_placeholders call in the SAME enclosing function, so the lineno
+# heuristic tags it "paired" too. Same benign-over-count shape as the Phase 6
+# InputMessageNode pause site above: nothing here can leak an untranslated
+# ${var}, because nothing here ever had one.
+EXPECTED_NODE_SITES = 7
 EXPECTED_MAKE_AGENT_SITES = 2
-EXPECTED_PAIRED_NODE_SITES = 5  # 6 collected minus the ONE unpaired _lower_operator InputMessageNode (exempt)
+EXPECTED_PAIRED_NODE_SITES = 6  # 7 collected minus the ONE unpaired _lower_operator InputMessageNode (exempt)
 EXPECTED_PAIRED_MAKE_AGENT_SITES = 2  # ALL of them -- no allowlist since the s7zt3.1 fix
 
 # Req-4 reconciliation: post-2s2o6 the 5 SEMANTIC matrix dispatch branches
@@ -186,10 +197,11 @@ EXPECTED_PAIRED_MAKE_AGENT_SITES = 2  # ALL of them -- no allowlist since the s7
 # merge_prompt}) lower through the shared _lower_generation_step, collapsing onto
 # 3 PHYSICAL placeholder-coupled sites; Phase 6's mesh-exit composite adds 2 more
 # paired physical sites (AgentNode(Swarm) + pause InputMessageNode in
-# _lower_portal_mesh_to_swarm), for 5 total. The guard's paired NODE-site count
-# must equal this physical count (a lost/added physical site still fails loud);
-# it is NOT the semantic-branch count.
-PHYSICAL_COUPLED_SITES = 5
+# _lower_portal_mesh_to_swarm); neograph-qtfof.5's RemoteAgent-wrapping AgentNode
+# in _lower_generation_step's scripted/raw fallback adds 1 more, for 6 total. The
+# guard's paired NODE-site count must equal this physical count (a lost/added
+# physical site still fails loud); it is NOT the semantic-branch count.
+PHYSICAL_COUPLED_SITES = 6
 
 
 class TestPlaceholderEmittingSitesAreExhaustivelyCollected:
@@ -208,7 +220,7 @@ class TestPlaceholderEmittingSitesAreExhaustivelyCollected:
         by_name: dict[str, int] = {}
         for s in NODE_SITES:
             by_name[s.name] = by_name.get(s.name, 0) + 1
-        assert by_name == {"LlmNode": 2, "AgentNode": 2, "InputMessageNode": 2}, (
+        assert by_name == {"LlmNode": 2, "AgentNode": 3, "InputMessageNode": 2}, (
             f"coupled-constructor breakdown drifted: {by_name}"
         )
 
@@ -371,3 +383,105 @@ class TestPairingCheckMetaGuard:
         )
         node_sites, _make_agent, translate_by_func = _parse(good)
         assert _unpaired(node_sites, translate_by_func) == []
+
+
+def _scripted_fallback_consults_sidecar(source_text: str, *, sidecar: str, guarded_fallback: str) -> bool:
+    """AST-check: does ``_lower_generation_step`` (or a same-shaped function)
+
+    reference ``node.<sidecar>`` inside an ``if`` test that guards the
+    unconditional fallback constructor call named ``guarded_fallback`` --
+    i.e. is the fallback actually preceded by a sidecar check, not just
+    falling straight through to it.
+
+    Returns False if the function is missing, if no ``if`` test anywhere in
+    the function references the sidecar attribute, or if the fallback call
+    is never reached at all -- so a silent regression (the check deleted, or
+    the fallback moved above the check) is caught, not vacuously passed.
+    """
+    tree = ast.parse(source_text)
+    sidecar_if_seen = False
+    fallback_call_seen = False
+
+    class _Walker(ast.NodeVisitor):
+        def visit_If(self, node: ast.If) -> None:
+            nonlocal sidecar_if_seen
+            for sub in ast.walk(node.test):
+                if isinstance(sub, ast.Attribute) and sub.attr == sidecar:
+                    sidecar_if_seen = True
+            self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            nonlocal fallback_call_seen
+            name = _callee_trailing_name(node)
+            if name == guarded_fallback:
+                fallback_call_seen = True
+            self.generic_visit(node)
+
+    _Walker().visit(tree)
+    return sidecar_if_seen and fallback_call_seen
+
+
+class TestScriptedFallbackConsultsRemoteAgentSidecar:
+    """neograph-qtfof.5: ``_lower_generation_step``'s scripted/raw fallback used
+
+    to unconditionally build a bare ``ToolNode``, silently dropping a Node's
+    ``_remote_agent_endpoint`` sidecar (written on import by
+    ``_agent_spec_node_import.py``, never read anywhere on export) -- a
+    client-initiated RemoteAgent degraded to a plain scripted node on
+    re-export with no error. The fix added an ``if node._remote_agent_endpoint
+    is not None:`` branch ahead of the ``ToolNode`` fallback. This guard pins
+    that check structurally so a future refactor cannot silently delete it
+    while every symptom-shaped test (which only exercises the CURRENT
+    RemoteAgent families) stays green.
+
+    Positive+negative meta-guard, same shape as ``TestPairingCheckMetaGuard``
+    above: prove the checker actually FLAGS a missing sidecar check, so the
+    guard below is not vacuously green.
+    """
+
+    def test_real_source_consults_the_sidecar(self):
+        assert _scripted_fallback_consults_sidecar(
+            _SOURCE, sidecar="_remote_agent_endpoint", guarded_fallback="ToolNode"
+        ), (
+            "_lower_generation_step's scripted/raw fallback no longer checks "
+            "node._remote_agent_endpoint before building a bare ToolNode -- "
+            "this silently re-introduces neograph-qtfof.5 (a re-exported "
+            "client-initiated RemoteAgent degrades to a plain scripted node)"
+        )
+
+    def test_negative_missing_sidecar_check_is_flagged(self):
+        # Synthetic function with the SAME unconditional-fallback shape but
+        # NO sidecar check -- the exact pre-fix qtfof.5 seam.
+        buggy = (
+            "def _fake_lower(node):\n"
+            "    if node.mode == 'think':\n"
+            "        return nodes_mod.LlmNode(prompt_template=node.prompt)\n"
+            "    return nodes_mod.ToolNode(tool=_make_server_tool(node))\n"
+        )
+        assert not _scripted_fallback_consults_sidecar(
+            buggy, sidecar="_remote_agent_endpoint", guarded_fallback="ToolNode"
+        ), "a fallback with no sidecar check MUST be flagged -- otherwise the guard is vacuously green"
+
+    def test_negative_fallback_never_reached_is_flagged(self):
+        # A sidecar check exists but the fallback constructor is absent entirely
+        # (e.g. renamed/removed) -- must not silently pass by matching only half.
+        buggy = (
+            "def _fake_lower(node):\n"
+            "    if node._remote_agent_endpoint is not None:\n"
+            "        return nodes_mod.AgentNode(agent=_reconstruct_remote_agent(node))\n"
+        )
+        assert not _scripted_fallback_consults_sidecar(
+            buggy, sidecar="_remote_agent_endpoint", guarded_fallback="ToolNode"
+        ), "a missing fallback call MUST be flagged, not treated as trivially satisfied"
+
+    def test_positive_check_and_fallback_together_pass(self):
+        # Synthetic function WITH both the check and the fallback -> must NOT be flagged.
+        good = (
+            "def _fake_lower(node):\n"
+            "    if node._remote_agent_endpoint is not None:\n"
+            "        return nodes_mod.AgentNode(agent=_reconstruct_remote_agent(node))\n"
+            "    return nodes_mod.ToolNode(tool=_make_server_tool(node))\n"
+        )
+        assert _scripted_fallback_consults_sidecar(
+            good, sidecar="_remote_agent_endpoint", guarded_fallback="ToolNode"
+        )

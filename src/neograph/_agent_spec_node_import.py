@@ -36,8 +36,8 @@ from neograph.tool import Tool
 # RemoteAgent itself is abstract (no endpoint fields of its own) and has no
 # instantiable concrete form beyond the two families below.
 _REMOTE_AGENT_ENDPOINT_ATTRS: dict[str, tuple[str, ...]] = {
-    "A2AAgent": ("agent_url", "connection_config"),
-    "OciAgent": ("agent_endpoint_id", "client_config"),
+    "A2AAgent": ("name", "agent_url", "connection_config"),
+    "OciAgent": ("name", "agent_endpoint_id", "client_config"),
 }
 
 

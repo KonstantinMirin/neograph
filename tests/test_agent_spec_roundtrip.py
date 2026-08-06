@@ -984,3 +984,136 @@ class TestRemoteAgentEndpointSidecarCapture:
         assert "agent_url" not in endpoint_fields
         assert "connection_config" not in endpoint_fields
 
+
+# ── neograph-qtfof.5: RemoteAgent endpoint sidecar has zero export-side readers ──
+
+
+class TestRemoteAgentEndpointSurvivesReExport:
+    """qtfof.5: pt85t correctly stashes a client-initiated RemoteAgent's
+    endpoint config on IMPORT (``node._remote_agent_endpoint``,
+    ``TestRemoteAgentEndpointSidecarCapture`` above). But nothing on the
+    EXPORT side (``to_agent_spec`` / ``_agent_spec_node_lowering._lower_node``)
+    ever reads that sidecar back out -- confirmed by
+    ``grep -rn _remote_agent_endpoint src/neograph/`` returning only the
+    PrivateAttr declaration (node.py:198) and the single import-side writer
+    (``_agent_spec_node_import.py:267``), zero readers.
+
+    So import -> re-export of a Flow containing a client-initiated RemoteAgent
+    silently degrades it to a plain scripted ``ToolNode`` -- the endpoint
+    configuration is quietly lost, not rejected and not preserved. Under this
+    session's maintainer-set "faithful, independently executable program"
+    export policy, that is a real bug.
+
+    FAILS NOW: the re-exported node is a plain ``ToolNode`` (the "scripted /
+    raw" fallback branch in ``_lower_generation_step``, which never consults
+    ``node._remote_agent_endpoint``) -- not an ``AgentNode`` wrapping a
+    reconstructed ``A2AAgent`` with the original endpoint fields intact.
+    """
+
+    def test_a2a_agent_endpoint_is_lost_on_reexport(self):
+        from pyagentspec.a2aagent import A2AAgent, A2AConnectionConfig
+        from pyagentspec.flows.flow import Flow
+
+        agent = Node(name="remote_helper", mode="agent", model="fast", prompt="help", outputs=Result)
+        flow = to_agent_spec(Construct("remote-pipeline", nodes=[agent]))
+        agent_node = next(n for n in flow.nodes if type(n).__name__ == "AgentNode")
+        remote = A2AAgent(
+            name="remote_helper",
+            agent_url="http://svc.example/agent",
+            connection_config=A2AConnectionConfig(name="conn"),
+            outputs=agent_node.outputs,
+        )
+        new_nodes = [
+            n.model_copy(update={"agent": remote, "metadata": {}})
+            if type(n).__name__ == "AgentNode"
+            else n
+            for n in flow.nodes
+        ]
+        foreign_flow = Flow.from_dict(flow.model_copy(update={"nodes": new_nodes}).to_dict())
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            imported = from_agent_spec(foreign_flow)
+
+        member = next(n for n in imported.nodes if getattr(n, "name", None) == "remote_helper")
+        assert member._remote_agent_endpoint is not None, (
+            "import-side sidecar capture (pt85t) regressed -- that is a different bug"
+        )
+
+        reexported = to_agent_spec(Construct("remote-pipeline-reexport", nodes=[member]))
+        reexported_node = next(n for n in reexported.nodes if n.name == "remote_helper")
+
+        assert type(reexported_node).__name__ == "AgentNode", (
+            f"expected the RemoteAgent endpoint sidecar to reconstruct an AgentNode wrapping "
+            f"an A2AAgent, got a bare {type(reexported_node).__name__!r} -- the endpoint config "
+            "was silently dropped on re-export"
+        )
+        assert type(reexported_node.agent).__name__ == "A2AAgent"
+        assert reexported_node.agent.agent_url == "http://svc.example/agent"
+        assert reexported_node.agent.name == "remote_helper"
+
+    def test_oci_agent_endpoint_is_preserved_on_reexport(self):
+        """The OciAgent family uses DIFFERENT field names than A2AAgent
+        (agent_endpoint_id/client_config, not agent_url/connection_config) --
+        this pins that the export-side fix reads the per-family attrs from
+        the sidecar rather than hard-coding the A2AAgent shape."""
+        from pyagentspec.flows.flow import Flow
+        from pyagentspec.llms.ociclientconfig import OciClientConfigWithInstancePrincipal
+        from pyagentspec.ociagent import OciAgent
+
+        agent = Node(name="remote_helper", mode="agent", model="fast", prompt="help", outputs=Result)
+        flow = to_agent_spec(Construct("remote-pipeline", nodes=[agent]))
+        agent_node = next(n for n in flow.nodes if type(n).__name__ == "AgentNode")
+        remote = OciAgent(
+            name="remote_helper",
+            agent_endpoint_id="ocid1.aiagentendpoint.oc1..example",
+            client_config=OciClientConfigWithInstancePrincipal(
+                name="oci-client-config",
+                service_endpoint="https://agent.oci.example",
+            ),
+            outputs=agent_node.outputs,
+        )
+        new_nodes = [
+            n.model_copy(update={"agent": remote, "metadata": {}}) if type(n).__name__ == "AgentNode" else n
+            for n in flow.nodes
+        ]
+        foreign_flow = Flow.from_dict(flow.model_copy(update={"nodes": new_nodes}).to_dict())
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            imported = from_agent_spec(foreign_flow)
+
+        member = next(n for n in imported.nodes if getattr(n, "name", None) == "remote_helper")
+        assert member._remote_agent_endpoint is not None
+
+        reexported = to_agent_spec(Construct("remote-pipeline-reexport", nodes=[member]))
+        reexported_node = next(n for n in reexported.nodes if n.name == "remote_helper")
+
+        assert type(reexported_node).__name__ == "AgentNode"
+        assert type(reexported_node.agent).__name__ == "OciAgent"
+        assert reexported_node.agent.agent_endpoint_id == "ocid1.aiagentendpoint.oc1..example"
+        assert reexported_node.agent.client_config.service_endpoint == "https://agent.oci.example"
+        assert reexported_node.agent.name == "remote_helper"
+
+    def test_reexport_fails_loud_when_remote_agent_shape_has_drifted(self):
+        """If the sidecar captured an attr name that no longer exists on the
+        installed pyagentspec SDK's RemoteAgent-family class (a version
+        drift between import time and export time), the fix must fail LOUD
+        with ConfigurationError -- never silently drop the stale attr and
+        never silently fall back to a bare ToolNode."""
+        from neograph.errors import ConfigurationError
+
+        node = Node(name="remote_helper", mode="scripted", outputs=Result, scripted_fn="remote_helper")
+        node._remote_agent_endpoint = (
+            "A2AAgent",
+            {
+                "name": "remote_helper",
+                "agent_url": "http://svc.example/agent",
+                "connection_config": None,
+                "no_longer_exists_on_installed_sdk": "drift",
+            },
+        )
+
+        with pytest.raises(ConfigurationError, match="drifted"):
+            to_agent_spec(Construct("remote-pipeline-drift", nodes=[node]))
+

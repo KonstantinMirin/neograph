@@ -189,7 +189,7 @@ class Node(Modifiable, BaseModel):
     # _scripted_shim: the closure built at construct-build time. compile()
     #   reads it and inserts the entry into the per-compile scripted dict.
     # _remote_agent_endpoint: (agent_class_name, {attr_name: value}) stashed by
-    #   loader.py's best-effort AgentNode reconstruction so a
+    #   _agent_spec_node_import.py's best-effort AgentNode reconstruction so a
     #   future export-side lowering can pick the correct RemoteAgent subclass
     #   and endpoint config to reconstruct. None for every other Node.
     _sidecar: tuple[Callable, tuple[str, ...]] | None = PrivateAttr(default=None)

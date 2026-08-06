@@ -18,6 +18,7 @@ from neograph._agent_spec_markers import (
     _MARK_PROMPT_SPEC,
     _MARK_TOOL_SPEC,
     _import_agent_spec_flow_classes,
+    import_pyagentspec,
 )
 from neograph._agent_spec_placeholders import (
     _prompt_spec_marker,
@@ -152,6 +153,20 @@ def _lower_generation_step(
         )
 
     # scripted / raw already rejected raw_fn upstream; scripted_fn is name-only.
+    # Exception: a Node carrying _remote_agent_endpoint was reconstructed
+    # best-effort from a client-initiated RemoteAgent/A2AAgent/OciAgent on
+    # import (_agent_spec_node_import.py's _reconstruct_agent_node) -- re-export
+    # it as the SAME AgentNode-wrapping-RemoteAgent shape instead of silently
+    # downgrading to a bare ToolNode (neograph-qtfof.5).
+    if node._remote_agent_endpoint is not None:
+        return nodes_mod.AgentNode(
+            name=name,
+            inputs=inputs or None,
+            outputs=outputs or None,
+            agent=_reconstruct_remote_agent(node, inputs=inputs, outputs=outputs),
+            metadata=metadata,
+        )
+
     return nodes_mod.ToolNode(
         name=name,
         inputs=inputs or None,
@@ -159,6 +174,59 @@ def _lower_generation_step(
         tool=_make_server_tool(node, tools_mod, inputs, outputs, description=tool_description),
         metadata=metadata,
     )
+
+
+# module path per RemoteAgent family, the export-side mirror of
+# _agent_spec_node_import.py's _REMOTE_AGENT_ENDPOINT_ATTRS -- the two tables
+# must stay in sync (same family set) but live on their own sides, matching
+# this module's one-way-layering convention with the import module.
+_REMOTE_AGENT_SPEC_MODULES: dict[str, str] = {
+    "A2AAgent": "pyagentspec.a2aagent",
+    "OciAgent": "pyagentspec.ociagent",
+}
+
+
+def _reconstruct_remote_agent(node: Node, *, inputs: list[Property], outputs: list[Property]) -> Any:
+    """Rebuild the pyagentspec RemoteAgent-family instance a Node's
+    ``_remote_agent_endpoint`` sidecar captured at import time
+    (``_agent_spec_node_import.py``'s best-effort ``_reconstruct_agent_node``).
+
+    ``inputs``/``outputs`` are the SAME computed Property lists
+    ``_lower_generation_step`` passes to the wrapping ``AgentNode`` -- required
+    because ``AgentNode._get_inferred_inputs``/``_get_inferred_outputs`` read
+    ``self.agent.inputs``/``self.agent.outputs``, not the AgentNode's own
+    fields, so the wrapped agent must carry them too or pyagentspec's
+    ``ComponentWithIO`` cross-field validator rejects the mismatch.
+
+    Fails LOUD with ``ConfigurationError`` if the installed pyagentspec SDK's
+    class shape has drifted from what was captured (a stored attr name no
+    longer exists on the class) -- matches ``_reject_unrepresentable_fields``'s
+    fail-loud convention already used elsewhere in this module, per the
+    fail-loud-not-silent-drop policy (neograph-qtfof.5's FIX DIRECTION).
+    """
+    agent_class_name, attrs = node._remote_agent_endpoint  # type: ignore[misc]
+    module_path = _REMOTE_AGENT_SPEC_MODULES.get(agent_class_name)
+    if module_path is None:
+        raise ConfigurationError.build(
+            f"node {node.name!r} carries an unrecognized RemoteAgent family {agent_class_name!r}",
+            expected=f"one of {sorted(_REMOTE_AGENT_SPEC_MODULES)}",
+            found=agent_class_name,
+            hint="the import-side _REMOTE_AGENT_ENDPOINT_ATTRS table and this export-side "
+            "_REMOTE_AGENT_SPEC_MODULES table must stay in sync",
+        )
+    module = import_pyagentspec(module_path, found=f"ImportError on {module_path}")
+    agent_cls = getattr(module, agent_class_name)
+    drifted = sorted(attr for attr in attrs if attr not in agent_cls.model_fields)
+    if drifted:
+        raise ConfigurationError.build(
+            f"node {node.name!r}'s captured RemoteAgent endpoint config has drifted from the "
+            "installed pyagentspec SDK",
+            expected=f"{agent_class_name} to declare field(s) {drifted}",
+            found=f"the installed {agent_class_name} has no such field(s)",
+            hint="the pyagentspec SDK version changed since import -- re-import the Agent Spec "
+            "Flow with the currently-installed SDK",
+        )
+    return agent_cls(**attrs, inputs=inputs or None, outputs=outputs or None)
 
 
 def _lower_node(node: Node) -> SpecNode:

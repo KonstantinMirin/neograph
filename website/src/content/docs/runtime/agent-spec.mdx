@@ -77,6 +77,12 @@ graph = compile(imported, scripted={"each-seed": each_seed_replacement_fn})
 
 Passing the wrong key (or no `scripted=` at all) fails loud at `compile()` — never silently — with a hint naming the exact hyphenated key to use. If you want a scripted node to survive round-trips without repeating this `scripted=` kwarg at every call site, use the declarative `Node.scripted(name=..., fn=...)` form together with a matching module-level `register_scripted(name, fn)` call instead of `@node`'s sugar — that registration is name-keyed and global, so it survives the round-trip automatically.
 
+## Foreign RemoteAgent import round-trips
+
+Importing a foreign Agent Spec `Flow` whose `AgentNode` wraps a client-initiated `RemoteAgent` (`A2AAgent` or `OciAgent` — Agent Spec's "the agent runs elsewhere, this is a connection config" primitive, not something neograph exported) is a best-effort import: neograph has no runtime concept of a remote agent, so it lands as a name-bound scripted `Node` and warns. Re-exporting that reconstructed pipeline now preserves the endpoint config instead of silently downgrading it to a plain scripted node — the re-exported `AgentNode` wraps the same `A2AAgent`/`OciAgent` family, with its captured fields (including `name`) intact. If the installed pyagentspec SDK's class shape has drifted since import (a stored field no longer exists on the class), export fails loud with `ConfigurationError` rather than silently dropping the stale field.
+
+One caveat: only the fields captured at import time round-trip — `A2AAgent.session_parameters` and `OciAgent.retry_policy` are optional fields not currently captured, so a customized value for either reverts to the pyagentspec default on re-export (a pre-existing, smaller gap than the endpoint-loss this fixed).
+
 ## Round-trip markers
 
 Export stamps `neograph/`-prefixed metadata markers (e.g. `neograph/oracle_spec`, `neograph/each_spec`, `neograph/loop_spec`) on the lowered primitives, so a neograph-produced Agent Spec re-imports losslessly — recovering the original modifier, not just its flattened primitives. A foreign Agent Spec with no such markers still imports correctly; it just falls back to primitive-level reconstruction (no modifier recovery), since the markers are purely additive.
