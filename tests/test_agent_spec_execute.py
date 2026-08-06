@@ -166,13 +166,22 @@ assert not (COMPARE_CELLS & frozenset(EXEC_EXEMPT)), "EXEC_EXEMPT and COMPARE_CE
 
 def _compute_compare_exempt() -> dict[str, str]:
     """A SECOND, independent finding discovered while implementing this tier
-    (neograph-qtfof.10, filed 2026-08-06): the outermost Construct's EndNode has
-    no ``DataFlowEdge`` feeding its outputs -- by design, per
-    ``src/neograph/_agent_spec.py:604-622``'s own comment, that wiring is meant
-    for a Construct used as a SUB-flow item (a parent wires the peer edge), not
-    a Construct exported and run STANDALONE. So a third-party runtime invoking
-    a top-level exported Flow directly NEVER surfaces a result, for ANY cell
-    shape -- confirmed on ``scripted-bare-single``, the simplest possible cell.
+    (neograph-qtfof.9, filed 2026-08-06): the outermost Construct's EndNode
+    declares no outputs at all -- ``construct.output`` is always ``None`` for a
+    top-level Construct by neograph's own design (only sub-constructs used as
+    items need a declared boundary output type), so
+    ``src/neograph/_agent_spec.py``'s ``end_props = _properties_for(construct.output)``
+    is always empty and the third-party runtime's ``invoke()`` result has
+    nothing to populate. So a third-party runtime invoking a top-level
+    exported Flow directly NEVER surfaces a result, for ANY cell shape --
+    confirmed on ``scripted-bare-single``, the simplest possible cell.
+
+    A SECOND failure mode of the same root cause (merged from the duplicate
+    ticket neograph-qtfof.10 into qtfof.9): even when ``construct.output`` IS
+    explicitly set, the EndNode's declared outputs still have no
+    ``DataFlowEdge`` feeding them (there is no parent to wire the peer edge a
+    sub-flow item would get), so the loader raises "Expected node ... to have
+    a value for property ..." instead of returning an empty dict.
 
     Unlike EXEC_EXEMPT (which partitions by mode/modifier shape), this affects
     every COMPARE_CELLS member identically -- it is a universal property of
@@ -189,18 +198,20 @@ def _compute_compare_exempt() -> dict[str, str]:
             final = run_via_agent_spec_loader(flow, cell_id, _compare_registry(flow, bodies))
         except Exception as exc:  # noqa: BLE001
             if "to have a value for property" in str(exc):
-                exempt[cell_id] = "neograph-qtfof.10: outermost EndNode has no DataFlowEdge feeding its outputs"
+                exempt[cell_id] = (
+                    "neograph-qtfof.9: outermost EndNode's declared outputs have no DataFlowEdge feeding them"
+                )
                 continue
             raise
         if not final.get("outputs"):
-            exempt[cell_id] = "neograph-qtfof.10: outermost EndNode has no DataFlowEdge feeding its outputs"
+            exempt[cell_id] = "neograph-qtfof.9: outermost EndNode declares no outputs (construct.output is None)"
     return exempt
 
 
 #: COMPARE_CELLS members that cannot be genuinely compared today because of
-#: neograph-qtfof.10, a SECOND tracked gap discovered while building this tier
+#: neograph-qtfof.9, a SECOND tracked gap discovered while building this tier
 #: (see ``_compute_compare_exempt`` for why it is orthogonal to EXEC_EXEMPT).
-#: Computed, shrink-only -- disappears entirely once qtfof.10 lands.
+#: Computed, shrink-only -- disappears entirely once qtfof.9 lands.
 COMPARE_EXEMPT: dict[str, str] = _compute_compare_exempt()
 
 
