@@ -17,7 +17,8 @@ own (that would fork the single seam the Core Invariant forbids):
                                 _auto_resume_from_divergence rewind re-runs only
                                 fingerprint-invalidated nodes, reusing state.
 
-In-graph analog: ``factory.py``'s ``make_portal_dispatch_fn._prepare`` (~440-490)
+In-graph analog: ``_agent_spec_dispatch.py``'s ``make_dispatch_gate``-built
+``prepare`` (consumed by ``factory.py``'s ``make_portal_dispatch_fn``, ~440-490)
 runs the same ``from_agent_spec(flow) -> Construct(...)`` gate BEFORE
 ``compiled.invoke`` — but that in-graph path WRAPS the gate error in
 ``ExecutionError``. This OUT-of-graph durable sibling deliberately raises the

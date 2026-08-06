@@ -12,10 +12,10 @@ from typing import TYPE_CHECKING, Any
 import structlog
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langgraph.types import Command, interrupt
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from neograph._agent_cycle import cycle_names, make_agent_cycle_bodies
-from neograph._agent_spec_markers import import_pyagentspec
+from neograph._agent_spec_dispatch import make_dispatch_gate
 from neograph._dispatch import _dispatch_for_mode
 from neograph._execute import _aexecute_node, _execute_node, _type_name
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
@@ -26,14 +26,12 @@ from neograph._normalize import primary_output_field
 from neograph._raw_dispatch import _make_araw_wrapper, _make_raw_wrapper  # noqa: E402,F401
 from neograph._state_bus import adapt_state
 from neograph._state_keys import StateKeys
-from neograph._subconstruct import _scan_subgraph_output, make_subgraph_fn
+from neograph._subconstruct import make_subgraph_fn
 from neograph._trace import named
-from neograph.errors import ConfigurationError, ConstructError, ExecutionError
-from neograph.loader import from_agent_spec
+from neograph.errors import ConfigurationError, ExecutionError
 from neograph.modifiers import HANDOFF_END, Operator, Portal
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
-from neograph.spec_types import lookup_type
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -773,16 +771,16 @@ def make_portal_dispatch_fn(
     ``Command``), so ``_add_portal_dispatch`` wires it with a static next edge and
     the G1 Command-construction monopoly stays narrow.
 
-    Sync/async parity: the ``_prepare`` (load/contract/compile) and ``_finish``
-    (scan/write) steps are shared; only ``compiled.invoke`` vs ``await
-    compiled.ainvoke`` differs between the twins (mirrors :func:`make_subgraph_fn`).
+    Sync/async parity: steps 1-3 (load/contract/compile) and step 4's write half
+    (scan/write) are the shared, no-Command gate built by
+    :func:`neograph._agent_spec_dispatch.make_dispatch_gate` (neograph-jtawq.9) and
+    consumed here via its ``prepare``/``finish``/``check_and_increment_depth``
+    handle; only ``compiled.invoke`` vs ``await compiled.ainvoke`` differs between
+    the twins (mirrors :func:`make_subgraph_fn`).
     """
     field_name = field_name_for(node.name)
     payload_field = primary_output_field(field_name, node.outputs)
     dispatch_field = output_field_name(field_name, "dispatch")
-    spec_field = portal.spec_field
-    input_field = portal.input_field
-    assert spec_field is not None and input_field is not None  # dispatch-mode invariant (T1 validation)
 
     inner = make_node_fn(
         node,
@@ -791,150 +789,39 @@ def make_portal_dispatch_fn(
         tool_factory_lookup=tool_factory_lookup,
     )
 
-    def _resolve_expected() -> type[BaseModel]:
-        out = portal.output
-        if isinstance(out, str):
-            return lookup_type(out)
-        assert out is not None  # dispatch-mode invariant (T1 validation)
-        return out
-
-    def _prepare(update: dict[str, Any]) -> tuple[Any, type[BaseModel], str, Any, str | None]:
-        """Shared pre-invoke: read the emitted spec/input, run the SAME gate, compile.
-
-        Returns ``(compiled, expected_output, spec_name, dispatch_input,
-        gate_error_message)``. ``gate_error_message`` is non-None ONLY when
-        ``portal.on_invalid == 'route_to_error'`` and the spec-validation gate
-        (deserialize + ``from_agent_spec``) failed -- in that case ``compiled``/
-        ``dispatch_input`` are meaningless and the caller must route to
-        ``portal.error_handler`` instead of invoking. Scope: route_to_error
-        covers ONLY this gate failure, never the output-contract-mismatch
-        check below it, which always raises regardless of ``on_invalid``.
-
-        Contains NO invoke — the sync/async twins supply that so the gate +
-        compile logic cannot drift between them.
-        """
-        # `compile` is the ONE cycle-avoidance function-local import here:
-        # compiler.py imports _wiring -> factory, so a module-level `from
-        # neograph.compiler import compile` would cycle. `AgentSpecDeserializer`
-        # is function-local for the OTHER reason function-local imports are
-        # allowlisted: an optional-dependency guard, now routed through the
-        # shared `import_pyagentspec` helper (neograph-jtawq.7) -- src/neograph
-        # stays Agent-Spec-free by default. from_agent_spec / _scan_subgraph_output /
-        # lookup_type are module-level (their modules do not import factory).
-        from neograph.compiler import compile as compile_construct
-
-        AgentSpecDeserializer = import_pyagentspec(
-            "pyagentspec.serialization", found="ImportError on pyagentspec.serialization"
-        ).AgentSpecDeserializer
-
-        decision = update[payload_field]
-        spec_dict = getattr(decision, spec_field)
-        dispatch_input = getattr(decision, input_field)
-        expected = _resolve_expected()
-        spec_name = spec_dict.get("name", "<unnamed>") if isinstance(spec_dict, dict) else "<unnamed>"
-
-        try:
-            # ONE modifier-aware runtime spec-loading path (Core Invariant):
-            # deserialize the Agent-Spec-flavored dict a mode-(b) planner
-            # emits into a live Flow, then hand it to the SAME from_agent_spec
-            # (01i0g) that reads any other Agent Spec Flow -- never a second,
-            # bespoke native-Spec dict-dispatch serializer.
-            flow = AgentSpecDeserializer().from_dict(spec_dict)
-            sub = from_agent_spec(flow)
-        except (ConstructError, ConfigurationError, ValidationError) as gate_error:
-            # The emitted spec failed the SAME Construct(...) gate as a hand-written
-            # pipeline. on_invalid='route_to_error': signal the caller to route to
-            # error_handler instead of raising. on_invalid='raise' (default):
-            # surface it wrapped, naming the spec, BEFORE anything runs.
-            if portal.on_invalid == "route_to_error":
-                return None, expected, spec_name, None, f"{spec_name}: {gate_error}"
-            raise ExecutionError.build(
-                "dispatched flow spec is invalid",
-                construct=spec_name,
-                found=str(gate_error),
-                node=node.name,
-                hint="the emitted spec failed the same Construct(...) validation gate as a hand-written pipeline",
-            ) from gate_error
-
-        if sub.output is not None and sub.output is not expected:
-            raise ExecutionError.build(
-                "dispatched flow output-contract mismatch",
-                expected=getattr(expected, "__name__", str(expected)),
-                found=f"flow '{spec_name}' declares output {getattr(sub.output, '__name__', sub.output)}",
-                node=node.name,
-                hint="the emitted flow's declared output must equal Portal.output",
-            )
-
-        compiled = compile_construct(sub, scripted=portal.scripted, conditions=portal.conditions)
-        return compiled, expected, spec_name, dispatch_input, None
-
-    def _finish(
-        update: dict[str, Any], result: dict[str, Any], expected: type[BaseModel], spec_name: str
-    ) -> dict[str, Any]:
-        """Shared post-invoke: extract the typed output, write ``{node}_dispatch``."""
-        out = _scan_subgraph_output(result, expected)
-        if out is None:
-            raise ExecutionError.build(
-                "dispatched flow did not produce the required output type",
-                expected=getattr(expected, "__name__", str(expected)),
-                found=f"flow '{spec_name}' produced no value assignable to it",
-                node=node.name,
-                hint="a route='decide' flow must produce Portal.output",
-            )
-        return {**update, dispatch_field: out}
-
-    def _check_and_increment_depth(config: RunnableConfig) -> RunnableConfig:
-        """Read the incoming depth off config, raise if already at
-        ``max_depth`` — BEFORE the dispatcher's own body runs (louder and
-        cheaper than checking after: no wasted planner call, no wasted
-        spec validation/compile) — and return a NEW config (copy-not-
-        mutate, mirrors ``runner.py``'s ``_ensure_agent_recursion_limit``)
-        carrying the depth incremented by exactly one, for the nested
-        ``compiled.invoke``/``ainvoke``. Depth is a LINEAGE property across
-        fresh per-level compiled sub-flows, so it MUST live on
-        ``config['configurable']`` only — a state-bus counter would reset
-        to 0 at every nesting level.
-        """
-        assert portal.max_depth is not None  # dispatch-mode invariant (T1 validation)
-        configurable = dict((config or {}).get("configurable") or {})
-        depth = configurable.get(StateKeys.PORTAL_DISPATCH_DEPTH, 0)
-        if depth >= portal.max_depth:
-            raise ExecutionError.build(
-                "Portal dispatch exceeded max_depth",
-                construct=node.name,
-                found=f"depth {depth} >= max_depth {portal.max_depth}",
-                node=node.name,
-                hint="a self-extending flow must bound its own recursion via Portal(max_depth=...)",
-            )
-        new_config: RunnableConfig = {**(config or {})}
-        new_config["configurable"] = {**configurable, StateKeys.PORTAL_DISPATCH_DEPTH: depth + 1}
-        return new_config
+    # The no-Command half of the gate (validate the emitted spec through the
+    # SAME from_agent_spec + compile() path a hand-written pipeline passes,
+    # extract the typed result, bound recursion depth) lives in
+    # _agent_spec_dispatch.py (neograph-jtawq.9) so G1's Command-construction
+    # monopoly stays exactly {factory.py, runner.py} — this module never
+    # re-derives the gate logic, only calls it and consumes the handle.
+    gate = make_dispatch_gate(node, portal, payload_field=payload_field, dispatch_field=dispatch_field)
 
     error_field = StateKeys.dispatch_error(field_name) if portal.on_invalid == "route_to_error" else None
 
     def dispatch_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any] | Command:
-        child_config = _check_and_increment_depth(config)
+        child_config = gate.check_and_increment_depth(config)
         update = inner.invoke(state, config)
-        compiled, expected, spec_name, dispatch_input, gate_error_msg = _prepare(update)
+        compiled, expected, spec_name, dispatch_input, gate_error_msg = gate.prepare(update)
         if gate_error_msg is not None:
             assert error_field is not None and exit_name is not None  # route_to_error invariant
             return Command(goto=portal.error_handler, update={**update, error_field: gate_error_msg})
         result = compiled.invoke(dispatch_input, config=child_config)
-        final_update = _finish(update, result, expected, spec_name)
+        final_update = gate.finish(update, result, expected, spec_name)
         if portal.on_invalid == "route_to_error":
             assert exit_name is not None
             return Command(goto=exit_name, update=final_update)
         return final_update
 
     async def adispatch_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any] | Command:
-        child_config = _check_and_increment_depth(config)
+        child_config = gate.check_and_increment_depth(config)
         update = await inner.ainvoke(state, config)
-        compiled, expected, spec_name, dispatch_input, gate_error_msg = _prepare(update)
+        compiled, expected, spec_name, dispatch_input, gate_error_msg = gate.prepare(update)
         if gate_error_msg is not None:
             assert error_field is not None and exit_name is not None  # route_to_error invariant
             return Command(goto=portal.error_handler, update={**update, error_field: gate_error_msg})
         result = await compiled.ainvoke(dispatch_input, config=child_config)
-        final_update = _finish(update, result, expected, spec_name)
+        final_update = gate.finish(update, result, expected, spec_name)
         if portal.on_invalid == "route_to_error":
             assert exit_name is not None
             return Command(goto=exit_name, update=final_update)

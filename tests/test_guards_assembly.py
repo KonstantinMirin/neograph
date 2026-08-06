@@ -220,17 +220,62 @@ class TestPortalDispatchRoutesThroughCanonicalGate:
     quietly swap in a bespoke validator while keeping tests green. AST-level, so
     docstrings mentioning these names never trip it.
 
+    TWO-SIDED since neograph-jtawq.9 moved the no-Command half of the gate
+    (``_resolve_expected`` / ``_prepare`` / ``_finish`` /
+    ``_check_and_increment_depth``) out of ``factory.make_portal_dispatch_fn``
+    into ``_agent_spec_dispatch.make_dispatch_gate``. Asserting only the GATE
+    side (the gate itself calls the canonical path) would let the wrapper
+    silently stop reaching the gate with this guard still green — the exact
+    one-sidedness the 2026-08-03 review caught here. So four things are pinned:
+
+    (a) GATE SIDE, positive — ``make_dispatch_gate`` calls ``from_agent_spec``.
+    (b) WRAPPER SIDE, positive — ``make_portal_dispatch_fn`` calls
+        ``make_dispatch_gate``.
+    (c) WRAPPER SIDE, consumption — the wrapper actually invokes the returned
+        handle's members (``prepare`` / ``finish`` /
+        ``check_and_increment_depth``). Building the gate and discarding it
+        would satisfy (b) alone, so (b) without (c) is a bypass hole.
+    (d) BOTH SIDES, negative — the ``_BANNED`` bespoke-validator scan runs over
+        the gate builder AND the wrapper. Migrating the scan to the gate only
+        would re-open the same hole mirrored: a hand-rolled ``_build_construct``
+        smuggled into ``dispatch_wrapper`` would pass green.
+
+    Anti-vacuity: a missing module or a renamed function RAISES, never silently
+    skips — a scan that finds nothing must not read as compliance. Shape
+    borrowed from ``TestOneGateTwoCallers`` (tests/test_guards_slot_set.py) and
+    ``TestDiInputsInjectedAtLlmDispatchSeams`` (tests/test_guards_llm_runtime.py).
+
     If this fails: route the emitted spec through ``from_agent_spec`` (+ ``compile``),
-    not a private validator.
+    not a private validator; and keep the wrapper calling the extracted gate.
     """
 
     _BANNED = frozenset({"load_spec", "_validate_spec", "_build_construct"})
 
+    # The extracted no-Command Agent-Spec dispatch gate (neograph-jtawq.9). The
+    # four Command( construction sites stay in factory.py, so G1's _ALLOWED set
+    # is untouched by the move.
+    _GATE_MODULE = "_agent_spec_dispatch.py"
+    _GATE_BUILDER = "make_dispatch_gate"
+    _WRAPPER_MODULE = "factory.py"
+    _WRAPPER_FN = "make_portal_dispatch_fn"
+
+    # Members of the returned gate handle the wrapper must actually invoke.
+    _GATE_MEMBERS = frozenset({"prepare", "finish", "check_and_increment_depth"})
+
     @staticmethod
-    def _dispatch_fn_call_names() -> set[str]:
-        tree = ast.parse((SRC_DIR / "factory.py").read_text(), filename="factory.py")
+    def _call_names(module: str, func_name: str) -> set[str]:
+        """Every callee name reachable inside ``func_name`` — bare ``f(...)`` and
+        attribute-tail ``obj.f(...)``, nested closures included. AST-level, so a
+        docstring or a string literal naming a banned symbol never trips it."""
+        path = SRC_DIR / module
+        if not path.exists():
+            raise AssertionError(
+                f"{module} does not exist — this guard cannot vacuously pass. "
+                f"The Agent-Spec dispatch gate must live in {module} (neograph-jtawq.9)."
+            )
+        tree = ast.parse(path.read_text(), filename=module)
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == "make_portal_dispatch_fn":
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
                 names: set[str] = set()
                 for sub in ast.walk(node):
                     if isinstance(sub, ast.Call):
@@ -240,21 +285,42 @@ class TestPortalDispatchRoutesThroughCanonicalGate:
                         elif isinstance(callee, ast.Attribute):
                             names.add(callee.attr)
                 return names
-        raise AssertionError("make_portal_dispatch_fn not found in factory.py")
+        raise AssertionError(f"{func_name} not found in {module}")
 
     def test_dispatch_wrapper_calls_from_agent_spec(self):
-        names = self._dispatch_fn_call_names()
-        assert "from_agent_spec" in names, (
-            "make_portal_dispatch_fn must validate the emitted spec via the canonical "
+        gate_names = self._call_names(self._GATE_MODULE, self._GATE_BUILDER)
+        assert "from_agent_spec" in gate_names, (
+            f"{self._GATE_BUILDER} must validate the emitted spec via the canonical "
             "from_agent_spec gate (the SAME Construct(...) validation as hand-written pipelines)."
         )
 
+        wrapper_names = self._call_names(self._WRAPPER_MODULE, self._WRAPPER_FN)
+        assert self._GATE_BUILDER in wrapper_names, (
+            f"{self._WRAPPER_FN} no longer calls {self._GATE_BUILDER} — the dispatch wrapper "
+            "must reach the canonical gate through the extracted builder, not around it."
+        )
+
+        unconsumed = self._GATE_MEMBERS - wrapper_names
+        assert not unconsumed, (
+            f"{self._WRAPPER_FN} builds the gate but never calls {sorted(unconsumed)} on the "
+            "returned handle — a construct-then-discard bypass would leave the positive "
+            "builder-call assertion green while skipping the gate entirely."
+        )
+
     def test_dispatch_wrapper_has_no_bespoke_validator(self):
-        names = self._dispatch_fn_call_names()
-        offenders = self._BANNED & names
+        offenders = {}
+        for module, func in (
+            (self._GATE_MODULE, self._GATE_BUILDER),
+            (self._WRAPPER_MODULE, self._WRAPPER_FN),
+        ):
+            hits = self._BANNED & self._call_names(module, func)
+            if hits:
+                offenders[f"{module}::{func}"] = sorted(hits)
         assert not offenders, (
-            f"make_portal_dispatch_fn calls a bespoke spec->Construct path {sorted(offenders)} "
-            "instead of routing through from_agent_spec — this bypasses the canonical gate (anti-band-aid)."
+            f"a bespoke spec->Construct path is called at {offenders} instead of routing "
+            "through from_agent_spec — this bypasses the canonical gate (anti-band-aid). "
+            "The scan covers BOTH the gate builder and the wrapper, so neither side can "
+            "hand-roll a validator while the other stays clean."
         )
 
     def test_detector_flags_a_bespoke_call(self):
@@ -723,8 +789,11 @@ class TestAssemblyCohesionFanOut:
         # TestLifecycleSeparation.test_execute_cohesion_single_src_importer names
         # both modules, so this ceiling cannot be spent on an unrelated importer.
         "_execute.py": 2,
-        # _subconstruct.py is imported by compiler + _wiring + factory.
-        "_subconstruct.py": 3,
+        # _subconstruct.py is imported by compiler + _wiring + factory +
+        # _agent_spec_dispatch (neograph-jtawq.9: the Agent-Spec dispatch gate
+        # extracted from factory.py reuses _scan_subgraph_output directly
+        # rather than factory.py re-exporting it, keeping the layering flat).
+        "_subconstruct.py": 4,
         # _oracle.py: re-exported via factory, imported by _execute, _subconstruct, _wiring.
         "_oracle.py": 6,
         # _state_write.py: imported by _execute + factory (re-export) + tests scope.
@@ -877,6 +946,9 @@ class TestSubconstructBoundaryOwnership:
         "_execute.py",
         "_wiring.py",
         "runner.py",
+        # _agent_spec_dispatch.py inherits factory.py's role: it carries the
+        # Portal dispatch gate extracted out of factory.py (neograph-jtawq.9).
+        "_agent_spec_dispatch.py",
     }
 
     def test_runtime_write_only_in_subconstruct(self):

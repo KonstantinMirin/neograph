@@ -24,9 +24,10 @@ stamped on with a shallow ``model_copy`` over the seam's result). This guard
 still governs the IMPORT path only and enforces nothing about export.
 
 Scope note: ``from_agent_spec`` is also invoked at genuine ENTRY points
-(``_hot_swap.py``, ``factory.py``) to load a whole Flow. Those are not sub-flow
-recursion and are out of scope -- which is exactly why this guard is scoped to
-the import-path modules rather than grepping the tree for the call.
+(``_hot_swap.py``, ``_agent_spec_dispatch.py`` -- relocated from ``factory.py``
+by neograph-jtawq.9) to load a whole Flow. Those are not sub-flow recursion and
+are out of scope -- which is exactly why this guard is scoped to the
+import-path modules rather than grepping the tree for the call.
 
 Pure AST, no ``re``, so this module is exempt-by-construction from
 ``test_guards_meta.py`` Discipline 1.

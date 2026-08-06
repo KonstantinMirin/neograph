@@ -63,14 +63,16 @@ class TestSidecarModule:
 # Names are included so a NEW import in an allowlisted file/module pairing
 # still trips the guard.
 FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
-    # factory.py — REAL cycle: the Portal dispatch wrapper (mode b, route=
+    # _agent_spec_dispatch.py — REAL cycle: the Portal dispatch gate (mode b, route=
     # "decide", neograph-f27xo) recompiles the emitted sub-flow via compile(), but
-    # compiler.py imports _wiring -> factory at module level, so a top-level `from
-    # neograph.compiler import compile` here cycles. Function-local import is the
-    # truthful fix (load_spec / _scan_subgraph_output / lookup_type are module-level
-    # — their modules do not import factory). Retires if compile() relocates out of
-    # the factory import chain.
-    ("factory.py", "neograph.compiler", frozenset({"compile"})),
+    # compiler.py imports _wiring -> factory -> this module at module level, so a
+    # top-level `from neograph.compiler import compile` here cycles. Function-local
+    # import is the truthful fix (load_spec / _scan_subgraph_output / lookup_type
+    # are module-level — their modules do not import factory or this module).
+    # RELOCATED from factory.py when the no-Command gate half moved into this
+    # module (neograph-jtawq.9). Entry RE-KEYED, not added — the allowlist did not
+    # grow. Retires if compile() relocates out of the factory import chain.
+    ("_agent_spec_dispatch.py", "neograph.compiler", frozenset({"compile"})),
     # factory.py — REAL cycle: make_portal_approval_fn (Portal+Operator D4
     # lift, neograph-kdr1u) needs _resolve_condition to resolve Operator.when,
     # but _wiring.py imports factory.py at module level (make_portal_fn et

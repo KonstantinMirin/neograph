@@ -39,6 +39,12 @@ ANY_AUDIT_MODULES = (
     "_oracle.py",
     "_wiring.py",
     "_ir_normalize.py",
+    # _agent_spec_dispatch.py inherits factory.py's role: it carries the
+    # Portal dispatch gate extracted out of factory.py (neograph-jtawq.9).
+    # The four gate functions stay NESTED inside make_dispatch_gate, so
+    # _walk_public_functions (module-level scan only) never sees them --
+    # zero new ANY_ALLOWLIST entries.
+    "_agent_spec_dispatch.py",
     # Note: _normalize.py (the sibling normalized-view helper) is intentionally
     # NOT in scope — it is a pre-existing input/output-shape adapter whose Any
     # uses carry user-declared types throughout; bringing it under the

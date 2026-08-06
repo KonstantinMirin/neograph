@@ -55,6 +55,10 @@ class TestFactoryFunctionsTakeKwargs:
         "_input_shape.py",
         "_subconstruct.py",
         "_wiring.py",
+        # _agent_spec_dispatch.py inherits factory.py's role: it carries the
+        # Portal dispatch gate extracted out of factory.py (neograph-jtawq.9),
+        # so the same LlmRuntime-closure discipline applies.
+        "_agent_spec_dispatch.py",
     )
 
     def test_factory_files_do_not_import_forbidden_names(self):

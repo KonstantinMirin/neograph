@@ -23,7 +23,7 @@ Proofs pinned here (mrb2y deliverables + hhgnz.30 refinement addendum):
   (a) VALIDATION BEFORE EXECUTION -- a type-mismatched emitted Flow makes the
       helper's internal ``from_agent_spec`` -> ``Construct(...)`` gate raise the
       RAW ``ConstructError``/``ConfigurationError`` (NOT an ExecutionError
-      wrapper, unlike the in-graph analog at factory.py:440-490) while a
+      wrapper, unlike the in-graph analog at _agent_spec_dispatch.py:75-135's _prepare) while a
       module-level sentinel proves NO node body ran.
   (b) SELECTIVE RE-RUN AFTER TOPOLOGY CHANGE -- v1 runs to a checkpoint; a v2
       whose ONE changed node has a new OUTPUT TYPE (so the schema fingerprint
@@ -174,7 +174,7 @@ class TestHotSwapValidatesBeforeExecuting:
     type clashes with a downstream consumer is rejected by the helper's internal
     ``from_agent_spec`` -> ``Construct(...)`` gate BEFORE any node runs -- and the
     gate error surfaces RAW (ConstructError/ConfigurationError), never wrapped in
-    an ExecutionError (contrast the in-graph sibling at factory.py:440-490)."""
+    an ExecutionError (contrast the in-graph sibling at _agent_spec_dispatch.py:75-135's _prepare)."""
 
     def test_type_mismatched_flow_rejected_and_no_node_runs(self):
         resume_from_agent_spec = _resume_from_agent_spec()  # RED: absent today
