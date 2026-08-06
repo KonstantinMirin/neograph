@@ -47,6 +47,9 @@ from tests.test_guards_portal_member_class_consumers import (
     EXEMPT_FILES,
     NO_DISCRIMINATOR_ATTR_SITES,
 )
+from tests.test_guards_portal_member_class_consumers import (
+    MIGRATED as PORTAL_MEMBER_CLASS_MIGRATED,
+)
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SRC = _ROOT / "src" / "neograph"
@@ -276,14 +279,28 @@ class TestGuardSurfaceFollowsTheCode:
             "stays GREEN either way (the two literals cancel in its expected "
             "computation), so it must be verified by reading the diff."
         )
-        assert SWARM_MODULE in EXEMPT_FILES, f"EXEMPT_FILES must carry the exemption at its new home, {SWARM_MODULE}."
-
         assert "loader.py" not in NO_DISCRIMINATOR_ATTR_SITES, (
-            "NO_DISCRIMINATOR_ATTR_SITES still names loader.py; re-key it to "
-            f"{SWARM_MODULE} with the reason string updated."
+            "NO_DISCRIMINATOR_ATTR_SITES still names loader.py; it must be removed."
         )
-        assert SWARM_MODULE in NO_DISCRIMINATOR_ATTR_SITES, (
-            f"NO_DISCRIMINATOR_ATTR_SITES must name {SWARM_MODULE} after the move."
+
+        # SUPERSEDED by neograph-dgbqv.5 (P10): this ticket's own
+        # EXEMPT_FILES/NO_DISCRIMINATOR_ATTR_SITES re-key at jtawq.10-landing-time
+        # was always meant to be an INTERIM state -- the "foreign pyagentspec
+        # object, no .modifier_set" exemption reason string named dgbqv.5 as its
+        # own retirement condition. dgbqv.5 has now landed: the swarm module reads
+        # SWARM_ENCODING[PortalMemberClass.SUB_CONSTRUCT].spec_class instead of a
+        # hard-coded "Flow" literal, so it is no longer exempt at all -- it is a
+        # real classifier consumer and belongs in MIGRATED, not EXEMPT_FILES.
+        assert SWARM_MODULE not in EXEMPT_FILES, (
+            f"{SWARM_MODULE} is no longer exempt post-neograph-dgbqv.5 -- it directly imports "
+            "and uses PortalMemberClass now, so it must be MIGRATED, not EXEMPT_FILES."
+        )
+        assert SWARM_MODULE not in NO_DISCRIMINATOR_ATTR_SITES, (
+            f"{SWARM_MODULE} now carries a real classifier import post-neograph-dgbqv.5, so it "
+            "must be removed from NO_DISCRIMINATOR_ATTR_SITES, not kept there."
+        )
+        assert SWARM_MODULE in PORTAL_MEMBER_CLASS_MIGRATED, (
+            f"{SWARM_MODULE} must be declared in MIGRATED post-neograph-dgbqv.5."
         )
 
     def test_no_test_still_points_at_the_old_line_reference(self):

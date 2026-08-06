@@ -17,7 +17,7 @@ may only SHRINK — ``_lower_portal_mesh_to_swarm`` takes the exporter as an
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from neograph._agent_spec_markers import (
     _MARK_MODIFIER,
@@ -32,6 +32,7 @@ from neograph._agent_spec_placeholders import (
     _properties_for,
     _translate_placeholders,
 )
+from neograph._agent_spec_swarm_encoding import SWARM_ENCODING, mesh_handoff_mode
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph.construct import Construct
 from neograph.node import Node
@@ -90,9 +91,11 @@ def _lower_portal_mesh_to_swarm(
         # interior prompts are Option-F-translated inside the recursive
         # to_agent_spec call) and cannot carry an Operator gate (rejected at
         # assembly), so it never needs the prompt marker or enters `gated`.
-        if isinstance(member, Construct):
+        if portal_member_class(member) is PortalMemberClass.SUB_CONSTRUCT:
+            assert isinstance(member, Construct)  # classifier decided; this narrows the type only
             agents_by_name[member.name] = export_flow(member)
             continue
+        assert isinstance(member, Node)  # the only other classified shape; narrows the type only
         rewritten, ref_props, flat_to_original = _translate_placeholders(
             member.prompt or "", _properties_for(member.inputs), member.name
         )
@@ -112,18 +115,17 @@ def _lower_portal_mesh_to_swarm(
     from pyagentspec.swarm import HandoffMode, Swarm
 
     # C1/s7zt3.14 round-trip: carry the mesh's trigger sub-mode on Swarm.handoff so
-    # _reconstruct_swarm_mesh's _swarm_trigger reads it back. A tool-triggered Node
-    # member (Portal(trigger="tool")) -> HandoffMode.OPTIONAL (the reference
-    # adapter's tool-bound-handoff mode; OPTIONAL/ALWAYS are byte-identical there,
-    # so OPTIONAL is the canonical choice); an all-output mesh -> HandoffMode.NEVER
-    # (typed-goto routing, no bound transfer tool). A Construct member is never
-    # tool-triggered (validation), so only Node members are polled.
-    any_tool = any(portal_member_class(m) is PortalMemberClass.AGENT_CYCLE_TOOL for m in members)
+    # _reconstruct_swarm_mesh's _swarm_trigger reads it back. mesh_handoff_mode
+    # (neograph-dgbqv.5) is the ONE named aggregation rule -- 'optional' wins
+    # over 'never' if ANY member's export_trigger is 'tool' (a Construct member
+    # is never tool-triggered by validation, so only Node members can tip it).
+    member_classes = [portal_member_class(m) for m in members]
+    assert all(cls is not None for cls in member_classes)  # _check_portal_mesh already validated every member
     swarm = Swarm(
         name=construct.name,
         first_agent=agents_by_name[entry.name],
         relationships=relationships,
-        handoff=HandoffMode.OPTIONAL if any_tool else HandoffMode.NEVER,
+        handoff=HandoffMode(mesh_handoff_mode(cast("list[PortalMemberClass]", member_classes))),
         metadata={
             _MARK_PORTAL_SPEC: {
                 "max_hops": entry_portal.max_hops,
@@ -144,10 +146,14 @@ def _lower_portal_mesh_to_swarm(
     # said "member name"; its repro used ad-hoc agents and so never exercised
     # _make_agent's `-agent` suffix -- the agent name is the identity that
     # actually survives export->import.)
+    def _is_gated(item: Node | Construct) -> bool:
+        cls = portal_member_class(item)
+        return cls is not None and SWARM_ENCODING[cls].gated
+
     gated: dict[str, str] = {
         agents_by_name[member.name].name: member.modifier_set.operator.when
         for member in members
-        if member.modifier_set.operator is not None
+        if member.modifier_set.operator is not None and _is_gated(member)
     }
     if not gated:
         return swarm  # unchanged today's-behavior path: pure PORTAL cell untouched

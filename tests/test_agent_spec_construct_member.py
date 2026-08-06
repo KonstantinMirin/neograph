@@ -150,10 +150,22 @@ class TestHandoffModeTriggerMapping:
         """A native agent mesh with Portal(trigger='tool') sets handoff=OPTIONAL on
         export and reimports as trigger='tool' (round-trip fidelity)."""
         triage = Node(
-            name="triage", mode="agent", model="fast", prompt="p", inputs={"handoff": Handoff}, outputs=Handoff, tools=[]
+            name="triage",
+            mode="agent",
+            model="fast",
+            prompt="p",
+            inputs={"handoff": Handoff},
+            outputs=Handoff,
+            tools=[],
         ) | Portal(to=["worker"], trigger="tool", max_hops=4)
         worker = Node(
-            name="worker", mode="agent", model="fast", prompt="p", inputs={"handoff": Handoff}, outputs=Handoff, tools=[]
+            name="worker",
+            mode="agent",
+            model="fast",
+            prompt="p",
+            inputs={"handoff": Handoff},
+            outputs=Handoff,
+            tools=[],
         ) | Portal(to=["triage"], trigger="tool")
         swarm = to_agent_spec(Construct("native_tool_mesh", nodes=[triage, worker]))
         assert swarm.handoff.value in ("optional", "always")
@@ -185,3 +197,134 @@ class TestDispatchModePortalFailsLoud:
         )
         with pytest.raises(ConfigurationError, match="dispatch-mode Portal"):
             to_agent_spec(pipeline)
+
+    def test_dispatch_mode_fail_loud_is_consistent_with_the_swarm_encoding_table(self):
+        """neograph-dgbqv.5 step 5: the dispatch-mode fail-loud stays AS-IS at
+        _agent_spec.py:295-303 (not rewired) -- this pins the EXISTING raise as
+        DATA-consistent with SWARM_ENCODING[PortalMemberClass.DISPATCH], rather
+        than the table dictating a code change."""
+        from neograph._agent_spec_swarm_encoding import SWARM_ENCODING
+        from neograph._portal_member import PortalMemberClass
+
+        row = SWARM_ENCODING[PortalMemberClass.DISPATCH]
+        assert row.exportable is False
+        assert row.reason, "DISPATCH's non-exportability must carry a reason string"
+        assert row.spec_class is None
+        assert row.export_trigger is None
+
+
+class TestSwarmEncodingTable:
+    """neograph-dgbqv.5 step 9: the SWARM_ENCODING / HANDOFF_MODE_TRIGGER tables
+    and their derived helpers -- totality, fail-loud inverses, mesh-level
+    aggregation, and the documented-lossy mixed-mesh cell. Written against the
+    not-yet-created table module (TDD red: ImportError until neograph-jn555.39
+    lands _agent_spec_swarm_encoding.py)."""
+
+    def test_swarm_encoding_is_total_over_portal_member_class(self):
+        from neograph._agent_spec_swarm_encoding import SWARM_ENCODING
+        from neograph._portal_member import PortalMemberClass
+
+        missing = [cls for cls in PortalMemberClass if cls not in SWARM_ENCODING]
+        assert not missing, f"SWARM_ENCODING has no row for: {missing}"
+
+    def test_handoff_mode_trigger_is_total_over_handoff_mode_values(self):
+        from neograph._agent_spec_swarm_encoding import HANDOFF_MODE_TRIGGER
+
+        mode_values = {row.mode_value for row in HANDOFF_MODE_TRIGGER}
+        assert mode_values == {"never", "optional", "always"}
+
+    def test_sub_construct_forces_output_trigger_even_under_optional_handoff(self):
+        """The SUB_CONSTRUCT row's import_forced_trigger overrides the mesh
+        trigger -- a Construct member cannot be trigger='tool' (s7zt3.14: tool-
+        trigger requires an agent/act member with a ReAct turn)."""
+        from neograph._agent_spec_swarm_encoding import SWARM_ENCODING
+        from neograph._portal_member import PortalMemberClass
+
+        assert SWARM_ENCODING[PortalMemberClass.SUB_CONSTRUCT].import_forced_trigger == "output"
+
+    def test_mode_inverse_resolves_tool_to_the_canonical_optional_not_always(self):
+        from neograph._agent_spec_swarm_encoding import handoff_mode_for_class
+        from neograph._portal_member import PortalMemberClass
+
+        # AGENT_CYCLE_TOOL's export_trigger is 'tool'; the canonical mode for
+        # 'tool' is 'optional' (ALWAYS is byte-identical in the reference
+        # LangGraph adapter and is therefore non-canonical, per the table).
+        assert handoff_mode_for_class(PortalMemberClass.AGENT_CYCLE_TOOL) == "optional"
+
+    def test_spec_class_inverse_raises_for_the_non_invertible_agent_direction(self):
+        """Four PortalMemberClass rows produce spec_class='Agent'; asking which
+        ONE of them a foreign 'Agent' import maps back to is a question the
+        table cannot answer (the import path never recovers a PortalMemberClass
+        from 'Agent' -- it builds a Node and applies the mesh trigger instead).
+        This must raise loud, never silently pick one."""
+        from neograph._agent_spec_swarm_encoding import spec_class_to_member_class
+        from neograph.errors import ConfigurationError as _ConfigurationError
+
+        with pytest.raises(_ConfigurationError):
+            spec_class_to_member_class("Agent")
+
+    def test_mesh_handoff_mode_any_tool_wins_over_output(self):
+        from neograph._agent_spec_swarm_encoding import mesh_handoff_mode
+        from neograph._portal_member import PortalMemberClass
+
+        mode = mesh_handoff_mode([PortalMemberClass.ATOMIC, PortalMemberClass.AGENT_CYCLE_TOOL])
+        assert mode == "optional"
+
+    def test_mesh_handoff_mode_all_output_is_never(self):
+        from neograph._agent_spec_swarm_encoding import mesh_handoff_mode
+        from neograph._portal_member import PortalMemberClass
+
+        mode = mesh_handoff_mode([PortalMemberClass.ATOMIC, PortalMemberClass.SUB_CONSTRUCT])
+        assert mode == "never"
+
+    def test_mesh_handoff_mode_raises_on_dispatch_member(self):
+        """A dispatch-mode Portal is not a mesh member (_portal_member.py's own
+        docstring) -- DISPATCH must never reach mesh_handoff_mode."""
+        from neograph._agent_spec_swarm_encoding import mesh_handoff_mode
+        from neograph._portal_member import PortalMemberClass
+        from neograph.errors import ConfigurationError as _ConfigurationError
+
+        with pytest.raises(_ConfigurationError):
+            mesh_handoff_mode([PortalMemberClass.ATOMIC, PortalMemberClass.DISPATCH])
+
+    def test_mixed_agent_tool_and_think_mesh_round_trips_lossily_documented(self):
+        """neograph-dgbqv.8 (filed): a legal mesh of one agent(trigger='tool')
+        member + one think member exports handoff=OPTIONAL; re-import's
+        _swarm_trigger forces trigger='tool' onto EVERY member, which
+        _validation_portal.py would normally reject on a think-mode member --
+        except _agent_spec_node_import.py's markerless-agent mode='agent'
+        hard-code prevents a ConstructError. The two defects CANCEL. This test
+        PINS that lossy round trip as documented behavior, not a silent one --
+        see neograph-dgbqv.8 for the fix (do not fix either side without the
+        other)."""
+        tool_member = Node(
+            name="tool_member",
+            mode="agent",
+            model="fast",
+            prompt="p",
+            inputs={"handoff": Handoff},
+            outputs=Handoff,
+            tools=[],
+        ) | Portal(to=["think_member"], trigger="tool")
+        think_member = Node(
+            name="think_member", mode="think", model="fast", prompt="p", inputs={"handoff": Handoff}, outputs=Handoff
+        ) | Portal(to=["tool_member"])
+        swarm = to_agent_spec(Construct("mixed_mesh", nodes=[tool_member, think_member]))
+        assert swarm.handoff.value == "optional"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            back = from_agent_spec(swarm)
+        # DOCUMENTED LOSSY: the think member silently becomes an agent member.
+        assert all(n.modifier_set.portal.trigger == "tool" for n in back.nodes)
+
+    def test_gated_mesh_round_trips_through_flow_from_dict(self):
+        """Step 9(f): the ATOMIC_OPERATOR (gated) mesh survives a full
+        to_dict/from_dict serialization round trip, not just an in-memory one."""
+        flow = to_agent_spec(_construct_member_mesh("gated_dict_rt", gated=True))
+        rehydrated_dict = flow.to_dict()
+        rehydrated = type(flow).from_dict(rehydrated_dict)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            back = from_agent_spec(rehydrated)
+        gates = {n.name: (n.modifier_set.operator.when if n.modifier_set.operator else None) for n in back.nodes}
+        assert gates["closer-agent"] == "_cm_gate"

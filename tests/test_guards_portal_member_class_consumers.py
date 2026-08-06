@@ -108,6 +108,16 @@ MIGRATED: frozenset[str] = frozenset(
         # call that replaces _wiring.py:315's getattr(member, 'mode')
         # re-derivation (neograph-dgbqv.4, P9).
         "_portal_route.py",
+        # neograph-dgbqv.5 (P10): the Swarm-import cluster's `type(agent).
+        # __name__ == "Flow"` derivation now reads SWARM_ENCODING[PortalMemberClass.
+        # SUB_CONSTRUCT].spec_class instead of a hard-coded literal -- MOVED here
+        # from EXEMPT_FILES/NO_DISCRIMINATOR_ATTR_SITES (removed together below),
+        # never kept alongside.
+        "_agent_spec_swarm_import.py",
+        # neograph-dgbqv.5 (P10): the ONE Agent-Spec Swarm <-> PortalMemberClass
+        # encoding table -- every SWARM_ENCODING row is keyed by PortalMemberClass,
+        # a live import-and-use of the classifier's own enum.
+        "_agent_spec_swarm_encoding.py",
     }
 )
 
@@ -125,18 +135,6 @@ EXEMPT_FILES: dict[str, str] = {
     # verdict about a specific PRODUCT, never to name a member class. Migrating
     # it would be a category error (dgbqv.3 disease-scan row 9).
     "modifiers.py": "pair-legality (_DYNAMIC_RULES), the jtawq.3/P3 axis -- not a member-class question",
-    # `type(agent).__name__ == "Flow"` on a FOREIGN pyagentspec object that has
-    # no `.modifier_set` at all, so `portal_member_class` cannot classify it by
-    # construction. The reverse spec-shape -> class table is the DECLARED
-    # deliverable of the open sibling neograph-dgbqv.5 (P10), which itself
-    # depends on neograph-dgbqv.4 (P9). Exempted BY REASON rather than parked
-    # in PENDING, so PENDING's emptiness never overstates completeness
-    # (architect review yf2ar.28; Refined Plan item 4). The exemplar guard uses
-    # this same pre-declaration idiom.
-    # RE-KEYED (neograph-jtawq.10): the Swarm-import cluster (including this
-    # derivation) moved from loader.py to _agent_spec_swarm_import.py. The old
-    # loader.py key is REMOVED, not kept alongside.
-    "_agent_spec_swarm_import.py": "foreign pyagentspec object, no .modifier_set -- owned by neograph-dgbqv.5 (P10)",
 }
 
 #: Site-level exemptions inside MIGRATED files, keyed
@@ -190,10 +188,10 @@ EXEMPT: dict[tuple[str, str, str], str] = {
 #: cannot see them until they start importing the classifier. Hand-listed so
 #: assertion (c) stays a strict EQUALITY rather than a one-directional subset
 #: check (the anti-tautology lesson from tests/test_guards_parity_ratchet.py).
-#: SHRINK-ONLY: ``_recursion_budget.py`` leaves this set the moment it imports
-#: the classifier (post-migration); ``_agent_spec_swarm_import.py`` (RE-KEYED
-#: from ``loader.py``, neograph-jtawq.10) stays until neograph-dgbqv.5.
-NO_DISCRIMINATOR_ATTR_SITES: frozenset[str] = frozenset({"_agent_spec_swarm_import.py"})
+#: SHRINK-ONLY: ``_agent_spec_swarm_import.py`` left this set in neograph-dgbqv.5
+#: (P10) -- it now imports PortalMemberClass directly, so DELETE-not-move.
+#: Declared EMPTY, matching the general shrink-only-ratchet pattern.
+NO_DISCRIMINATOR_ATTR_SITES: frozenset[str] = frozenset()
 
 #: The classifier's public symbols. A MIGRATED file must import-and-USE at
 #: least one (a dead import does not count).

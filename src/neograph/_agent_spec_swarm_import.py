@@ -34,7 +34,9 @@ from neograph._agent_spec_markers import (
     _MARK_PROMPT_SPEC,
 )
 from neograph._agent_spec_node_import import _agent_spec_props_to_type, _node_from_spec_agent
+from neograph._agent_spec_swarm_encoding import SWARM_ENCODING, mode_to_trigger
 from neograph._normalize import _with_declared_io
+from neograph._portal_member import PortalMemberClass
 from neograph.construct import Construct
 from neograph.modifiers import Operator, Portal
 from neograph.node import Node
@@ -106,7 +108,7 @@ def _swarm_trigger(swarm: Any) -> Literal["output", "tool"]:
     if handoff is False or handoff is None:
         return "output"
     value = getattr(handoff, "value", handoff)  # HandoffMode enum -> its str value
-    return "tool" if value in ("optional", "always") else "output"
+    return mode_to_trigger(value)
 
 
 def _flow_member_to_construct(agent: Any, payload: type[BaseModel], from_spec: Callable[[Any], Construct]) -> Construct:
@@ -176,7 +178,7 @@ def _reconstruct_swarm_mesh(swarm: Any, from_spec: Callable[[Any], Construct]) -
         peers = [dst.name for (src, dst) in swarm.relationships if src is agent]
         member: Node | Construct
         member_trigger: Literal["output", "tool"]
-        if type(agent).__name__ == "Flow":
+        if type(agent).__name__ == SWARM_ENCODING[PortalMemberClass.SUB_CONSTRUCT].spec_class:
             # C1 import: a Flow Swarm member (a neograph Construct exported via
             # _lower_portal_mesh_to_swarm, or any foreign sub-Flow agent)
             # reconstructs to a Construct mesh member, reusing the SAME
@@ -187,7 +189,9 @@ def _reconstruct_swarm_mesh(swarm: Any, from_spec: Callable[[Any], Construct]) -
             # tool-trigger requires an agent/act member with a ReAct turn), so it
             # always routes via typed output regardless of the Swarm's HandoffMode.
             member = _flow_member_to_construct(agent, payload, from_spec)
-            member_trigger = "output"
+            forced_trigger = SWARM_ENCODING[PortalMemberClass.SUB_CONSTRUCT].import_forced_trigger
+            assert forced_trigger is not None  # SUB_CONSTRUCT's row always forces one; table invariant
+            member_trigger = forced_trigger
         else:
             # The reserved mesh-channel input key is the literal "handoff" (design
             # §3.3, mirrored in example 28's declarative form and _ir_normalize's
