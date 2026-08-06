@@ -66,6 +66,17 @@
             }
           ],
           "default": null
+        },
+        "portal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PortalSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -341,6 +352,17 @@
             }
           ],
           "default": null
+        },
+        "portal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PortalSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -445,6 +467,138 @@
         "nodes"
       ],
       "title": "PipelineRef",
+      "type": "object"
+    },
+    "PortalSpec": {
+      "additionalProperties": false,
+      "description": "Portal (dynamic handoff) modifier in a node or sub-construct spec.\n\nTwo modes, mirroring ``neograph._portal.Portal`` field-for-field (identical\nnames, identical defaults where one exists) so ``_spec_loader``'s forward-\nevery-explicitly-written-field pass-through gives YAML parity with the\nprogrammatic form BY CONSTRUCTION: peer routing (``to=``) and dynamic\nflow dispatch (``route=\"decide\"``). ``scripted``/``conditions`` (callable\nregistries, ``dict[str, Callable]``) are Python-only and deliberately\nomitted -- not YAML-expressible -- see the spec-format docs for the exact\nnarrowing this omission means for a dispatch-mode Portal's emitted flow.",
+      "properties": {
+        "to": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To"
+        },
+        "route": {
+          "default": "goto",
+          "title": "Route",
+          "type": "string"
+        },
+        "trigger": {
+          "default": "output",
+          "enum": [
+            "output",
+            "tool"
+          ],
+          "title": "Trigger",
+          "type": "string"
+        },
+        "max_hops": {
+          "default": 10,
+          "title": "Max Hops",
+          "type": "integer"
+        },
+        "on_exhaust": {
+          "default": "error",
+          "enum": [
+            "error",
+            "exit"
+          ],
+          "title": "On Exhaust",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "spec_field": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spec Field"
+        },
+        "input_field": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Field"
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output"
+        },
+        "on_invalid": {
+          "default": "raise",
+          "enum": [
+            "raise",
+            "route_to_error"
+          ],
+          "title": "On Invalid",
+          "type": "string"
+        },
+        "error_handler": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Handler"
+        },
+        "max_depth": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Depth"
+        }
+      },
+      "title": "PortalSpec",
       "type": "object"
     },
     "ToolSpec": {

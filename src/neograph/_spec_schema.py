@@ -63,6 +63,38 @@ class OperatorSpec(BaseModel):
     when: str
 
 
+class PortalSpec(BaseModel):
+    """Portal (dynamic handoff) modifier in a node or sub-construct spec.
+
+    Two modes, mirroring ``neograph._portal.Portal`` field-for-field (identical
+    names, identical defaults where one exists) so ``_spec_loader``'s forward-
+    every-explicitly-written-field pass-through gives YAML parity with the
+    programmatic form BY CONSTRUCTION: peer routing (``to=``) and dynamic
+    flow dispatch (``route="decide"``). ``scripted``/``conditions`` (callable
+    registries, ``dict[str, Callable]``) are Python-only and deliberately
+    omitted -- not YAML-expressible -- see the spec-format docs for the exact
+    narrowing this omission means for a dispatch-mode Portal's emitted flow.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # -- peer routing --
+    to: list[str] | None = None
+    route: str = "goto"
+    trigger: Literal["output", "tool"] = "output"
+    max_hops: int = 10
+    on_exhaust: Literal["error", "exit"] = "error"
+    name: str | None = None
+
+    # -- dynamic flow dispatch (route="decide") --
+    spec_field: str | None = None
+    input_field: str | None = None
+    output: str | None = None
+    on_invalid: Literal["raise", "route_to_error"] = "raise"
+    error_handler: str | None = None
+    max_depth: int | None = None
+
+
 class ToolSpec(BaseModel):
     """Per-tool budget and config (forward-compatible alternative to bare strings)."""
 
@@ -92,6 +124,7 @@ class NodeSpec(BaseModel):
     each: EachSpec | None = None
     loop: LoopSpec | None = None
     operator: OperatorSpec | None = None
+    portal: PortalSpec | None = None
 
 
 class ConstructSpec(BaseModel):
@@ -113,6 +146,7 @@ class ConstructSpec(BaseModel):
     each: EachSpec | None = None
     loop: LoopSpec | None = None
     operator: OperatorSpec | None = None
+    portal: PortalSpec | None = None
 
 
 class PipelineRef(BaseModel):

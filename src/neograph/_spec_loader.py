@@ -25,7 +25,7 @@ from neograph._state_keys import StateKeys
 from neograph.conditions import parse_condition
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
-from neograph.modifiers import Each, Loop, Operator, Oracle
+from neograph.modifiers import Each, Loop, Operator, Oracle, Portal
 from neograph.naming import field_name_for
 from neograph.node import Node
 from neograph.spec_types import load_project_types, lookup_type
@@ -264,5 +264,15 @@ def _apply_modifiers(item: Any, spec: NodeSpec | ConstructSpec) -> Any:
 
     if spec.operator is not None:
         item = item | Operator(when=spec.operator.when)
+
+    if spec.portal is not None:
+        # Pure pass-through of every EXPLICITLY-written field -- field names are
+        # identical between PortalSpec and Portal, so this gives field-for-field
+        # model_fields_set parity with the programmatic `| Portal(...)` form BY
+        # CONSTRUCTION rather than a hand-maintained list. Unconditional default
+        # forwarding would break entry-only knobs (max_hops/on_exhaust) on a
+        # non-entry mesh member -- only forward what the author actually wrote.
+        kwargs = {name: getattr(spec.portal, name) for name in spec.portal.model_fields_set}
+        item = item | Portal(**kwargs)
 
     return item

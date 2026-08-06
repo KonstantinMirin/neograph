@@ -127,6 +127,34 @@ operator:
   when: needs_review      # registered condition name
 ```
 
+#### Portal (dynamic handoff)
+
+Two modes, matching the programmatic `Portal(...)` modifier field-for-field so a YAML mesh member and a `| Portal(...)` mesh member produce identical instances:
+
+```yaml
+# peer routing — a node picks its successor at runtime from a declared peer set
+portal:
+  to: [billing, technical]  # peer names (the mesh entry sets max_hops/on_exhaust)
+  trigger: output           # "output" (default, typed goto field) or "tool"
+  max_hops: 6                # ENTRY-ONLY — set on the mesh entry member only
+  on_exhaust: error          # ENTRY-ONLY — "error" (default) or "exit"
+  name: null                 # optional mesh group name
+```
+
+```yaml
+# dynamic flow dispatch — the node emits the spec of the next flow to run
+portal:
+  route: decide              # literal "decide" selects dispatch mode
+  spec_field: spec           # output field holding the emitted Spec dict
+  input_field: dispatch_input
+  output: Summary             # dispatched-flow output type (registered type name)
+  max_depth: 3                 # required in dispatch mode
+```
+
+Only ONE of `to` (peer mode) or `route: decide` (dispatch mode) may be set. `max_hops`/`on_exhaust` are entry-only: setting either on a non-entry mesh member fails loud at assembly.
+
+**Not YAML-expressible:** `scripted`/`conditions` (Python callable registries, `dict[str, Callable]`) are omitted from `PortalSpec` — they cannot be represented in YAML. This is a real but narrow capability narrowing, not the earlier (incorrect) framing of "LLM-mode nodes only": `compile()` seeds a dispatch-mode Portal's emitted flow from every `@node`/`@merge_fn`-decorated shim and every `register_scripted`/`register_condition` registration independently of `scripted=`/`conditions=`, and an explicit kwarg only ever adds to or overrides that seed. What a YAML Portal cannot supply is a **portal-local** callable registry — one that provides a callable not globally registered, or that overrides a global registration for just this portal's emitted flow.
+
 ### Sub-constructs
 
 Sub-constructs group nodes with isolated state and typed I/O boundaries:
@@ -149,7 +177,7 @@ constructs:
 | `output` | Yes | Output type (boundary port). |
 | `nodes` | Yes | Node names (references to top-level `nodes` array). |
 
-Sub-constructs support the same modifier blocks as nodes: `oracle`, `each`, `loop`, `operator`.
+Sub-constructs support the same modifier blocks as nodes: `oracle`, `each`, `loop`, `operator`, `portal`.
 
 ## Full example: security analysis pipeline
 

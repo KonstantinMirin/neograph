@@ -28,6 +28,10 @@ class ReviewResult(BaseModel, frozen=True):
     feedback: str
 
 
+class Handoff(BaseModel, frozen=True):
+    goto: str
+
+
 # -- Helpers -----------------------------------------------------------------
 
 SIMPLE_PROJECT = {
@@ -990,6 +994,118 @@ class TestLoadSpecModifiers:
         assert oracle.n == 5
         assert oracle.merge_prompt == "combine/them"
         assert oracle.merge_model == "fast"
+
+    def test_portal_mesh_from_spec(self):
+        """neograph-2j208: a YAML-defined Portal mesh compiles AND runs, so the
+        Command(goto) lowering is actually exercised, not just the schema.
+
+        A multi-member mesh, not a single-member one -- a single member passes
+        even with PortalSpec's defaults forwarded unconditionally, which would
+        hide the "entry-only knobs on a non-entry member" bug the risk section
+        warns about.
+        """
+        from neograph.loader import load_spec
+        from neograph.modifiers import Portal as PortalMod
+        from neograph.spec_types import register_type
+
+        register_type("Handoff", Handoff)
+
+        def entry_fn(input_data, config):
+            return Handoff(goto="peer")
+
+        def peer_fn(input_data, config):
+            return Handoff(goto="__end__")
+
+        register_scripted("portal_entry_fn", entry_fn)
+        register_scripted("portal_peer_fn", peer_fn)
+
+        spec = {
+            "name": "portal-mesh-test",
+            "nodes": [
+                {
+                    "name": "entry",
+                    "mode": "scripted",
+                    "scripted_fn": "portal_entry_fn",
+                    "outputs": "Handoff",
+                    "portal": {"to": ["peer"], "max_hops": 6},
+                },
+                {
+                    "name": "peer",
+                    "mode": "scripted",
+                    "scripted_fn": "portal_peer_fn",
+                    "outputs": "Handoff",
+                    "inputs": {"handoff": "Handoff"},
+                    "portal": {"to": ["entry"]},
+                },
+            ],
+            "pipeline": {"nodes": ["entry", "peer"]},
+        }
+
+        construct = load_spec(spec)
+        entry_node = next(n for n in construct.nodes if n.name == "entry")
+        peer_node = next(n for n in construct.nodes if n.name == "peer")
+        assert entry_node.has_modifier(PortalMod)
+        assert peer_node.has_modifier(PortalMod)
+
+        entry_portal = entry_node.get_modifier(PortalMod)
+        peer_portal = peer_node.get_modifier(PortalMod)
+        assert entry_portal.to == ["peer"]
+        assert entry_portal.max_hops == 6
+        assert peer_portal.to == ["entry"]
+
+        # model_fields_set parity (Core Invariant clause 2): the YAML-loaded
+        # Portal's explicitly-written-field set must equal the programmatic
+        # form's -- _validation_portal.py reads model_fields_set as behavioral
+        # input (the entry-only-knobs rule), so this is semantics, not
+        # bookkeeping. Compare against portal_mesh_minimal.py's exact shape.
+        programmatic_entry_portal = PortalMod(to=["peer"], max_hops=6)
+        programmatic_peer_portal = PortalMod(to=["entry"])
+        assert entry_portal.model_fields_set == programmatic_entry_portal.model_fields_set
+        assert peer_portal.model_fields_set == programmatic_peer_portal.model_fields_set
+
+        graph = compile(construct, **build_test_compile_kwargs())
+        result = run(graph, input={})
+        assert result["peer"].goto == "__end__"
+
+    def test_portal_max_hops_on_non_entry_member_raises(self):
+        """neograph-2j208 risk section: PortalSpec's defaults must NOT be
+        forwarded unconditionally -- max_hops/on_exhaust are entry-only, and a
+        non-entry member setting them (even to the default value, via explicit
+        model_fields_set inclusion) must fail loud, matching the programmatic
+        form's own validation."""
+        from neograph.loader import load_spec
+        from neograph.spec_types import register_type
+
+        register_type("Handoff", Handoff)
+        register_scripted("portal_entry_fn2", lambda input_data, config: Handoff(goto="peer"))
+        register_scripted("portal_peer_fn2", lambda input_data, config: Handoff(goto="__end__"))
+
+        spec = {
+            "name": "portal-non-entry-max-hops",
+            "nodes": [
+                {
+                    "name": "entry",
+                    "mode": "scripted",
+                    "scripted_fn": "portal_entry_fn2",
+                    "outputs": "Handoff",
+                    "portal": {"to": ["peer"]},
+                },
+                {
+                    "name": "peer",
+                    "mode": "scripted",
+                    "scripted_fn": "portal_peer_fn2",
+                    "outputs": "Handoff",
+                    "inputs": {"handoff": "Handoff"},
+                    "portal": {"to": ["entry"], "max_hops": 6},
+                },
+            ],
+            "pipeline": {"nodes": ["entry", "peer"]},
+        }
+
+        from neograph.errors import ConstructError
+
+        with pytest.raises(ConstructError, match="entry-only"):
+            load_spec(spec)
 
 
 class TestLoaderImmutability:

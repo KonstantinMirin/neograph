@@ -403,6 +403,60 @@ class TestModifierKwargsRegistryIntegrity:
             f"{sorted(combo_map_universe)}"
         )
 
+    def test_spec_schema_modifier_blocks_equal_combo_map_modifier_universe(self) -> None:
+        """neograph-2j208: the YAML spec surface (NodeSpec/ConstructSpec) must
+        be TOTAL over the SAME _COMBO_MAP modifier universe MODIFIER_KWARGS is.
+
+        Derived STRUCTURALLY (by annotation shape), never by intersecting the
+        spec class's fields with the combo-map universe -- an intersection is
+        vacuous in the stray/stale direction (a modifier dropped from
+        _COMBO_MAP while its spec field lingers would be intersected away and
+        pass silently). A field counts iff its annotation is exactly
+        `<Model> | None` where `<Model>` is a BaseModel subclass DEFINED in
+        _spec_schema.py itself (Model.__module__ == NodeSpec.__module__) --
+        this excludes llm_config (non-optional AND imported from
+        neograph._llm_config) and tools (never a bare field annotation, only
+        nested inside `list[str | ToolSpec]`) with no hand-typed exclude list.
+        """
+        import types
+
+        from pydantic import BaseModel as _BaseModel
+
+        from neograph._spec_schema import ConstructSpec, NodeSpec
+        from neograph.modifiers import _COMBO_MAP
+
+        combo_map_universe: set[str] = set()
+        for names in _COMBO_MAP:
+            combo_map_universe |= names
+
+        def _modifier_block_field_names(model_cls: type[_BaseModel]) -> set[str]:
+            names: set[str] = set()
+            for field_name, field_info in model_cls.model_fields.items():
+                annotation = field_info.annotation
+                # `<Model> | None` is a types.UnionType with exactly {Model, NoneType}.
+                if not isinstance(annotation, types.UnionType):
+                    continue
+                args = annotation.__args__
+                if len(args) != 2 or type(None) not in args:
+                    continue
+                model = next(a for a in args if a is not type(None))
+                if (
+                    isinstance(model, type)
+                    and issubclass(model, _BaseModel)
+                    and model.__module__ == model_cls.__module__
+                ):
+                    names.add(field_name)
+            return names
+
+        for spec_cls in (NodeSpec, ConstructSpec):
+            derived = _modifier_block_field_names(spec_cls)
+            assert derived == combo_map_universe, (
+                f"{spec_cls.__name__}'s structurally-derived modifier-block field names "
+                f"{sorted(derived)} != _COMBO_MAP's modifier universe {sorted(combo_map_universe)}. "
+                "A missing field name means a modifier is unreachable from YAML; a stray one means "
+                "a stale block nothing in _COMBO_MAP declares."
+            )
+
     def test_every_node_kwarg_is_identity_or_owned_by_at_least_one_row(self) -> None:
         """Anti-flat-explosion ratchet: every one of ``node()``'s kwargs (via
         live ``inspect.signature`` -- never a hand-copied list) appears in

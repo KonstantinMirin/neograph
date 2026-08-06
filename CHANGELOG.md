@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Work in progress on `develop` toward 0.8.0 — the `Portal` dynamic-handoff surface (peer-routing mesh + runtime flow dispatch) and Agent Spec interop (`to_agent_spec`/`from_agent_spec`). Changelog entries land when 0.8.0 is cut.
 
+- **The YAML spec surface can now express a `Portal` mesh member** (`neograph-2j208`). `oracle`/`each`/`loop`/`operator` had YAML `NodeSpec`/`ConstructSpec` fields; `portal` did not, so a Portal-modified node was only reachable programmatically (`Node | Portal(...)`) or via `@node(portal=...)`. `PortalSpec` forwards every explicitly-written field through to `Portal(...)` by name (never defaults), giving field-for-field `model_fields_set` parity with the programmatic form.
+
+
+
 ## [0.7.4] - 2026-07-29
 
 A hotfix release cut directly from `main`: one LLM-retry correctness fix and one observability correlation fix.
