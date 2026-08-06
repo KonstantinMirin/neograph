@@ -26,6 +26,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, create_model
 
+from neograph._agent_spec_graph import _has_control_edge
 from neograph._agent_spec_group_import import _construct_from_subflow
 from neograph._agent_spec_markers import (
     _MARK_MODIFIER,
@@ -280,10 +281,7 @@ def _reconstruct_swarm_mesh_with_operator_gates(flow: Any, from_spec: Callable[[
 
     # Structural confirmation, not marker trust: the AgentNode really leads into
     # this specific check via a real ControlFlowEdge.
-    edge_ok = any(
-        e.from_node.name == agent_node.name and e.to_node.name == check.name for e in flow.control_flow_connections
-    )
-    if not edge_ok:
+    if not _has_control_edge(flow, agent_node.name, check.name):
         return None
 
     base = _reconstruct_swarm_mesh(swarm, from_spec)  # existing helper, unchanged

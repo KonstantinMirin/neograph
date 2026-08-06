@@ -28,6 +28,7 @@ from pydantic import (
     create_model,  # noqa: E402,F401
 )
 
+from neograph._agent_spec_graph import _has_control_edge
 from neograph._agent_spec_markers import (
     _MARK_GROUP_ID,
     _MARK_MODIFIER,
@@ -109,15 +110,10 @@ def _trailing_operator(nodes: list[Any], j: int, primary_spec: Any, flow: Any) -
     check = nodes[j]
     if (check.metadata or {}).get(_MARK_MODIFIER) != "operator":
         return None
-    if not any(
-        e.from_node.name == primary_spec.name and e.to_node.name == check.name for e in flow.control_flow_connections
-    ):
+    if not _has_control_edge(flow, primary_spec.name, check.name):
         return None
     pause = nodes[j + 1]
-    if not any(
-        e.from_node.name == check.name and e.from_branch == "pause" and e.to_node.name == pause.name
-        for e in flow.control_flow_connections
-    ):
+    if not _has_control_edge(flow, check.name, pause.name, branch="pause"):
         return None
     return check
 
@@ -195,13 +191,8 @@ def _group_flow_items(flow: Any) -> list[tuple[frozenset[str], dict[str, Any]]]:
             j = i + 1
             nxt = nodes[i + 1] if i + 1 < n else None
             if nxt is not None and (nxt.metadata or {}).get(_MARK_MODIFIER) == "loop":
-                edge_to_nxt = any(
-                    e.from_node.name == node.name and e.to_node.name == nxt.name for e in flow.control_flow_connections
-                )
-                back_edge = any(
-                    e.from_node.name == nxt.name and e.from_branch == "continue" and e.to_node.name == node.name
-                    for e in flow.control_flow_connections
-                )
+                edge_to_nxt = _has_control_edge(flow, node.name, nxt.name)
+                back_edge = _has_control_edge(flow, nxt.name, node.name, branch="continue")
                 if edge_to_nxt and back_edge:
                     names.add("loop")
                     payload.pop("primary")
