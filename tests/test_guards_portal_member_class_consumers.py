@@ -118,6 +118,12 @@ MIGRATED: frozenset[str] = frozenset(
         # encoding table -- every SWARM_ENCODING row is keyed by PortalMemberClass,
         # a live import-and-use of the classifier's own enum.
         "_agent_spec_swarm_encoding.py",
+        # neograph-wvp7j: the test scaffold's mesh collector. It asks the classifier
+        # twice -- to FILTER construct.nodes down to mesh participants (excluding
+        # DISPATCH, which is a standalone linear node and never a member), and to
+        # record each member's class in the generated assertion so a lowering change
+        # shows up as drift. Both are genuine member-class questions.
+        "testing/_scaffold_capture.py",
     }
 )
 

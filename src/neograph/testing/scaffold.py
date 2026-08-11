@@ -32,6 +32,7 @@ from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.construct import Construct
 from neograph.naming import field_name_for
 from neograph.node import Node
+from neograph.testing import _scaffold_capture as _cap
 from neograph.tool import Tool
 
 # ── Node introspection ───────────────────────────────────────────────────
@@ -44,10 +45,6 @@ def _node_info(node: Node) -> dict[str, Any]:
     # are not valid Python in the generated assertions (neograph-wpzg/CON-01).
     primary_out = normalize_outputs(node.outputs).primary
     outputs_name = primary_out.__name__ if primary_out is not None else "None"
-    oracle = node.modifier_set.oracle
-    each = node.modifier_set.each
-    loop = node.modifier_set.loop
-    operator = node.modifier_set.operator
     # node.tools is declared list[Tool | BaseTool], but _normalize_raw_base_tools
     # (node.py) converts every BaseTool -> Tool at construction, so every element
     # has .budget. Cast documents that invariant. See neograph-m6d3.4 refine.
@@ -64,10 +61,9 @@ def _node_info(node: Node) -> dict[str, Any]:
         "is_agent": node.mode in ("agent", "act"),
         "prompt": node.prompt,
         "model": node.model,
-        "oracle": {"n": oracle.n, "merge_fn": oracle.merge_fn, "merge_prompt": oracle.merge_prompt} if oracle else None,
-        "each": {"over": each.over, "key": each.key} if each else None,
-        "loop": {"max_iterations": loop.max_iterations, "on_exhaust": loop.on_exhaust} if loop else None,
-        "operator": {"when": repr(operator.when)} if operator else None,
+        # Every modifier slot, derived from the roster -- never a hand-listed subset
+        # (neograph-wvp7j: a 4-way list silently dropped Portal).
+        **_cap.capture_modifiers(node),
         "tools": [{"name": t.name, "budget": t.budget} for t in tools],
     }
 
@@ -231,10 +227,10 @@ def _gen_topology(
     return "\n".join(L)
 
 
-def _gen_modifiers(nodes: list[dict]) -> str | None:
+def _gen_modifiers(nodes: list[dict], meshes: list[dict], construct_var: str) -> str | None:
     """Generate modifier assertion tests. Returns None if no modifiers."""
-    modified = [n for n in nodes if n["oracle"] or n["each"] or n["loop"] or n["operator"]]
-    if not modified:
+    modified = [n for n in nodes if any(n[slot] for slot in _cap.MODIFIER_CAPTURE)]
+    if not modified and not meshes:
         return None
     L = [
         '"""Modifier assertions (auto-verified)."""',
@@ -272,7 +268,10 @@ def _gen_modifiers(nodes: list[dict]) -> str | None:
             L.append(f"        assert loop.max_iterations == {lp['max_iterations']}")
         if n["operator"]:
             L.append(f"        assert {fname}.modifier_set.operator is not None")
+        if n["portal"]:
+            L += _cap.gen_portal_node_asserts(fname, n["portal"])
         L.append("")
+    L += _cap.gen_mesh_tests(meshes, construct_var)
     return "\n".join(L)
 
 
@@ -516,9 +515,7 @@ def _gen_sync(construct_var: str, nodes: list[dict], subs: list[dict]) -> str:
     scripted_names = {n["name"] for n in nodes if n.get("is_scripted")}
     llm_names = {n["name"] for n in nodes if n.get("is_llm")}
     sub_names = {s["name"] for s in subs}
-    modifier_names = {
-        n["name"] for n in nodes if n.get("oracle") or n.get("each") or n.get("loop") or n.get("operator")
-    }
+    modifier_names = {n["name"] for n in nodes if any(n.get(slot) for slot in _cap.MODIFIER_CAPTURE)}
 
     L = [
         '"""Sync — tier-aware drift detection.',
@@ -571,8 +568,10 @@ def _gen_sync(construct_var: str, nodes: list[dict], subs: list[dict]) -> str:
             f"        for item in {construct_var}.nodes:",
             "            if not isinstance(item, Node):",
             "                continue",
-            "            has_mod = bool(item.modifier_set.oracle or item.modifier_set.each",
-            "                          or item.modifier_set.loop or item.modifier_set.operator)",
+            # to_list() walks _SLOT_RULES, so the EMITTED check is total by
+            # construction -- a generated suite freezes at scaffold time, so this is
+            # the one site a later fix here could never reach (neograph-wvp7j).
+            "            has_mod = bool(item.modifier_set.to_list())",
             "            if item.name in self.EXPECTED_MODIFIED and not has_mod:",
             '                assert False, f"{item.name} lost its modifier — update test_modifiers.py"',
             "            if item.name not in self.EXPECTED_MODIFIED and has_mod:",
@@ -625,7 +624,7 @@ def scaffold_tests(
     files["test_topology.py"] = _gen_topology(construct_var, nodes, subs, edges, total_count, has_llm)
 
     # test_modifiers.py (only if modifiers exist)
-    mod_content = _gen_modifiers(nodes)
+    mod_content = _gen_modifiers(nodes, _cap.collect_meshes(construct), construct_var)
     if mod_content:
         files["test_modifiers.py"] = mod_content
 

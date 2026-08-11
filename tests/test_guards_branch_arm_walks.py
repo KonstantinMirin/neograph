@@ -108,6 +108,13 @@ _ALLOWLIST: Counter = Counter(
         # (Spec.nodes / ConstructSpec.nodes), not the neograph IR, so arm-awareness
         # never applied. They moved with the spec-loader half into _spec_loader.py;
         # re-keyed by (module, content), exemption unchanged.
+        # neograph-wvp7j: the scaffold's mesh collector. Deliberately NOT arm-aware,
+        # and this is the point: a Portal mesh is a run of contiguous LEVEL siblings,
+        # so a Portal-modified node inside a branch arm belongs to no mesh. This walk
+        # mirrors _validation_portal.py's member filter exactly, so the scaffold's
+        # view of "what the mesh is" cannot disagree with the compiler's. Routing it
+        # through iter_with_arms would make them disagree -- the opposite of a fix.
+        ("_scaffold_capture.py", "for item in construct.nodes"): 1,
         ("_spec_loader.py", "for node_spec in spec.nodes:"): 1,
         ("_spec_loader.py", "for ref in spec.pipeline.nodes:"): 1,
         ("_spec_loader.py", "for prev_ref in construct_spec.nodes[:i]:"): 1,

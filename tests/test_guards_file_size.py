@@ -83,7 +83,7 @@ ALLOWLIST: dict[str, int] = {
     "modifiers.py": 806,
     "runner.py": 679,
     "testing/fakes.py": 729,
-    "testing/scaffold.py": 664,
+    "testing/scaffold.py": 663,
 }
 
 
