@@ -48,7 +48,14 @@ pytest.importorskip("pyagentspec")
 
 from neograph._agent_spec import Branch, to_agent_spec  # noqa: E402
 from neograph.construct import Construct  # noqa: E402
-from tests.agent_spec_flow_walk import all_flows, arm_targets, entered_nodes, successors_of, walk  # noqa: E402
+from tests.agent_spec_flow_walk import (  # noqa: E402
+    all_flows,
+    arm_targets,
+    branch_adjacency,
+    entered_nodes,
+    successors_of,
+    walk,
+)
 from tests.test_agent_spec_matrix import GREEN, build_cell  # noqa: E402
 
 
@@ -171,3 +178,78 @@ class TestOperatorPauseResumesIntoTheFlow:
             "the Operator gate runs AFTER the body it guards (_wiring._add_operator_check wires "
             f"node -> check), so the flow must enter the body (entered: {entered})"
         )
+
+
+def _branch_label_defects(flow: Any) -> list[str]:
+    """Every way a BranchingNode's outgoing arm labels can disagree with the
+    ``mapping`` it declares, across the flow and all its sub-flows."""
+    defects: list[str] = []
+    for sub in all_flows(flow):
+        adjacency = branch_adjacency(sub)
+        for node in sub.nodes:
+            mapping = getattr(node, "mapping", None)
+            if not mapping:
+                continue
+            declared = set(mapping.values())
+            emitted = [branch for frm, branch, _to in adjacency if frm == node.name]
+            labels = [b for b in emitted if b is not None]
+            where = f"{sub.name}: {node.name}"
+            if None in emitted:
+                defects.append(f"{where} has an UNLABELLED outgoing edge -- ambiguous to a literal executor")
+            if invented := sorted(set(labels) - declared):
+                defects.append(f"{where} emits {invented}, not in its mapping {sorted(declared)}")
+            if missing := sorted(declared - set(labels)):
+                defects.append(f"{where} declares {missing} in its mapping with NO outgoing edge")
+            if len(labels) != len(set(labels)):
+                defects.append(f"{where} emits a DUPLICATE label among {sorted(labels)}")
+    return defects
+
+
+class TestEveryBranchingNodeEmitsTheArmsItDeclares:
+    """neograph-dgbqv.10: the matrix validated reachability and liveness but never
+    the ARM LABELS, so a branch-relabelling bug was invisible to it.
+
+    Proven by controlled mutation: relabelling the loop's exit arm 'done' ->
+    'continue' produces a BranchingNode with two 'continue' successors and no
+    'done' successor -- unrunnable for any literal executor, because the executor
+    cannot pick a successor for the 'done' outcome and has two candidates for
+    'continue'. That mutation was caught by exactly ONE test in the whole tree,
+    and only by luck. Under the check below it is caught in many cells at once,
+    on two independent clauses.
+
+    The expectation is SELF-DESCRIBING -- it comes from each node's own
+    ``mapping`` -- so this needs no per-cell table of expected labels and no
+    maintenance as matrix cells are added. That is what makes it worth having
+    over per-shape assertions: it scales with the matrix for free.
+    """
+
+    @pytest.mark.parametrize("cell_id", sorted(GREEN))
+    def test_branch_arms_match_the_declared_mapping(self, cell_id: str) -> None:
+        from tests.test_agent_spec_matrix import CELLS
+
+        mode, combo, config, shape = CELLS[cell_id]
+        flow = to_agent_spec(build_cell(mode, combo, config, shape))
+        if type(flow).__name__ != "Flow":
+            pytest.skip(f"{cell_id} exports a {type(flow).__name__}, not a Flow")
+
+        defects = _branch_label_defects(flow)
+        assert not defects, (
+            f"{cell_id} exports a BranchingNode whose outgoing arms disagree with its own "
+            "mapping -- a literal executor cannot resolve the branch:\n  " + "\n  ".join(defects)
+        )
+
+    def test_the_matrix_actually_exercises_branching_nodes(self) -> None:
+        """Non-vacuity: the check above would pass trivially if no GREEN cell
+        exported a BranchingNode at all."""
+        from tests.test_agent_spec_matrix import CELLS
+
+        seen = 0
+        for cell_id in sorted(GREEN):
+            mode, combo, config, shape = CELLS[cell_id]
+            flow = to_agent_spec(build_cell(mode, combo, config, shape))
+            if type(flow).__name__ != "Flow":
+                continue
+            seen += sum(
+                1 for sub in all_flows(flow) for n in sub.nodes if getattr(n, "mapping", None)
+            )
+        assert seen >= 20, f"expected the GREEN matrix to exercise many BranchingNodes, saw {seen}"
