@@ -444,7 +444,21 @@ artifacts still advertise structure is the worst of both.
 
 ---
 
-## 8a. Amendments from the codebase disease scan (2026-08-11/12)
+## 8. Open questions
+
+- Whether the lint extension for `merge_prompt` templates lands here or as a
+  follow-up ticket citing this document.
+- Whether `Rendered.__getattr__` should allow a dunder/protocol allowlist. Current
+  position: no allowlist. Rung 0 (§4.2) removes the framework's own reason to
+  probe, and the scan confirmed a `str` subclass does not leak downstream —
+  `str(r)`, f-strings, `+`, `join`, slicing and `json.dumps` all yield a plain
+  `str`, so nothing reaches LangChain messages, Langfuse payloads or checkpoint
+  state as a `Rendered`. Two sites still need a comment pinning the assumption:
+  `_llm_render.py:76`'s `hasattr` inside `_walk_var_path` (safe only while the
+  inline path keeps receiving `ri.raw`), and any consumer template engine, where
+  a propagating `PromptInputError` is the intended loudness.
+
+## 9. Amendments from the codebase disease scan (2026-08-11/12)
 
 Four review lenses ran against this branch's tree (artifacts:
 `.claude/code-review/neograph-l2a7w/`), each building its own inventory without
@@ -489,12 +503,3 @@ most change the work:
 4. The disease is an instance of a rule this repo has already written down —
    `CLAUDE.md`'s `effective_producer_type` single-source-of-truth rule and the
    `ModifierCombo` retrospective. This is the third recorded occurrence.
-
-## 8. Open questions
-
-- Whether the lint extension for `merge_prompt` templates lands here or as a
-  follow-up ticket citing this document.
-- Whether `Rendered.__getattr__` should allow a dunder/protocol allowlist. Current
-  position: no allowlist — values are wrapped at the last step before the
-  compiler, so no framework code probes them, and a consumer's both-ways helper
-  *should* fail loudly.
