@@ -52,7 +52,7 @@ from neograph._agent_spec import (
 from neograph.loader import from_agent_spec
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.testing.fakes import StructuredFake
-from tests.agent_spec_flow_walk import edge_pairs
+from tests.agent_spec_flow_walk import edge_pairs, inner_nodes
 from tests.fakes import build_fake_llm_kwargs, build_test_compile_kwargs, register_scripted
 
 
@@ -110,9 +110,6 @@ def _by_name(construct: Construct) -> dict[str, Node]:
     return {n.name: n for n in construct.nodes}
 
 
-def _inner_nodes(map_node) -> list:
-    return [n for n in map_node.subflow.nodes if type(n).__name__ not in ("StartNode", "EndNode")]
-
 
 class TestEachOracleExportShape:
     """The fusion lowers to ONE MapNode whose subflow IS the un-fused Oracle
@@ -133,7 +130,7 @@ class TestEachOracleExportShape:
             "top-level variant means the fusion was flattened, not nested"
         )
 
-        inner = _inner_nodes(map_node)
+        inner = inner_nodes(map_node)
         variants = [n for n in inner if _MARK_VARIANT in (n.metadata or {})]
         assert len(variants) == 2
         assert {type(v).__name__ for v in variants} == {"LlmNode"}
@@ -161,8 +158,8 @@ class TestEachOracleExportShape:
         start_edges = [e for e in subflow.control_flow_connections if type(e.from_node).__name__ == "StartNode"]
         assert len(start_edges) == 1
 
-        merge = next(n for n in _inner_nodes(map_node) if _MARK_ORACLE_SPEC in (n.metadata or {}))
-        variants = [n for n in _inner_nodes(map_node) if _MARK_VARIANT in (n.metadata or {})]
+        merge = next(n for n in inner_nodes(map_node) if _MARK_ORACLE_SPEC in (n.metadata or {}))
+        variants = [n for n in inner_nodes(map_node) if _MARK_VARIANT in (n.metadata or {})]
         variants.sort(key=lambda n: n.metadata[_MARK_VARIANT])
         assert start_edges[0].to_node.name == variants[0].name
 

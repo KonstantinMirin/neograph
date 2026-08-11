@@ -49,7 +49,7 @@ from neograph._agent_spec import (
 from neograph.loader import from_agent_spec
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.testing.fakes import StructuredFake
-from tests.agent_spec_flow_walk import arm_targets, edge_pairs
+from tests.agent_spec_flow_walk import arm_targets, edge_pairs, inner_nodes
 from tests.fakes import (
     build_fake_llm_kwargs,
     build_test_compile_kwargs,
@@ -115,9 +115,6 @@ def _by_name(construct: Construct) -> dict[str, Node]:
     return {n.name: n for n in construct.nodes}
 
 
-def _inner_nodes(map_node) -> list:
-    return [n for n in map_node.subflow.nodes if type(n).__name__ not in ("StartNode", "EndNode")]
-
 
 class TestEachOracleOperatorExportShape:
     """The fused MapNode AND the Operator pause composite, together -- the
@@ -132,7 +129,7 @@ class TestEachOracleOperatorExportShape:
         assert map_node.metadata[_MARK_MODIFIER] == "each"
         assert map_node.metadata[_MARK_EACH_SPEC]["over"] == "seed.items"
 
-        inner = _inner_nodes(map_node)
+        inner = inner_nodes(map_node)
         assert len([n for n in inner if _MARK_VARIANT in (n.metadata or {})]) == 2
         merge = next(n for n in inner if _MARK_ORACLE_SPEC in (n.metadata or {}))
         assert merge.metadata[_MARK_ORACLE_SPEC]["n"] == 2

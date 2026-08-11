@@ -59,7 +59,7 @@ def sub_flows(flow: Any) -> list[Any]:
     """
     found: list[Any] = []
     for node in flow.nodes:
-        found.extend(_holder_flows(node))
+        found.extend(holder_flows(node))
     return found
 
 
@@ -86,7 +86,7 @@ def inner_nodes(holder: Any) -> list[Any]:
     """
     return [
         node
-        for sub in _holder_flows(holder)
+        for sub in holder_flows(holder)
         for node in sub.nodes
         if type(node).__name__ not in _BOUNDARY_TYPE_NAMES
     ]
@@ -188,11 +188,18 @@ def walk(flow: Any) -> tuple[set[str], set[str]]:
     return closure({flow.start_node.name}, successors), closure(ends, predecessors)
 
 
-def _holder_flows(node: Any) -> list[Any]:
-    """The sub-flows one node holds, reading both holder spellings.
+def holder_flows(node: Any) -> list[Any]:
+    """The sub-flows ONE node holds, reading both holder spellings.
 
     The single place the singular/plural distinction is handled, so ``sub_flows``
     and ``inner_nodes`` cannot drift apart on it.
+
+    Public because callers legitimately need the sub-Flow ITSELF rather than its
+    interior: a test asserting on the sub-flow's own ``StartNode``, or on
+    per-variant sub-Flow object identity, cannot use ``inner_nodes`` (which
+    strips exactly those boundary sentinels) and must not fall back to a raw
+    ``.subflow`` read, which is singular-only and goes blind the day a lowering
+    picks a plural holder (neograph-498gr).
     """
     found: list[Any] = []
     one = getattr(node, "subflow", None)

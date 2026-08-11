@@ -53,32 +53,50 @@ _EXEMPT_MODULES = frozenset(
     }
 )
 
-#: Sites that legitimately read the raw edge list, each with a reason and -- where
-#: the reason is temporary -- the OPEN bead that will retire it.
+#: Sites that legitimately read the raw edge list, each with a reason.
+#:
+#: CONTENT-KEYED (file, stripped source line) -> reason, never line-numbered --
+#: the house pattern ``test_guards_branch_arm_walks.py`` established for exactly
+#: this reason: a later fix that shifts line numbers must not spuriously trip the
+#: guard, and a stale line number must not silently exempt a NEW read that drifts
+#: onto it. (Learned the hard way: neograph-498gr's edits moved these very lines.)
 #:
 #: This list was published in the ticket BEFORE the guard was written, so it
 #: cannot be grown to fit whatever the tree happened to contain. It may only
 #: SHRINK (AGENTS.md ratchet discipline).
-_ALLOWLIST: dict[tuple[str, int], str] = {
+_ALLOWLIST: dict[tuple[str, str], str] = {
     # -- structural-forever: these need the EDGE OBJECTS, not a derived answer.
     # The walk module deliberately does not hand out raw edges (that would widen
     # its contract from "answers graph questions" to "hands out edges" and partly
     # defeat this guard). Type-filtering on the pyagentspec class is a different
     # question from graph shape.
-    ("test_agent_spec_export.py", 192): "isinstance(ControlFlowEdge) type filter, not a graph query",
-    ("test_agent_spec_export.py", 910): "isinstance(ControlFlowEdge) type filter, not a graph query",
-    ("test_agent_spec_export.py", 961): "isinstance(ControlFlowEdge) type filter, not a graph query",
-    ("test_agent_spec_export.py", 780): "needs the edge OBJECT to assert multiplicity (len(back_edges) == 1)",
-    ("test_agent_spec_export.py", 851): "needs the edge OBJECT to assert on from_branch across a filtered list",
-    ("test_agent_spec_export.py", 1133): "needs the edge OBJECT to assert multiplicity (len(back_edges) == 1)",
-    ("test_agent_spec_export.py", 1198): "needs the edge OBJECT to assert multiplicity (len(back_edges) == 1)",
-    ("test_agent_spec_reachability.py", 127): "needs the edge OBJECT to read .from_branch off the single exit edge",
-    ("test_agent_spec_each_operator.py", 207): "asserts on a RE-IMPORTED flow (rebuilt), a different object under test",
+    (
+        "test_agent_spec_export.py",
+        "control_edges = [e for e in flow.control_flow_connections if isinstance(e, ControlFlowEdge)]",
+    ): "isinstance(ControlFlowEdge) type filter, not a graph query (3 sites)",
+    (
+        "test_agent_spec_export.py",
+        "for e in flow.control_flow_connections",
+    ): "needs the edge OBJECT -- multiplicity (len(...) == 1) and from_branch off a filtered list (4 sites)",
+    (
+        "test_agent_spec_reachability.py",
+        "for e in flow.control_flow_connections",
+    ): "needs the edge OBJECT to read .from_branch off the single loop exit edge",
+    (
+        "test_agent_spec_each_operator.py",
+        "for e in rebuilt.control_flow_connections",
+    ): "asserts on a RE-IMPORTED flow (rebuilt) -- a different object under test",
     # -- Start/End boundary edge readers. Dropped from the walk module's API on
     # purpose: they return edge OBJECTS. Two sites only; if a third appears,
     # that is the signal to add a derived projection instead of a third entry.
-    ("test_agent_spec_each_oracle.py", 161): "StartNode-sourced edge objects inside a MapNode subflow",
-    ("test_agent_spec_each_oracle.py", 174): "EndNode-targeted edge objects inside a MapNode subflow",
+    (
+        "test_agent_spec_each_oracle.py",
+        'start_edges = [e for e in subflow.control_flow_connections if type(e.from_node).__name__ == "StartNode"]',
+    ): "StartNode-sourced edge objects inside a MapNode subflow",
+    (
+        "test_agent_spec_each_oracle.py",
+        'end_edges = [e for e in subflow.control_flow_connections if type(e.to_node).__name__ == "EndNode"]',
+    ): "EndNode-targeted edge objects inside a MapNode subflow",
 }
 
 
@@ -97,6 +115,7 @@ def _attribute_reads(tree: ast.AST) -> list[ast.Attribute]:
 
 
 def _collect_raw_reads() -> list[tuple[str, int, str]]:
+    """(file, lineno, stripped source line) for every raw read outside the exempt modules."""
     found: list[tuple[str, int, str]] = []
     for py_file in sorted(TESTS_DIR.rglob("*.py")):
         if py_file.name in _EXEMPT_MODULES:
@@ -117,7 +136,7 @@ class TestFlowWalkIsTheSingleTestSideReader:
         offenders = [
             f"{name}:{line}: {text}"
             for name, line, text in _collect_raw_reads()
-            if (name, line) not in _ALLOWLIST
+            if (name, text) not in _ALLOWLIST
         ]
         assert not offenders, (
             "ask tests/agent_spec_flow_walk.py instead of walking "
@@ -130,7 +149,7 @@ class TestFlowWalkIsTheSingleTestSideReader:
     def test_every_allowlist_entry_is_still_a_real_read(self):
         """The ratchet may only SHRINK, so a stale entry must be deleted rather
         than left as silent headroom for a future bypass."""
-        real = {(name, line) for name, line, _ in _collect_raw_reads()}
+        real = {(name, text) for name, _line, text in _collect_raw_reads()}
         stale = sorted(set(_ALLOWLIST) - real)
         assert not stale, (
             "these allowlist entries no longer point at a raw read -- delete them "

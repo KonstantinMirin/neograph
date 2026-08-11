@@ -54,6 +54,7 @@ from neograph._agent_spec import (  # noqa: E402
     Branch,
 )
 
+from .agent_spec_flow_walk import holder_flows  # noqa: E402
 from .schemas import Claims, ClusterGroup, Clusters, MatchResult, RawText, _consumer, _producer  # noqa: E402
 
 
@@ -1103,7 +1104,10 @@ class TestConstructItemModifierExport:
 
         variants = [n for n in flow.nodes if _MARK_VARIANT in (n.metadata or {})]
         assert len(variants) == 3
-        subflows = [v.subflow for v in variants]
+        # holder_flows reads both spellings, so this stays correct if a variant ever
+        # lowers to a plural holder (neograph-498gr).
+        subflows = [sub for v in variants for sub in holder_flows(v)]
+        assert len(subflows) == len(variants), "each variant holds exactly one sub-Flow"
         assert len({id(s) for s in subflows}) == 3, "each variant must wrap its own sub-Flow object"
         assert len({s.id for s in subflows}) == 3, "each variant's sub-Flow must be its own component"
         assert len({v.id for v in variants}) == 3, "each variant FlowNode must be its own component"

@@ -36,10 +36,11 @@ from pydantic import BaseModel
 pytest.importorskip("pyagentspec")
 
 from neograph import Construct, Node  # noqa: E402
-from neograph._agent_spec import to_agent_spec  # noqa: E402
+from neograph._agent_spec import to_agent_spec
 from neograph.errors import ConfigurationError  # noqa: E402
 from neograph.loader import from_agent_spec  # noqa: E402
 from neograph.modifiers import Each  # noqa: E402
+from tests.agent_spec_flow_walk import holder_flows  # noqa: E402
 
 from .schemas import Claims, RawText, _producer  # noqa: E402
 
@@ -267,7 +268,12 @@ class TestThinkEachFillability:
         flow = to_agent_spec(self._pipeline())
 
         map_node = next(n for n in flow.nodes if isinstance(n, MapNode))
-        sub = map_node.subflow
+        # holder_flows, not a raw .subflow read: the singular spelling goes blind the
+        # day a lowering picks a plural holder (neograph-498gr). This shape declares
+        # exactly one sub-flow, and that expectation is now asserted rather than assumed.
+        subs = holder_flows(map_node)
+        assert len(subs) == 1, f"expected one sub-flow under the MapNode, got {len(subs)}"
+        sub = subs[0]
 
         start = next(n for n in sub.nodes if isinstance(n, StartNode))
         inner = next(n for n in sub.nodes if isinstance(n, LlmNode))
