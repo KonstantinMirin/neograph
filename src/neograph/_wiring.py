@@ -355,9 +355,10 @@ def _add_portal_mesh(
     construct level; ``members[0]`` is the mesh ENTRY. Unlike Loop (a conditional
     back-edge router), the mesh has NO static inter-member edges and NO router:
     each member returns ``Command(goto=peer_or_exit)`` and is registered with
-    ``destinations=`` so LangGraph validates the target set at compile time. The
-    single static edge into the mesh is ``prev → entry``; a pass-through exit node
-    (``__handoff_exit_<entry>``, mirroring Loop's ``__loop_exit_``) is where the
+    ``destinations=`` (NOT validated by LangGraph, neograph-dgbqv.7 -- rendering
+    only; keep it complete, never lean on it). The single static edge into the
+    mesh is ``prev → entry``; a pass-through exit node (``__handoff_exit_<entry>``,
+    mirroring Loop's ``__loop_exit_``) is where the
     linear chain resumes, so the compile walk threads ``prev_node`` forward from
     it unchanged. Returns the exit node name.
 
@@ -717,10 +718,9 @@ def _add_portal_agent_cycle_member(
             runtime=deps.runtime,
             tool_factory_lookup=deps.tool_factory_lookup,
         )
-        # The tools node routes to a peer's real entry (handoff) OR loops back to
-        # {node}__agent (no handoff this turn) — both are dynamic Command targets,
-        # so the static tools -> agent edge is dropped (design §3.4).
-        tools_destinations = ctx.resolved_peers(portal) + (parts["names"].agent,)
+        # Peer entry, mesh EXIT, or back to {node}__agent — all dynamic, so the static
+        # tools -> agent edge is dropped (§3.4). peers ∪ exit: the exit IS emitted (dgbqv.7).
+        tools_destinations = ctx.destinations_for(portal) + (parts["names"].agent,)
     else:
         spec = PortalRouteSpec.for_node(node, portal, ctx)
         parts = make_portal_agent_cycle_fn(

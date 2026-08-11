@@ -107,15 +107,25 @@ class MeshContext:
         return tuple(self.entry_label_map.get(t, t) for t in (portal.to or ()))
 
     def destinations_for(self, portal: Portal) -> tuple[str, ...]:
-        """Peers + ``exit_name``. The ``_wiring.py`` ``:358``/``:415``/``:424``/
-        ``:746`` shape — every ``graph.add_node(..., destinations=...)`` call
-        except an AGENT_CYCLE_TOOL member's ``tools_destinations``.
+        """Peers + ``exit_name`` — the shape EVERY
+        ``graph.add_node(..., destinations=...)`` call uses, including an
+        AGENT_CYCLE_TOOL member's ``tools_destinations``.
 
-        Deliberately a DIFFERENT method from :meth:`resolved_peers`, not a
-        shared one with an optional flag: collapsing them would silently
-        widen a tool-triggered member's declared goto target set, and
-        ``destinations=`` is validation/rendering metadata no behavioral test
-        asserts on.
+        Still a DIFFERENT method from :meth:`resolved_peers` rather than one with
+        a flag, because the two answer different questions: "which peers can this
+        member hand off to" is not "which nodes can this member goto".
+
+        HISTORY (neograph-dgbqv.7): this docstring used to justify EXCLUDING the
+        tool member, on the grounds that including the exit would "silently widen"
+        its declared target set and that ``destinations=`` is metadata "no
+        behavioral test asserts on". Both clauses turned out to be wrong. The
+        tools node genuinely emits ``Command(goto=exit_name)`` — on ``HANDOFF_END``
+        and on an exhausted hop budget under ``on_exhaust='exit'`` — so declaring
+        the exit is a CORRECTION, not a widening; and
+        ``TestToolTriggeredToolsNodeDeclaresTheMeshExit`` now asserts it. (LangGraph
+        does not enforce ``destinations=`` at compile or run time, so the old
+        omission never broke a run; it made the declared graph disagree with the
+        real control flow, which is what a rendering or static analysis reads.)
         """
         return self.resolved_peers(portal) + (self.exit_name,)
 

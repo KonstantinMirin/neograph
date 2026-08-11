@@ -244,3 +244,47 @@ class TestToolTriggerThreeSurfaceParity:
                 if e.source.endswith("__tools") and not e.conditional
             ]
             assert static_from_tools == []
+
+
+class TestToolTriggeredToolsNodeDeclaresTheMeshExit:
+    """neograph-dgbqv.7: a tool-triggered ``{node}__tools`` node must DECLARE the
+    mesh exit among its Command targets, because it can actually emit one.
+
+    ``_tool_handoff_to_command`` returns ``Command(goto=ctx.exit_name)`` on
+    ``HANDOFF_END`` and again when the hop budget is exhausted under
+    ``on_exhaust='exit'`` -- but ``_wiring`` built ``tools_destinations`` as peers
+    + the agent loopback only, while the sibling ``parse_destinations`` is
+    documented as "declared peers UNION {exit} for BOTH trigger kinds".
+
+    WHY THIS IS A DECLARATION TEST AND NOT A RUNTIME ONE. Verified by isolated
+    experiment: LangGraph validates ``destinations=`` neither at compile time nor
+    at run time, so the undeclared goto executes happily today and NO runtime
+    failure exists to assert on. The acceptance therefore genuinely lives in the
+    declared graph -- a rendered diagram omits the transition, any static analysis
+    over ``destinations=`` is wrong, and the day LangGraph adds enforcement this
+    becomes a silent break. Asserting the declaration is the matching locus here,
+    not a weaker substitute for a behavioural test.
+    """
+
+    @staticmethod
+    def _targets_from(graph: object, source_suffix: str) -> set[str]:
+        return {e.target for e in graph.get_graph().edges if e.source.endswith(source_suffix)}
+
+    def test_tools_node_declares_the_same_exit_its_parse_sibling_does(self):
+        graph = compile(
+            _tool_trigger_mesh(),
+            **build_test_compile_kwargs(),
+            **build_fake_llm_kwargs(lambda tier: None),
+        )
+        parse_targets = self._targets_from(graph, "triage__parse")
+        tools_targets = self._targets_from(graph, "triage__tools")
+
+        exits = {t for t in parse_targets if t.startswith("__handoff_exit")}
+        assert exits, "precondition: the parse node must declare the mesh exit"
+
+        assert exits <= tools_targets, (
+            "a tool-triggered {node}__tools node emits Command(goto=exit_name) on "
+            "HANDOFF_END and on on_exhaust='exit', so it must DECLARE that exit "
+            "among its destinations -- its parse sibling already does. Missing: "
+            f"{sorted(exits - tools_targets)} (tools declares {sorted(tools_targets)})"
+        )
