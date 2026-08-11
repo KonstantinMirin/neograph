@@ -478,20 +478,20 @@
           "required": false
         },
         {
-          "annotation": "Literal['output', 'tool']",
-          "default": "'output'",
+          "annotation": "Optional[Literal['output', 'tool']]",
+          "default": "None",
           "name": "trigger",
           "required": false
         },
         {
-          "annotation": "int",
-          "default": "10",
+          "annotation": "int | None",
+          "default": "None",
           "name": "max_hops",
           "required": false
         },
         {
-          "annotation": "Literal['error', 'exit']",
-          "default": "'error'",
+          "annotation": "Optional[Literal['error', 'exit']]",
+          "default": "None",
           "name": "on_exhaust",
           "required": false
         },
@@ -552,7 +552,7 @@
       ],
       "kind": "pydantic_model",
       "name": "Portal",
-      "signature": "(to: list[str] | None = None, route: str = 'goto', trigger: Literal['output', 'tool'] = 'output', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', name: str | None = None, spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise', 'route_to_error'] = 'raise', error_handler: str | None = None, max_depth: int | None = None)"
+      "signature": "(to: list[str] | None = None, route: str = 'goto', trigger: Optional[Literal['output', 'tool']] = None, max_hops: int | None = None, on_exhaust: Optional[Literal['error', 'exit']] = None, name: str | None = None, spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise', 'route_to_error'] = 'raise', error_handler: str | None = None, max_depth: int | None = None)"
     },
     {
       "anchor": "handoff_end",

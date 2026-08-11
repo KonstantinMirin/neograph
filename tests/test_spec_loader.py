@@ -1053,15 +1053,18 @@ class TestLoadSpecModifiers:
         assert entry_portal.max_hops == 6
         assert peer_portal.to == ["entry"]
 
-        # model_fields_set parity (Core Invariant clause 2): the YAML-loaded
-        # Portal's explicitly-written-field set must equal the programmatic
-        # form's -- _validation_portal.py reads model_fields_set as behavioral
-        # input (the entry-only-knobs rule), so this is semantics, not
-        # bookkeeping. Compare against portal_mesh_minimal.py's exact shape.
+        # VALUE parity (Core Invariant clause 2): the YAML-loaded Portal must equal the
+        # programmatic form. This used to compare model_fields_set, justified by
+        # "_validation_portal reads model_fields_set as behavioral input" -- that premise
+        # is retired (neograph-dgbqv.6): the entry-only rule now reads VALUES, and intent
+        # travels as a value. Comparing the models is strictly stronger than comparing
+        # fields_set, since Pydantic __eq__ compares every field.
         programmatic_entry_portal = PortalMod(to=["peer"], max_hops=6)
         programmatic_peer_portal = PortalMod(to=["entry"])
-        assert entry_portal.model_fields_set == programmatic_entry_portal.model_fields_set
-        assert peer_portal.model_fields_set == programmatic_peer_portal.model_fields_set
+        assert entry_portal == programmatic_entry_portal
+        assert peer_portal == programmatic_peer_portal
+        # and the unset knob really is unset, not materialized to the default
+        assert peer_portal.max_hops is None and peer_portal.effective_max_hops == 10
 
         graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={})

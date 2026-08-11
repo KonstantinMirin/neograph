@@ -348,10 +348,23 @@ class TestMixedTriggerMeshRoundTripsPerMember:
             "member changes what it DOES at runtime, not just how it is labelled "
             f"(got mode={modes[toolless]!r})"
         )
-        assert triggers[toolless] == "output", (
-            "a mesh member with no tools has no ReAct tool-call turn to hand off from, "
-            "so the mesh-level HandoffMode must not force trigger='tool' onto it "
-            f"(got {triggers[toolless]!r} for {toolless!r})"
+        # neograph-dgbqv.6: the marker serializes INTENT, so an unset trigger comes back
+        # UNSET (None), not materialized to "output". Asserting None is the stronger claim
+        # -- it pins that the round trip is an identity, which "output" could not
+        # distinguish from the mesh default being re-applied.
+        assert triggers[toolless] is None, (
+            "a mesh member that never declared a trigger must come back with it still "
+            "UNSET -- materializing it to 'output' loses the distinction the value "
+            f"sentinels exist to carry (got {triggers[toolless]!r} for {toolless!r})"
+        )
+        # ...and the BEHAVIOUR is unchanged: unset still resolves to output-triggered.
+        toolless_portal = next(
+            n.modifier_set.portal for n in rebuilt.nodes if n.name == toolless
+        )
+        assert toolless_portal.effective_trigger == "output"
+        assert toolless_portal.is_tool_triggered is False, (
+            "the mesh-level HandoffMode must not make a toolless member tool-triggered "
+            "(neograph-dgbqv.8)"
         )
 
     def test_the_tool_triggered_member_keeps_its_trigger(self):

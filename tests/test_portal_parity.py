@@ -240,13 +240,19 @@ class TestThreeSurfacePortalParity:
             routes = {bid: km.route for bid, km in kms.items()}
             hops = {bid: km.max_hops for bid, km in kms.items()}
             exhausts = {bid: km.on_exhaust for bid, km in kms.items()}
-            field_sets = {bid: km.model_fields_set for bid, km in kms.items()}
-
             assert len({tuple(p) for p in peers.values()}) == 1, (member, peers)
             assert len(set(routes.values())) == 1, (member, routes)
             assert len(set(hops.values())) == 1, (member, hops)
             assert len(set(exhausts.values())) == 1, (member, exhausts)
-            assert len({frozenset(fs) for fs in field_sets.values()}) == 1, (member, field_sets)
+            # WHOLE-MODEL parity, which subsumes the four field checks above and is
+            # strictly stronger than the model_fields_set comparison it replaces:
+            # Pydantic __eq__ compares every field VALUE. fields_set is no longer
+            # semantic (neograph-dgbqv.6) -- the surfaces may reach the same Portal by
+            # passing None explicitly or by omitting the kwarg, and that difference is
+            # exactly what stopped mattering when intent became a value.
+            first_id, first_km = next(iter(kms.items()))
+            for bid, km in kms.items():
+                assert km == first_km, (member, bid, km, first_id, first_km)
 
     def test_runtime_routing_identical_across_surfaces(self):
         """compile + run each surface; the observed routing order is IDENTICAL."""

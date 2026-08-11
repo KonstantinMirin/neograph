@@ -494,27 +494,48 @@
           "type": "string"
         },
         "trigger": {
-          "default": "output",
-          "enum": [
-            "output",
-            "tool"
+          "anyOf": [
+            {
+              "enum": [
+                "output",
+                "tool"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Trigger",
-          "type": "string"
+          "default": null,
+          "title": "Trigger"
         },
         "max_hops": {
-          "default": 10,
-          "title": "Max Hops",
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Hops"
         },
         "on_exhaust": {
-          "default": "error",
-          "enum": [
-            "error",
-            "exit"
+          "anyOf": [
+            {
+              "enum": [
+                "error",
+                "exit"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "On Exhaust",
-          "type": "string"
+          "default": null,
+          "title": "On Exhaust"
         },
         "name": {
           "anyOf": [

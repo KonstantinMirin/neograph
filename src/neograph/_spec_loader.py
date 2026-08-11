@@ -267,12 +267,12 @@ def _apply_modifiers(item: Any, spec: NodeSpec | ConstructSpec) -> Any:
 
     if spec.portal is not None:
         # Pure pass-through of every EXPLICITLY-written field -- field names are
-        # identical between PortalSpec and Portal, so this gives field-for-field
-        # model_fields_set parity with the programmatic `| Portal(...)` form BY
-        # CONSTRUCTION rather than a hand-maintained list. Unconditional default
-        # forwarding would break entry-only knobs (max_hops/on_exhaust) on a
-        # non-entry mesh member -- only forward what the author actually wrote.
-        kwargs = {name: getattr(spec.portal, name) for name in spec.portal.model_fields_set}
+        # identical between PortalSpec and Portal, and BOTH default their knobs to
+        # None, so forwarding every field is now safe: an unset knob forwards as None
+        # and stays unset (neograph-dgbqv.6). This used to filter on model_fields_set
+        # because eager defaults would otherwise put max_hops on a non-entry member and
+        # trip the entry-only rule -- with value sentinels there is nothing to filter.
+        kwargs = {name: getattr(spec.portal, name) for name in type(spec.portal).model_fields}
         item = item | Portal(**kwargs)
 
     return item

@@ -93,8 +93,11 @@ class MeshContext:
             count_field=StateKeys.handoff_hops(entry_field),
             exit_name=exit_name,
             entry_name=entry.name,
-            max_hops=entry_portal.max_hops,
-            on_exhaust=entry_portal.on_exhaust,
+            # THE application point for the knob defaults (neograph-dgbqv.6): MeshContext
+            # keeps concrete `int`/`str`, so nothing Optional leaks into the runtime and
+            # factory.py needs no None handling at all.
+            max_hops=entry_portal.effective_max_hops,
+            on_exhaust=entry_portal.effective_on_exhaust,
             entry_label_map=entry_label_map,
         )
 

@@ -105,11 +105,19 @@ class TestModeDiscrimination:
             Portal(to=["a"], max_hops=0)
 
     def test_peer_mode_defaults(self):
-        """Peer mode with defaults: route='goto', max_hops=10, on_exhaust='error'."""
+        """Peer mode: route='goto' eagerly; the entry-only knobs stay UNSET.
+
+        max_hops/on_exhaust default to None and resolve through effective_* at read
+        time (neograph-dgbqv.6), so "the author did not set this" survives every
+        boundary that rebuilds the Portal. route keeps an eager default -- it is not an
+        entry-only knob, so there is nothing to carry.
+        """
         km = Portal(to=["a"])
         assert km.route == "goto"
-        assert km.max_hops == 10
-        assert km.on_exhaust == "error"
+        assert km.max_hops is None
+        assert km.on_exhaust is None
+        assert km.effective_max_hops == 10
+        assert km.effective_on_exhaust == "error"
 
     def test_dispatch_mode_constructs(self):
         """A well-formed dispatch-mode Portal constructs cleanly."""

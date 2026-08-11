@@ -81,9 +81,12 @@ class PortalSpec(BaseModel):
     # -- peer routing --
     to: list[str] | None = None
     route: str = "goto"
-    trigger: Literal["output", "tool"] = "output"
-    max_hops: int = 10
-    on_exhaust: Literal["error", "exit"] = "error"
+    # None = unset, mirroring Portal's value sentinels (neograph-dgbqv.6). Eager
+    # defaults here would make every YAML NON-entry member carry max_hops=10, which
+    # the entry-only rule now rejects on VALUE -- breaking YAML Portal support.
+    trigger: Literal["output", "tool"] | None = None
+    max_hops: int | None = None
+    on_exhaust: Literal["error", "exit"] | None = None
     name: str | None = None
 
     # -- dynamic flow dispatch (route="decide") --

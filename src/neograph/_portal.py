@@ -30,6 +30,17 @@ HANDOFF_END = "__end__"
 DISPATCH_ROUTE = "decide"
 
 
+#: The values an UNSET knob resolves to at read time. They live here, next to the
+#: fields, because the fields themselves must default to ``None`` -- a ``None`` knob
+#: means "the author did not set this", and that intent has to survive every boundary
+#: that reconstructs the Portal (``model_validate``, a ``model_dump`` round trip, a YAML
+#: load, an Agent-Spec import). ``model_fields_set`` cannot carry it: it records how an
+#: instance was CONSTRUCTED, not what it holds (neograph-dgbqv.6).
+DEFAULT_MAX_HOPS = 10
+DEFAULT_ON_EXHAUST = "error"
+DEFAULT_TRIGGER = "output"
+
+
 class Portal(Modifier, frozen=True):
     """Dynamic-handoff modifier — one modifier with two modes (design §2.1).
 
@@ -61,9 +72,9 @@ class Portal(Modifier, frozen=True):
     # -- mode (a): peer routing --
     to: list[str] | None = None  # declared successor names (directed, per-node)
     route: str = "goto"  # mode (a): routing FIELD on the payload model; mode (b): literal "decide"
-    trigger: Literal["output", "tool"] = "output"  # peer mode only: how the member decides its goto
-    max_hops: int = 10  # mesh budget; settable ONLY on the entry member
-    on_exhaust: Literal["error", "exit"] = "error"
+    trigger: Literal["output", "tool"] | None = None  # peer mode only; None = DEFAULT_TRIGGER
+    max_hops: int | None = None  # mesh budget, entry-only; None = DEFAULT_MAX_HOPS
+    on_exhaust: Literal["error", "exit"] | None = None  # entry-only; None = DEFAULT_ON_EXHAUST
     name: str | None = None  # mesh group name (peer mode only); None = the implicit default group
 
     # -- mode (b): dynamic flow definition (route="decide") --
@@ -90,6 +101,28 @@ class Portal(Modifier, frozen=True):
         return self.route == DISPATCH_ROUTE
 
     @property
+    def effective_max_hops(self) -> int:
+        """The operative hop budget: the declared value, or ``DEFAULT_MAX_HOPS``.
+
+        THE read-time seam. Consumers ask for the effective value; only the mode
+        validators and the Agent-Spec SERIALIZERS read the raw optional field, and they
+        do so because they care about whether it was set, not about what it resolves to.
+        Applying the default per-consumer instead would re-plant the duplicated-source-of-
+        truth disease this ticket removes, one level down.
+        """
+        return DEFAULT_MAX_HOPS if self.max_hops is None else self.max_hops
+
+    @property
+    def effective_on_exhaust(self) -> str:
+        """The operative exhaust policy: the declared value, or ``DEFAULT_ON_EXHAUST``."""
+        return DEFAULT_ON_EXHAUST if self.on_exhaust is None else self.on_exhaust
+
+    @property
+    def effective_trigger(self) -> str:
+        """The operative trigger: the declared value, or ``DEFAULT_TRIGGER``."""
+        return DEFAULT_TRIGGER if self.trigger is None else self.trigger
+
+    @property
     def is_tool_triggered(self) -> bool:
         """Peer-mode sub-mode discriminator (design portal-tool-triggered-handoff).
 
@@ -103,7 +136,7 @@ class Portal(Modifier, frozen=True):
         ``route="decide"`` Portal is not a peer member and cannot trigger a
         tool handoff), guarded by ``not self.is_dispatch``.
         """
-        return not self.is_dispatch and self.trigger == "tool"
+        return not self.is_dispatch and self.effective_trigger == "tool"
 
     def model_post_init(self, __context: Any) -> None:
         is_peer = self.to is not None
@@ -121,12 +154,12 @@ class Portal(Modifier, frozen=True):
                 found="neither to nor route='decide' provided",
             )
         if is_peer:
-            if self.max_hops < 1:
+            if self.max_hops is not None and self.max_hops < 1:
                 raise ConfigurationError.build(
                     "Portal max_hops must be >= 1",
                     found=str(self.max_hops),
                 )
-            if "max_depth" in self.model_fields_set:
+            if self.max_depth is not None:
                 raise ConfigurationError.build(
                     "Portal peer mode forbids max_depth — max_depth is a dispatch-mode-only "
                     "self-extending-flow budget (the mirror image of max_hops/on_exhaust being "
@@ -134,7 +167,7 @@ class Portal(Modifier, frozen=True):
                     expected="no max_depth in peer mode",
                     found="max_depth set",
                 )
-            if "error_handler" in self.model_fields_set:
+            if self.error_handler is not None:
                 raise ConfigurationError.build(
                     "Portal peer mode forbids error_handler — it is a dispatch-mode-only knob",
                     expected="no error_handler in peer mode",
@@ -151,7 +184,7 @@ class Portal(Modifier, frozen=True):
                     expected="spec_field=, input_field=, output=, max_depth=",
                     found=f"missing: {missing}",
                 )
-            forbidden = [k for k in ("max_hops", "on_exhaust", "name", "trigger") if k in self.model_fields_set]
+            forbidden = [k for k in ("max_hops", "on_exhaust", "name", "trigger") if getattr(self, k) is not None]
             if forbidden:
                 raise ConfigurationError.build(
                     "Portal dispatch mode forbids peer-mode knobs",

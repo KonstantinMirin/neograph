@@ -971,8 +971,8 @@ class _ForwardSelf:
         self,
         members: list[Any],
         to: dict[str, list[str]],
-        max_hops: int = 10,
-        on_exhaust: Literal["error", "exit"] = "error",
+        max_hops: int | None = None,
+        on_exhaust: Literal["error", "exit"] | None = None,
         entry: Any = None,
     ) -> None:
         """Define a Portal mode-(a) peer-routing mesh.

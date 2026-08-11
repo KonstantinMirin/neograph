@@ -31,7 +31,8 @@ def _member_portal(node: Node) -> Portal:
 
     Members are collected by ``node.modifier_set.portal is not None``; this
     narrows the ``Portal | None`` slot back to ``Portal`` for the rules that
-    read ``to`` / ``route`` / ``model_fields_set``.
+    read ``to`` / ``route`` / the knob VALUES (the entry-only rule reads values, not
+    ``model_fields_set`` -- neograph-dgbqv.6).
     """
     km = node.modifier_set.portal
     assert km is not None  # collected as Portal-modified
@@ -261,7 +262,7 @@ def _check_one_mesh_group(
     # max_hops / on_exhaust are entry-only knobs (per group).
     for member in node_members[1:]:
         for knob in ("max_hops", "on_exhaust"):
-            if knob in _member_portal(member).model_fields_set:
+            if getattr(_member_portal(member), knob) is not None:
                 raise ConstructError.build(
                     f"Portal member '{member.name}' sets {knob} but it is entry-only",
                     expected=f"set {knob} only on the mesh entry '{entry.name}'",

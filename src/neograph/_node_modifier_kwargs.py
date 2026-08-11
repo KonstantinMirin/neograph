@@ -189,20 +189,22 @@ def _build_portal_kwargs(
 ) -> dict[str, Any]:
     """Portal (peer-mode) modifier kwargs from @node decorator arguments.
 
-    Conditional-include for ``route`` / ``max_hops`` / ``on_exhaust`` so the
-    modifier's own defaults (``route='goto'``, ``max_hops=10``,
-    ``on_exhaust='error'``) stay authoritative AND ``model_fields_set`` matches
-    the programmatic ``| Portal(...)`` form field-for-field. That identity is
-    load-bearing, not cosmetic: ``_validation_portal`` reads
-    ``Portal.model_fields_set`` to enforce the entry-only ``max_hops`` /
-    ``on_exhaust`` knobs, so a non-entry member must NOT carry them set."""
+    ``max_hops`` / ``on_exhaust`` are forwarded as-is: both this signature and
+    ``Portal`` default them to ``None``, and ``None`` MEANS unset, so a non-entry
+    member simply carries no value and the entry-only rule (which now reads VALUES,
+    not ``model_fields_set``) is satisfied by construction (neograph-dgbqv.6).
+
+    This used to conditionally include each kwarg to keep ``model_fields_set``
+    identical to the programmatic ``| Portal(...)`` form, because the validator read
+    ``model_fields_set`` as behavioural input. That mechanism is retired: intent now
+    travels as a value, so the surfaces agree automatically rather than by
+    maintenance. ``route`` keeps its conditional include -- it still has an eager
+    default (``'goto'``) and is not one of the entry-only knobs."""
     km_kw: dict[str, Any] = {"to": portal}
     if route is not None:
         km_kw["route"] = route
-    if max_hops is not None:
-        km_kw["max_hops"] = max_hops
-    if on_exhaust is not None:
-        km_kw["on_exhaust"] = on_exhaust
+    km_kw["max_hops"] = max_hops
+    km_kw["on_exhaust"] = on_exhaust
     return km_kw
 
 

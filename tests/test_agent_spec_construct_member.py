@@ -328,7 +328,10 @@ class TestSwarmEncodingTable:
             ("think" if n.name.startswith("think") else "tool"): (n.mode, n.modifier_set.portal.trigger)
             for n in back.nodes
         }
-        assert by_kind["think"] == ("think", "output"), (
+        # trigger comes back UNSET (None), not materialized -- see neograph-dgbqv.6.
+        # The behaviour is unchanged (None -> effective_trigger -> "output"); asserting
+        # None is the stronger claim, since it pins the round trip as an identity.
+        assert by_kind["think"] == ("think", None), (
             "the think member must survive as a think member routing by typed output -- "
             "becoming an agent member changes what the node DOES at runtime (a ReAct "
             f"tool-call cycle instead of one structured completion), got {by_kind['think']}"

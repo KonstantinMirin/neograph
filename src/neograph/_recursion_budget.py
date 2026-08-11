@@ -95,7 +95,7 @@ def _mesh_hop_cost(construct: Construct) -> int:
         entry_portal = current_run[0].modifier_set.portal
         if entry_portal is not None:
             per_hop = max(_member_hop_cost(m) for m in current_run)
-            total += entry_portal.max_hops * per_hop
+            total += entry_portal.effective_max_hops * per_hop
         current_run.clear()
 
     for item in iter_with_arms(construct):
