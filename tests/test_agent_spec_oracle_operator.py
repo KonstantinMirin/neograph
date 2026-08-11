@@ -39,7 +39,7 @@ from neograph._agent_spec import (
     _MARK_MODIFIER,
     _MARK_OPERATOR_SPEC,
     _MARK_ORACLE_SPEC,
-    _PAUSE_BRANCH,
+    Branch,
     to_agent_spec,
 )
 from neograph.loader import from_agent_spec
@@ -142,7 +142,7 @@ class TestOracleOperatorExportShape:
         assert ("ensemble__variant_2", "ensemble") in pairs
 
         pause_edge = next(e for e in flow.control_flow_connections if e.to_node.name == "ensemble__operator_pause")
-        assert pause_edge.from_branch == _PAUSE_BRANCH
+        assert pause_edge.from_branch == Branch.PAUSE
 
     def test_plain_oracle_export_is_unchanged_when_ungated(self):
         """Zero behavior change: an Oracle node WITHOUT an Operator keeps

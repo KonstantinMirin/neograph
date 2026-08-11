@@ -39,6 +39,41 @@ _MARK_PORTAL_SPEC = "neograph/portal_spec"
 _MARK_PORTAL_OPERATOR_SPEC = "neograph/portal_operator_spec"
 _MARK_PROMPT_SPEC = "neograph/prompt_spec"
 
+# --- Branch labels -----------------------------------------------------------
+# The ``from_branch`` arm names the export side writes onto ``ControlFlowEdge``
+# and the import side matches on. Same single-home reasoning as the marker keys
+# above, and the same failure mode: a label that drifts between the two sides is
+# a SILENT no-match -- the importer simply fails to recognize the composite and
+# the nodes come back as bare primitives, with nothing raised.
+#
+# They lived as private copies in BOTH ``_agent_spec_portal.py`` and
+# ``_agent_spec_modifier_lowering.py``, defined independently with neither
+# importing the other, while ``loader.py`` spelled "pause" as a raw literal
+# matching neither constant.
+#
+# Grouped into ONE container rather than six loose module constants, mirroring
+# ``StateKeys``: a consumer needs a single import to reach every label, and
+# ``Branch.CONTINUE`` at the use site says which vocabulary the string belongs
+# to in a way a bare ``_BRANCH_CONTINUE`` does not.
+class Branch:
+    """The ``from_branch`` arm labels.
+
+    NOTE on the two roles "true"/"false" play. On a ``BranchingNode`` the
+    ``mapping`` is {condition OUTCOME -> branch LABEL}. For Operator the outcome
+    maps to a differently-named label (``{Branch.TRUE: Branch.PAUSE}``); for a
+    plain branch the two coincide (``{Branch.TRUE: Branch.TRUE}``). These name
+    the LABEL. Where a mapping KEY is spelled with one, it is because that
+    shape's outcome-to-label map is the identity -- if the two roles ever need to
+    diverge, add a separate outcome vocabulary rather than widening this one.
+    """
+
+    DEFAULT = "default"
+    PAUSE = "pause"
+    CONTINUE = "continue"
+    DONE = "done"
+    TRUE = "true"
+    FALSE = "false"
+
 
 def import_pyagentspec(*module_paths: str, found: str | None = None) -> Any:
     """The one shared guarded-import helper for reaching the optional

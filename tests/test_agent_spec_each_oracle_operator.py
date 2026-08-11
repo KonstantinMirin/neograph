@@ -43,7 +43,7 @@ from neograph._agent_spec import (
     _MARK_OPERATOR_SPEC,
     _MARK_ORACLE_SPEC,
     _MARK_VARIANT,
-    _PAUSE_BRANCH,
+    Branch,
     to_agent_spec,
 )
 from neograph.loader import from_agent_spec
@@ -150,7 +150,7 @@ class TestEachOracleOperatorExportShape:
         assert ("fanned__operator_check", "fanned__operator_pause") in pairs
 
         pause_edge = next(e for e in flow.control_flow_connections if e.to_node.name == "fanned__operator_pause")
-        assert pause_edge.from_branch == _PAUSE_BRANCH
+        assert pause_edge.from_branch == Branch.PAUSE
 
 
 class TestEachOracleOperatorRoundTrip:

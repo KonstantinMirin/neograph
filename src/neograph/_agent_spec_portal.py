@@ -24,6 +24,7 @@ from neograph._agent_spec_markers import (
     _MARK_PORTAL_OPERATOR_SPEC,
     _MARK_PORTAL_SPEC,
     _MARK_PROMPT_SPEC,
+    Branch,
     _import_agent_spec_flow_classes,
 )
 from neograph._agent_spec_node_lowering import _make_agent
@@ -36,9 +37,6 @@ from neograph._agent_spec_swarm_encoding import SWARM_ENCODING, mesh_handoff_mod
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph.construct import Construct
 from neograph.node import Node
-
-_DEFAULT_BRANCH = "default"
-_PAUSE_BRANCH = "pause"
 
 
 def _lower_portal_mesh_to_swarm(
@@ -176,7 +174,7 @@ def _lower_portal_mesh_to_swarm(
     agent_node = nodes_mod.AgentNode(name=f"{construct.name}__mesh", agent=swarm)
     check = nodes_mod.BranchingNode(
         name=f"{construct.name}__portal_operator_check",
-        mapping={"true": _PAUSE_BRANCH, "false": _DEFAULT_BRANCH},
+        mapping={Branch.TRUE: Branch.PAUSE, Branch.FALSE: Branch.DEFAULT},
         metadata={
             _MARK_MODIFIER: "portal_operator",
             _MARK_PORTAL_OPERATOR_SPEC: gated,
@@ -200,13 +198,13 @@ def _lower_portal_mesh_to_swarm(
             edges_mod.ControlFlowEdge(
                 name=f"{construct.name}__check_to_pause",
                 from_node=check,
-                from_branch=_PAUSE_BRANCH,
+                from_branch=Branch.PAUSE,
                 to_node=input_message,
             ),
             edges_mod.ControlFlowEdge(
                 name=f"{construct.name}__check_to_default",
                 from_node=check,
-                from_branch=_DEFAULT_BRANCH,
+                from_branch=Branch.DEFAULT,
                 to_node=end_default,
             ),
             edges_mod.ControlFlowEdge(

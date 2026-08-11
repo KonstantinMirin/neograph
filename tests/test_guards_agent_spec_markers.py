@@ -87,6 +87,33 @@ _ALLOWED_ASSIGNMENT = re.compile(r'^_?[A-Z][A-Z0-9_]*\s*=\s*"neograph/[a-z_]+"\s
 # The wire-format marker values the export<->import contract (and any stored
 # Agent Spec YAML / foreign tool) literally depends on. A typo in any of these
 # constant VALUES is a silent-downgrade bug a shared symbol cannot catch.
+# The branch (``from_branch``) arm labels, on the same single-home footing as the
+# marker keys and with the same failure mode: a label that drifts between the
+# export and import sides is a SILENT no-match, not a raise. Two of them were
+# defined INDEPENDENTLY in two src modules (neither importing the other) while a
+# third module spelled one as a raw literal matching neither copy; the remaining
+# four had no constant at all. They now live on ONE ``Branch`` container in
+# ``_agent_spec_markers``, mirroring ``StateKeys``.
+_BRANCH_LABELS = {
+    "DEFAULT": "default",
+    "PAUSE": "pause",
+    "CONTINUE": "continue",
+    "DONE": "done",
+    "TRUE": "true",
+    "FALSE": "false",
+}
+
+# The pre-container spellings. Re-introducing ANY of them as a module-level
+# constant is the disease coming back, so they stay named here as banned forms.
+_RETIRED_BRANCH_CONSTANT_NAMES = (
+    "_DEFAULT_BRANCH",
+    "_PAUSE_BRANCH",
+    "_BRANCH_CONTINUE",
+    "_BRANCH_DONE",
+    "_BRANCH_TRUE",
+    "_BRANCH_FALSE",
+)
+
 _EXPECTED_MARKER_VALUES = {
     "neograph/mode",
     "neograph/agent_spec",
@@ -193,6 +220,62 @@ def test_no_retyped_marker_literals_under_tests():
         "(the form 12+ test modules already use). A re-typed key that drifts is "
         "a silent no-match -- the marker goes unread and the node is treated as "
         "foreign (neograph-741nn).\n" + "\n".join(offenders)
+    )
+
+
+def test_branch_labels_are_defined_exactly_once():
+    """Each branch label has ONE definition, on ``Branch`` in the markers module.
+
+    A second module RE-DEFINING one (rather than importing it) is the disease:
+    both copies read correctly in isolation and drift silently apart.
+    """
+    from neograph._agent_spec_markers import Branch
+
+    for attr, value in _BRANCH_LABELS.items():
+        assert getattr(Branch, attr, None) == value, (
+            f"Branch.{attr} must be defined in _agent_spec_markers.py as {value!r}"
+        )
+
+    redefiners: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path.name == "_agent_spec_markers.py":
+            continue
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            for name in _RETIRED_BRANCH_CONSTANT_NAMES:
+                # An ASSIGNMENT of a retired name. Importing is not a hit (an import
+                # line never has '=' after the name), and neither is a use site.
+                if stripped.startswith(f"{name} =") or stripped.startswith(f"{name}="):
+                    redefiners.append(f"{path.relative_to(SRC.parent.parent)}:{i}: {stripped}")
+    assert not redefiners, (
+        "branch labels live on Branch in neograph._agent_spec_markers -- import it "
+        "rather than re-defining a loose per-module constant. Two independently-"
+        "defined copies drift silently and the importer stops recognizing the "
+        "composite (neograph-b0y5s).\n" + "\n".join(redefiners)
+    )
+
+
+def test_no_raw_branch_label_literals_in_the_agent_spec_layer():
+    """No Agent-Spec module spells a branch label as a raw ``from_branch``/
+    ``mapping`` literal instead of using the constant.
+
+    Scoped to the Agent-Spec modules by name: 'true'/'false'/'done'/'continue'
+    are ordinary English strings that appear all over the codebase for unrelated
+    reasons (``_describe_value`` renders bools, ``conditions`` parses literals),
+    and flagging those would be noise, not a finding.
+    """
+    offenders: list[str] = []
+    literals = {f'"{v}"' for v in _BRANCH_LABELS.values()}
+    for path in sorted(SRC.glob("_agent_spec*.py")) + [SRC / "loader.py"]:
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "from_branch" not in line and "mapping=" not in line:
+                continue
+            if any(lit in line for lit in literals):
+                offenders.append(f"{path.relative_to(SRC.parent.parent)}:{i}: {line.strip()}")
+    assert not offenders, (
+        "these Agent-Spec sites spell a branch label as a raw literal on a "
+        "from_branch/mapping line; import the constant from "
+        "_agent_spec_markers instead (neograph-b0y5s).\n" + "\n".join(offenders)
     )
 
 

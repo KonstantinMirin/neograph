@@ -44,7 +44,7 @@ from neograph._agent_spec import (
     _MARK_LOOP_SPEC,
     _MARK_MODIFIER,
     _MARK_OPERATOR_SPEC,
-    _PAUSE_BRANCH,
+    Branch,
     to_agent_spec,
 )
 from neograph.decorators import construct_from_functions
@@ -148,7 +148,7 @@ class TestLoopOperatorExportShape:
         assert ("refine__operator_check", "refine__operator_pause") in pairs
 
         pause_edge = next(e for e in flow.control_flow_connections if e.to_node.name == "refine__operator_pause")
-        assert pause_edge.from_branch == _PAUSE_BRANCH
+        assert pause_edge.from_branch == Branch.PAUSE
 
     def test_plain_loop_export_is_unchanged_when_ungated(self):
         """Zero behavior change: a Loop node WITHOUT an Operator keeps today's

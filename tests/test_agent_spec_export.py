@@ -51,6 +51,7 @@ from neograph._agent_spec import (  # noqa: E402
     _MARK_PORTAL_SPEC,
     _MARK_TOOL_SPEC,
     _MARK_VARIANT,
+    Branch,
 )
 
 from .schemas import Claims, ClusterGroup, Clusters, MatchResult, RawText, _consumer, _producer  # noqa: E402
@@ -777,7 +778,7 @@ class TestToAgentSpecLowersModifiers:
         back_edges = [
             e
             for e in flow.control_flow_connections
-            if isinstance(e, ControlFlowEdge) and e.from_node.name == branch_nodes[0].name and e.from_branch == "continue"
+            if isinstance(e, ControlFlowEdge) and e.from_node.name == branch_nodes[0].name and e.from_branch == Branch.CONTINUE
         ]
         assert len(back_edges) == 1, "expected a cyclic ControlFlowEdge back into the loop body"
 
@@ -850,7 +851,7 @@ class TestToAgentSpecLowersModifiers:
             for e in flow.control_flow_connections
             if isinstance(e, ControlFlowEdge) and e.to_node.name == pause_nodes[0].name
         ]
-        assert any(e.from_branch == "pause" for e in pause_edges), (
+        assert any(e.from_branch == Branch.PAUSE for e in pause_edges), (
             "expected the PAUSE_BRANCH edge (not DEFAULT_BRANCH) into InputMessageNode"
         )
 
@@ -921,8 +922,8 @@ class TestToAgentSpecLowersModifiers:
             "unconditionally in sequence, the exact pre-fix bug"
         )
 
-        true_edges = [e for e in control_edges if e.from_node.name == branch_nodes[0].name and e.from_branch == "true"]
-        false_edges = [e for e in control_edges if e.from_node.name == branch_nodes[0].name and e.from_branch == "false"]
+        true_edges = [e for e in control_edges if e.from_node.name == branch_nodes[0].name and e.from_branch == Branch.TRUE]
+        false_edges = [e for e in control_edges if e.from_node.name == branch_nodes[0].name and e.from_branch == Branch.FALSE]
         assert any(e.to_node.name == high_node.name for e in true_edges), (
             "expected the branch's 'true' edge to enter high_path"
         )
@@ -1132,7 +1133,7 @@ class TestConstructItemModifierExport:
             for e in flow.control_flow_connections
             if isinstance(e, ControlFlowEdge)
             and e.from_node.name == branch_nodes[0].name
-            and e.from_branch == "continue"
+            and e.from_branch == Branch.CONTINUE
         ]
         assert len(back_edges) == 1, "expected a cyclic ControlFlowEdge back into the sub-flow body"
 
@@ -1195,7 +1196,7 @@ class TestConstructItemModifierExport:
         back_edges = [
             e
             for e in flow.control_flow_connections
-            if isinstance(e, ControlFlowEdge) and e.from_node.name == branch.name and e.from_branch == "continue"
+            if isinstance(e, ControlFlowEdge) and e.from_node.name == branch.name and e.from_branch == Branch.CONTINUE
         ]
         assert len(back_edges) == 1, "the cycle back into the body must survive as a control edge"
         assert back_edges[0].to_node.name == "sub"

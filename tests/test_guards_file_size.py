@@ -70,8 +70,8 @@ MIN_EXPECTED_FILES = 60
 # per-entry reason strings (all 21 would say the same thing).
 ALLOWLIST: dict[str, int] = {
     "_agent_cycle.py": 776,
-    "_agent_spec.py": 651,
-    "_agent_spec_modifier_lowering.py": 648,
+    "_agent_spec.py": 650,
+    "_agent_spec_modifier_lowering.py": 646,
     "_oracle.py": 509,
     "_tool_loop.py": 554,
     "_wiring.py": 773,

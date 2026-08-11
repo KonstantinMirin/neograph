@@ -36,6 +36,7 @@ from neograph._agent_spec_markers import (
     _MARK_PORTAL_OPERATOR_SPEC,  # noqa: E402,F401
     _MARK_PORTAL_SPEC,  # noqa: E402,F401
     _MARK_PROMPT_SPEC,  # noqa: E402,F401
+    Branch,
     import_pyagentspec,
 )
 from neograph._normalize import (
@@ -113,7 +114,7 @@ def _trailing_operator(nodes: list[Any], j: int, primary_spec: Any, flow: Any) -
     if not _has_control_edge(flow, primary_spec.name, check.name):
         return None
     pause = nodes[j + 1]
-    if not _has_control_edge(flow, check.name, pause.name, branch="pause"):
+    if not _has_control_edge(flow, check.name, pause.name, branch=Branch.PAUSE):
         return None
     return check
 
@@ -192,7 +193,7 @@ def _group_flow_items(flow: Any) -> list[tuple[frozenset[str], dict[str, Any]]]:
             nxt = nodes[i + 1] if i + 1 < n else None
             if nxt is not None and (nxt.metadata or {}).get(_MARK_MODIFIER) == "loop":
                 edge_to_nxt = _has_control_edge(flow, node.name, nxt.name)
-                back_edge = _has_control_edge(flow, nxt.name, node.name, branch="continue")
+                back_edge = _has_control_edge(flow, nxt.name, node.name, branch=Branch.CONTINUE)
                 if edge_to_nxt and back_edge:
                     names.add("loop")
                     payload.pop("primary")

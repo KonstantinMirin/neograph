@@ -31,6 +31,7 @@ from neograph._agent_spec_markers import (
     _MARK_OPERATOR_SPEC,
     _MARK_ORACLE_SPEC,
     _MARK_VARIANT,
+    Branch,
     _import_agent_spec_flow_classes,
 )
 from neograph._agent_spec_node_lowering import (
@@ -63,9 +64,6 @@ if TYPE_CHECKING:
 
 _ExportFlow: TypeAlias = "Callable[[Construct], Any]"
 """``to_agent_spec``, injected. See the module docstring for why."""
-
-_DEFAULT_BRANCH = "default"
-_PAUSE_BRANCH = "pause"
 
 
 def _lower_item_body(item: Node | Construct, export_flow: _ExportFlow) -> SpecNode:
@@ -374,7 +372,7 @@ def _lower_loop(
 
     branch = nodes_mod.BranchingNode(
         name=f"{node.name}__loop_check",
-        mapping={"continue": "continue", "done": "done"},
+        mapping={Branch.CONTINUE: Branch.CONTINUE, Branch.DONE: Branch.DONE},
         metadata={
             _MARK_MODIFIER: "loop",
             _MARK_LOOP_SPEC: {
@@ -387,7 +385,7 @@ def _lower_loop(
     control_edges = [
         edges_mod.ControlFlowEdge(name=f"{node.name}__loop_body_to_check", from_node=body, to_node=branch),
         edges_mod.ControlFlowEdge(
-            name=f"{node.name}__loop_back", from_node=branch, from_branch="continue", to_node=body
+            name=f"{node.name}__loop_back", from_node=branch, from_branch=Branch.CONTINUE, to_node=body
         ),
     ]
     # Dict-form inputs qualify each Property title with its upstream key (per
@@ -501,7 +499,7 @@ def _lower_branch(
 
     branch = nodes_mod.BranchingNode(
         name=branch_node.name,
-        mapping={"true": "true", "false": "false"},
+        mapping={Branch.TRUE: Branch.TRUE, Branch.FALSE: Branch.FALSE},
         metadata={_MARK_BRANCH: True},
     )
 
@@ -513,7 +511,7 @@ def _lower_branch(
     input_targets_by_item_name: dict[str, list[tuple[SpecNode, bool]]] = {}
     data_node_by_item_name: dict[str, SpecNode] = {}
 
-    for arm_items, arm_label in ((meta.true_arm_nodes, "true"), (meta.false_arm_nodes, "false")):
+    for arm_items, arm_label in ((meta.true_arm_nodes, Branch.TRUE), (meta.false_arm_nodes, Branch.FALSE)):
         if not arm_items:
             # An empty arm has no body -- the branch itself is the exit for
             # that side, mirroring _wiring_branch.py's true_target/
@@ -635,7 +633,7 @@ def _lower_operator(node: Node | Construct, operator: Operator) -> tuple[SpecNod
 
     check = nodes_mod.BranchingNode(
         name=f"{node.name}__operator_check",
-        mapping={"true": _PAUSE_BRANCH, "false": _DEFAULT_BRANCH},
+        mapping={Branch.TRUE: Branch.PAUSE, Branch.FALSE: Branch.DEFAULT},
         metadata={_MARK_MODIFIER: "operator", _MARK_OPERATOR_SPEC: {"when": operator.when}},
     )
     input_message = nodes_mod.InputMessageNode(
@@ -643,6 +641,6 @@ def _lower_operator(node: Node | Construct, operator: Operator) -> tuple[SpecNod
         outputs=[property_mod.StringProperty(title="user_input")],
     )
     pause_edge = edges_mod.ControlFlowEdge(
-        name=f"{node.name}__operator_to_pause", from_node=check, from_branch=_PAUSE_BRANCH, to_node=input_message
+        name=f"{node.name}__operator_to_pause", from_node=check, from_branch=Branch.PAUSE, to_node=input_message
     )
     return check, input_message, [pause_edge]

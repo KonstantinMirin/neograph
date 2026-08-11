@@ -46,7 +46,7 @@ import pytest
 
 pytest.importorskip("pyagentspec")
 
-from neograph._agent_spec import to_agent_spec  # noqa: E402
+from neograph._agent_spec import Branch, to_agent_spec  # noqa: E402
 from neograph.construct import Construct  # noqa: E402
 from tests.test_agent_spec_matrix import GREEN, build_cell  # noqa: E402
 
@@ -176,7 +176,7 @@ class TestLoopEntersTheBodyBeforeTheCheck:
             if e.from_node.name == "refine__loop_check" and type(e.to_node).__name__ == "EndNode"
         ]
         assert len(exits) == 1
-        assert exits[0].from_branch == "done", (
+        assert exits[0].from_branch == Branch.DONE, (
             "the loop's exit edge must name the 'done' branch -- an unlabelled edge out of a "
             "BranchingNode is ambiguous to a literal executor"
         )
@@ -210,7 +210,7 @@ class TestOperatorPauseResumesIntoTheFlow:
         after_default = {
             e.to_node.name
             for e in flow.control_flow_connections
-            if e.from_node.name == "gate__operator_check" and e.from_branch == "default"
+            if e.from_node.name == "gate__operator_check" and e.from_branch == Branch.DEFAULT
         }
         assert after_pause, "the pause node dead-ends -- a literal executor never resumes"
         assert after_pause == after_default, (

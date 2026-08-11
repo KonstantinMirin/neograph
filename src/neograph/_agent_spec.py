@@ -80,11 +80,10 @@ from neograph._agent_spec_markers import (  # noqa: E402,F401
     _MARK_PROMPT_SPEC,
     _MARK_TOOL_SPEC,
     _MARK_VARIANT,
+    Branch,
     _import_agent_spec_flow_classes,
 )
 from neograph._agent_spec_modifier_lowering import (  # noqa: E402,F401
-    _DEFAULT_BRANCH,
-    _PAUSE_BRANCH,
     _lower_each,
     _lower_item_body,
     _lower_loop,
@@ -262,7 +261,7 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
                 # branch. Entering at the check evaluates ``when`` against state the
                 # body has never written -- a different program, not a different
                 # spelling of the same one.
-                arm = ([body, branch], extra_control, extra_data, body, [(branch, "done")], body, [(body, False)])
+                arm = ([body, branch], extra_control, extra_data, body, [(branch, Branch.DONE)], body, [(body, False)])
 
             case PrimaryShape.BARE:
                 # BARE and OPERATOR are the SAME primary shape; has_operator is what
@@ -335,7 +334,7 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
         [*arm_control, *pre_edges, *extra_control],
         arm_data,
         arm_entry,
-        [(check, _DEFAULT_BRANCH), (pause, None)],
+        [(check, Branch.DEFAULT), (pause, None)],
         arm_data_node,
         arm_targets,
     )
