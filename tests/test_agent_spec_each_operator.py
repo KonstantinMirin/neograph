@@ -51,6 +51,7 @@ from neograph._agent_spec import (
 )
 from neograph.loader import from_agent_spec
 from neograph.modifiers import ModifierCombo, classify_modifiers
+from tests.agent_spec_flow_walk import arm_targets, edge_pairs
 from tests.fakes import build_test_compile_kwargs, register_condition, register_scripted
 
 
@@ -133,12 +134,11 @@ class TestEachOperatorExportShape:
         """The postlude's pre-edge: the arm's primary (the MapNode) flows into
         the check, and the check's pause branch reaches the InputMessageNode."""
         flow = to_agent_spec(_each_operator_pipeline())
-        pairs = {(e.from_node.name, e.to_node.name) for e in flow.control_flow_connections}
+        pairs = edge_pairs(flow)
         assert ("each_step", "each_step__operator_check") in pairs
         assert ("each_step__operator_check", "each_step__operator_pause") in pairs
 
-        pause_edge = next(e for e in flow.control_flow_connections if e.to_node.name == "each_step__operator_pause")
-        assert pause_edge.from_branch == Branch.PAUSE
+        assert "each_step__operator_pause" in arm_targets(flow, "each_step__operator_check", Branch.PAUSE)
 
     def test_plain_each_export_is_unchanged_when_ungated(self):
         """Zero behavior change: an Each node WITHOUT an Operator keeps today's

@@ -52,6 +52,7 @@ from neograph._agent_spec import (
 from neograph.loader import from_agent_spec
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.testing.fakes import StructuredFake
+from tests.agent_spec_flow_walk import edge_pairs
 from tests.fakes import build_fake_llm_kwargs, build_test_compile_kwargs, register_scripted
 
 
@@ -165,7 +166,7 @@ class TestEachOracleExportShape:
         variants.sort(key=lambda n: n.metadata[_MARK_VARIANT])
         assert start_edges[0].to_node.name == variants[0].name
 
-        pairs = {(e.from_node.name, e.to_node.name) for e in subflow.control_flow_connections}
+        pairs = edge_pairs(subflow)
         chain = [*variants, merge]
         for src, dst in zip(chain, chain[1:], strict=False):
             assert (src.name, dst.name) in pairs, f"missing chain edge {src.name} -> {dst.name}"

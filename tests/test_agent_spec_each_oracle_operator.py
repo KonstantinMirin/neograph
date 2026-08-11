@@ -49,6 +49,7 @@ from neograph._agent_spec import (
 from neograph.loader import from_agent_spec
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.testing.fakes import StructuredFake
+from tests.agent_spec_flow_walk import arm_targets, edge_pairs
 from tests.fakes import (
     build_fake_llm_kwargs,
     build_test_compile_kwargs,
@@ -145,12 +146,11 @@ class TestEachOracleOperatorExportShape:
 
     def test_fused_map_node_chains_into_the_operator_check(self):
         flow = to_agent_spec(_each_oracle_operator_pipeline())
-        pairs = {(e.from_node.name, e.to_node.name) for e in flow.control_flow_connections}
+        pairs = edge_pairs(flow)
         assert ("fanned", "fanned__operator_check") in pairs
         assert ("fanned__operator_check", "fanned__operator_pause") in pairs
 
-        pause_edge = next(e for e in flow.control_flow_connections if e.to_node.name == "fanned__operator_pause")
-        assert pause_edge.from_branch == Branch.PAUSE
+        assert "fanned__operator_pause" in arm_targets(flow, "fanned__operator_check", Branch.PAUSE)
 
 
 class TestEachOracleOperatorRoundTrip:

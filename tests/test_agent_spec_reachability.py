@@ -48,63 +48,15 @@ pytest.importorskip("pyagentspec")
 
 from neograph._agent_spec import Branch, to_agent_spec  # noqa: E402
 from neograph.construct import Construct  # noqa: E402
+from tests.agent_spec_flow_walk import all_flows, arm_targets, entered_nodes, successors_of, walk  # noqa: E402
 from tests.test_agent_spec_matrix import GREEN, build_cell  # noqa: E402
-
-
-def _sub_flows(flow: Any) -> list[Any]:
-    """Every nested sub-``Flow`` one level down, from any subflow-bearing node.
-
-    Reads BOTH pyagentspec subflow-holder spellings -- the singular ``subflow``
-    (``FlowNode``/``MapNode``/``CatchExceptionNode``) and the plural ``subflows``
-    (``ParallelFlowNode``) -- so a fused Each x Oracle body cannot hide from the
-    walk behind whichever holder the lowering happens to pick.
-    """
-    found: list[Any] = []
-    for node in flow.nodes:
-        one = getattr(node, "subflow", None)
-        if one is not None:
-            found.append(one)
-        found.extend(getattr(node, "subflows", None) or [])
-    return found
-
-
-def _all_flows(flow: Any) -> list[Any]:
-    """The flow and every sub-flow beneath it, breadth-first."""
-    flows = [flow]
-    i = 0
-    while i < len(flows):
-        flows.extend(_sub_flows(flows[i]))
-        i += 1
-    return flows
-
-
-def _walk(flow: Any) -> tuple[set[str], set[str]]:
-    """(reachable-from-start, can-reach-an-EndNode) node names for ONE flow."""
-    successors: dict[str, set[str]] = {n.name: set() for n in flow.nodes}
-    predecessors: dict[str, set[str]] = {n.name: set() for n in flow.nodes}
-    for edge in flow.control_flow_connections:
-        successors[edge.from_node.name].add(edge.to_node.name)
-        predecessors[edge.to_node.name].add(edge.from_node.name)
-
-    def closure(seeds: set[str], adjacency: dict[str, set[str]]) -> set[str]:
-        seen = set(seeds)
-        stack = list(seeds)
-        while stack:
-            for nxt in adjacency[stack.pop()]:
-                if nxt not in seen:
-                    seen.add(nxt)
-                    stack.append(nxt)
-        return seen
-
-    ends = {n.name for n in flow.nodes if type(n).__name__ == "EndNode"}
-    return closure({flow.start_node.name}, successors), closure(ends, predecessors)
 
 
 def _topology_defects(flow: Any) -> list[str]:
     """Every unreachable or dead-end node across the flow and its sub-flows."""
     defects: list[str] = []
-    for sub in _all_flows(flow):
-        reachable, live = _walk(sub)
+    for sub in all_flows(flow):
+        reachable, live = walk(sub)
         for node in sub.nodes:
             if node.name not in reachable:
                 defects.append(f"{sub.name}: {node.name} ({type(node).__name__}) is UNREACHABLE from the StartNode")
@@ -162,7 +114,7 @@ class TestLoopEntersTheBodyBeforeTheCheck:
 
     def test_the_flow_enters_the_loop_body_not_the_check_node(self) -> None:
         flow = to_agent_spec(self._pipeline())
-        entered = {e.to_node.name for e in flow.control_flow_connections if type(e.from_node).__name__ == "StartNode"}
+        entered = entered_nodes(flow)
         assert entered == {"refine"}, (
             "a do-while loop must be ENTERED at its body; entering at the check node evaluates "
             f"the condition before the body has ever run (entered: {entered})"
@@ -204,14 +156,8 @@ class TestOperatorPauseResumesIntoTheFlow:
 
     def test_pause_node_and_default_branch_reconverge_on_the_same_successor(self) -> None:
         flow = self._flow()
-        after_pause = {
-            e.to_node.name for e in flow.control_flow_connections if e.from_node.name == "gate__operator_pause"
-        }
-        after_default = {
-            e.to_node.name
-            for e in flow.control_flow_connections
-            if e.from_node.name == "gate__operator_check" and e.from_branch == Branch.DEFAULT
-        }
+        after_pause = set(successors_of(flow, "gate__operator_pause"))
+        after_default = set(arm_targets(flow, "gate__operator_check", Branch.DEFAULT))
         assert after_pause, "the pause node dead-ends -- a literal executor never resumes"
         assert after_pause == after_default, (
             "the paused and un-paused paths must reconverge on the same successor "
@@ -220,7 +166,7 @@ class TestOperatorPauseResumesIntoTheFlow:
 
     def test_the_operator_body_is_entered_before_the_gate(self) -> None:
         flow = self._flow()
-        entered = {e.to_node.name for e in flow.control_flow_connections if type(e.from_node).__name__ == "StartNode"}
+        entered = entered_nodes(flow)
         assert entered == {"gate"}, (
             "the Operator gate runs AFTER the body it guards (_wiring._add_operator_check wires "
             f"node -> check), so the flow must enter the body (entered: {entered})"

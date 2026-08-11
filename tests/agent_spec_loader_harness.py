@@ -26,23 +26,28 @@ from pyagentspec.adapters.langgraph import AgentSpecLoader
 from pydantic import BaseModel
 
 from neograph import compile, run
+from tests.agent_spec_flow_walk import all_flows
 
 
-def server_tools(flow: Any, all_flows_fn: Any) -> dict[str, Any]:
+def server_tools(flow: Any) -> dict[str, Any]:
     """Every ``ServerTool`` reachable from ``flow``, keyed by the name the loader's
     ``tool_registry`` must supply -- the TOOL name, which is NOT always the node
     name (an Oracle's two variant nodes ``gen__variant_0``/``gen__variant_1`` both
     carry the single tool ``gen``, while the merge node ``gen`` carries
     ``m_combine``).
 
-    ``all_flows_fn`` is INJECTED, not imported here, by design: the real
-    implementation (``tests.test_agent_spec_reachability._all_flows``)
-    transitively imports ``neograph.loader.from_agent_spec`` via
-    ``tests.test_agent_spec_matrix``, and this harness module's own import
-    statements are exactly what the Core Invariant guard scans.
+    ``all_flows`` is imported directly from ``tests.agent_spec_flow_walk``
+    (neograph-dgbqv.9). It used to be an INJECTED parameter because the only
+    implementation lived in ``tests.test_agent_spec_reachability``, which drags
+    ``neograph.loader.from_agent_spec`` in transitively via
+    ``tests.test_agent_spec_matrix``. That injection was independence HYGIENE,
+    not guard evasion -- ``test_guards_agent_spec_execute_independence`` scans
+    this module's OWN import statements and would not have fired on a transitive
+    import anyway, and this module already imports ``neograph`` for compile/run.
+    The walk module imports nothing from ``neograph``, so the parameter is gone.
     """
     tools: dict[str, Any] = {}
-    for sub in all_flows_fn(flow):
+    for sub in all_flows(flow):
         for node in sub.nodes:
             tool = getattr(node, "tool", None)
             if tool is not None:
@@ -60,7 +65,7 @@ def stub_value(prop: Any) -> Any:
     return "x"
 
 
-def stub_registry(flow: Any, all_flows_fn: Any) -> dict[str, Any]:
+def stub_registry(flow: Any) -> dict[str, Any]:
     """A ``tool_registry`` whose every callable returns its tool's own declared
     output shape. Enough for the EXECUTE tier, which asks only whether the exported
     program RUNS -- COMPARE supplies real bodies instead."""
@@ -69,7 +74,7 @@ def stub_registry(flow: Any, all_flows_fn: Any) -> dict[str, Any]:
         value = {p.title: stub_value(p) for p in (tool.outputs or [])}
         return lambda **_kwargs: value
 
-    return {name: _stub(tool) for name, tool in server_tools(flow, all_flows_fn).items()}
+    return {name: _stub(tool) for name, tool in server_tools(flow).items()}
 
 
 def run_via_agent_spec_loader(flow: Any, cell_id: str, registry: dict[str, Any]) -> Any:
@@ -83,7 +88,7 @@ def run_via_agent_spec_loader(flow: Any, cell_id: str, registry: dict[str, Any])
     return graph.invoke({}, config={"configurable": {"thread_id": cell_id}})
 
 
-def compare_registry(flow: Any, bodies: dict[str, BaseModel], all_flows_fn: Any) -> dict[str, Any]:
+def compare_registry(flow: Any, bodies: dict[str, BaseModel]) -> dict[str, Any]:
     """The loader-side registry for a COMPARE cell: the shared bodies where one is
     declared, and a pass-through elsewhere.
 
@@ -98,7 +103,7 @@ def compare_registry(flow: Any, bodies: dict[str, BaseModel], all_flows_fn: Any)
         return lambda **_kwargs: dumped
 
     registry: dict[str, Any] = {}
-    for name in server_tools(flow, all_flows_fn):
+    for name in server_tools(flow):
         registry[name] = _const(bodies[name]) if name in bodies else (lambda **kwargs: dict(kwargs))
     return registry
 

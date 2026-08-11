@@ -74,29 +74,29 @@ from tests.agent_spec_loader_harness import (  # noqa: E402
     stub_registry,
 )
 from tests.test_agent_spec_matrix import CELLS, GREEN, Alpha, Beta, Out, build_cell  # noqa: E402
-from tests.test_agent_spec_reachability import _all_flows  # noqa: E402
 
-# ``_all_flows`` is imported rather than re-derived: two builders over the same
+# The shared graph walk is NOT re-derived here: two builders over the same
 # ``control_flow_connections`` that must agree forever and are checked by nothing
 # is exactly the duplicated-source-of-truth shape AGENTS.md forbids, and this
 # tier's whole value proposition ("a disagreement is a real defect in one of two
 # sides") is void if the reachability tier and this one disagree about what the
-# graph IS. Cross-test-module import is the established house pattern --
-# ``test_agent_spec_reachability.py`` itself imports from the matrix. It is
-# imported HERE, not inside ``agent_spec_loader_harness.py`` -- see that module's
-# docstring for why the harness's own import list must stay independent.
+# graph IS. Since neograph-dgbqv.9 both tiers read
+# ``tests.agent_spec_flow_walk``, so the agreement is structural rather than
+# maintained by hand -- and the harness can import it directly, because that
+# module imports nothing from ``neograph`` (the reason the walk used to be
+# injected as a parameter).
 
 
 def _server_tools(flow: object) -> dict[str, object]:
-    return server_tools(flow, _all_flows)
+    return server_tools(flow)
 
 
 def _stub_registry(flow: object) -> dict[str, object]:
-    return stub_registry(flow, _all_flows)
+    return stub_registry(flow)
 
 
 def _compare_registry(flow: object, bodies: dict[str, object]) -> dict[str, object]:
-    return compare_registry(flow, bodies, _all_flows)
+    return compare_registry(flow, bodies)
 
 
 # -- COMPARE fixtures --------------------------------------------------------

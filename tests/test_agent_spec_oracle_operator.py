@@ -45,6 +45,7 @@ from neograph._agent_spec import (
 from neograph.loader import from_agent_spec
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.testing.fakes import StructuredFake
+from tests.agent_spec_flow_walk import arm_targets, edge_pairs
 from tests.fakes import (
     build_fake_llm_kwargs,
     build_test_compile_kwargs,
@@ -135,14 +136,13 @@ class TestOracleOperatorExportShape:
         node), leaving the variant chain untouched -- the last variant is what
         reaches the merge (neograph-s7zt3.15)."""
         flow = to_agent_spec(_oracle_operator_pipeline())
-        pairs = {(e.from_node.name, e.to_node.name) for e in flow.control_flow_connections}
+        pairs = edge_pairs(flow)
         assert ("ensemble", "ensemble__operator_check") in pairs
         assert ("ensemble__operator_check", "ensemble__operator_pause") in pairs
         assert ("ensemble__variant_0", "ensemble__variant_1") in pairs
         assert ("ensemble__variant_2", "ensemble") in pairs
 
-        pause_edge = next(e for e in flow.control_flow_connections if e.to_node.name == "ensemble__operator_pause")
-        assert pause_edge.from_branch == Branch.PAUSE
+        assert "ensemble__operator_pause" in arm_targets(flow, "ensemble__operator_check", Branch.PAUSE)
 
     def test_plain_oracle_export_is_unchanged_when_ungated(self):
         """Zero behavior change: an Oracle node WITHOUT an Operator keeps

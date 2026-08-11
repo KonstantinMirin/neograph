@@ -50,6 +50,7 @@ from neograph._agent_spec import (
 from neograph.decorators import construct_from_functions
 from neograph.loader import from_agent_spec
 from neograph.modifiers import ModifierCombo, classify_modifiers
+from tests.agent_spec_flow_walk import arm_targets, edge_pairs
 from tests.fakes import build_test_compile_kwargs, register_condition, register_scripted
 
 
@@ -143,12 +144,11 @@ class TestLoopOperatorExportShape:
         """The postlude's pre-edge attaches to the LOOP arm's primary (the loop
         check), not to the body -- the arm's own primary is unchanged."""
         flow = to_agent_spec(_loop_operator_pipeline())
-        pairs = {(e.from_node.name, e.to_node.name) for e in flow.control_flow_connections}
+        pairs = edge_pairs(flow)
         assert ("refine__loop_check", "refine__operator_check") in pairs
         assert ("refine__operator_check", "refine__operator_pause") in pairs
 
-        pause_edge = next(e for e in flow.control_flow_connections if e.to_node.name == "refine__operator_pause")
-        assert pause_edge.from_branch == Branch.PAUSE
+        assert "refine__operator_pause" in arm_targets(flow, "refine__operator_check", Branch.PAUSE)
 
     def test_plain_loop_export_is_unchanged_when_ungated(self):
         """Zero behavior change: a Loop node WITHOUT an Operator keeps today's
