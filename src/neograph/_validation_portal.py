@@ -29,8 +29,10 @@ from neograph.node import Node
 def _member_portal(node: Node) -> Portal:
     """The Portal on a mesh member — non-None by construction.
 
-    Members are collected by ``node.modifier_set.portal is not None``; this
-    narrows the ``Portal | None`` slot back to ``Portal`` for the rules that
+    Members are collected by ``portal_member_class(item) not in (None, DISPATCH)``
+    -- NOT by ``portal is not None``, which would sweep in a standalone
+    ``route="decide"`` node (neograph-dgbqv.12). This narrows the
+    ``Portal | None`` slot back to ``Portal`` for the rules that
     read ``to`` / ``route`` / the knob VALUES (the entry-only rule reads values, not
     ``model_fields_set`` -- neograph-dgbqv.6).
     """

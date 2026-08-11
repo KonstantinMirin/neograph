@@ -118,6 +118,12 @@ MIGRATED: frozenset[str] = frozenset(
         # encoding table -- every SWARM_ENCODING row is keyed by PortalMemberClass,
         # a live import-and-use of the classifier's own enum.
         "_agent_spec_swarm_encoding.py",
+        # neograph-dgbqv.12: the IR normalizer's mesh-member collection AND its
+        # handoff_channel stamping. Both used `portal.is_not None`, which swept in a
+        # standalone route="decide" node -- making it members[0] when it preceded a
+        # mesh, so the runtime wrote one channel key and every member read another.
+        # Now asks the same classifier _wiring and _validation_portal already did.
+        "_ir_normalize.py",
         # neograph-wvp7j: the test scaffold's mesh collector. It asks the classifier
         # twice -- to FILTER construct.nodes down to mesh participants (excluding
         # DISPATCH, which is a standalone linear node and never a member), and to

@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from neograph._ir_branch import _BranchNode, iter_item_slots
 from neograph._ir_protocols import ConstructItem
 from neograph._normalize import normalize_inputs, normalize_outputs
+from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._sidecar import infer_oracle_gen_type
 from neograph._state_keys import StateKeys
 from neograph.modifiers import _group_portal_members
@@ -273,7 +274,15 @@ def normalize_ir(construct: Construct) -> None:
         # write-back loop below stays Node-only (a Construct has no
         # handoff_channel field); only DETECTION of which entry the peers belong
         # to needs the Construct-inclusive walk.
-        if not isinstance(item, _BranchNode) and item.modifier_set.portal is not None:
+        # portal_member_class, not `portal is not None`: a route="decide" Portal is a
+        # STANDALONE linear node, never a mesh member. Collecting it here made it
+        # members[0] when it preceded a mesh, keying the channel off a non-member --
+        # while _wiring and _validation_portal both skip DISPATCH, so the runtime
+        # WROTE one key and every member READ another (neograph-dgbqv.12).
+        if not isinstance(item, _BranchNode) and portal_member_class(item) not in (
+            None,
+            PortalMemberClass.DISPATCH,
+        ):
             portal_members.append(item)
 
     # The mesh channel is keyed off each NAMED GROUP's own ENTRY (first member
@@ -307,8 +316,21 @@ def normalize_ir(construct: Construct) -> None:
         # can compute per-node. Idempotent: skip if already set. Keyed by the
         # member's OWN mesh group so each named mesh gets its
         # own channel, never one shared across disjoint named meshes.
-        if item.modifier_set.portal is not None and item.handoff_channel is None:
-            group_channel = handoff_channels.get(item.modifier_set.portal.name)
+        # Same member test as the collection above, for the same reason: a
+        # route="decide" Portal is not a mesh member, so it must not be STAMPED
+        # with a mesh channel either -- otherwise _input_shape would feed a
+        # standalone dispatch node a handoff payload addressed to the mesh.
+        member_portal = item.modifier_set.portal
+        if (
+            # `is not None` is redundant with the classifier check (a member always
+            # has a Portal) -- it is here to narrow Portal | None for mypy, which
+            # cannot see through the classifier call. The classifier remains the
+            # membership authority; this is not a second member test.
+            member_portal is not None
+            and portal_member_class(item) not in (None, PortalMemberClass.DISPATCH)
+            and item.handoff_channel is None
+        ):
+            group_channel = handoff_channels.get(member_portal.name)
             if group_channel is not None:
                 updates["handoff_channel"] = group_channel
         if updates:
