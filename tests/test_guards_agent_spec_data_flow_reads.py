@@ -112,6 +112,60 @@ def _collect_unguarded() -> list[str]:
     return offenders
 
 
+#: The (source, source_output, destination, destination_input) projection. Two
+#: byte-identical copies lived in one module (neograph-dgbqv.11); a third copy in a
+#: THIRD file is the signal to promote the helper to a shared tests/ module, not to
+#: add another local one. Until then a local helper is the right size -- dgbqv.9
+#: established that a shared module earns its place by having cross-file callers.
+#: All FOUR components, deliberately. A two-marker pair (source+destination only)
+#: also matches edge-EXISTENCE predicates such as
+#: ``e.source_node.name == "seed" and e.destination_node.name == "summarize"``,
+#: which ask a different question and are not duplication -- measured: it produced
+#: 3 false positives across export.py and placeholder_translation.py.
+_WIRED_TUPLE_MARKERS = (
+    "source_node.name",
+    "source_output",
+    "destination_node.name",
+    "destination_input",
+)
+
+
+def _wired_tuple_sites() -> list[str]:
+    """Every place that builds the wired-edge tuple inline."""
+    found: list[str] = []
+    for py_file in sorted(_TESTS_DIR.rglob("*.py")):
+        if py_file.name in _EXEMPT_FILES:
+            continue
+        for i, line in enumerate(py_file.read_text(encoding="utf-8").splitlines(), 1):
+            if all(m in line for m in _WIRED_TUPLE_MARKERS):
+                found.append(f"{py_file.relative_to(_ROOT)}:{i}: {line.strip()}")
+    return found
+
+
+class TestWiredEdgeProjectionIsNotDuplicated:
+    """The wired-tuple shape is built in ONE place per module that needs it."""
+
+    def test_the_wired_tuple_is_not_built_inline_more_than_once(self):
+        sites = _wired_tuple_sites()
+        assert len(sites) <= 1, (
+            "the (source, source_output, destination, destination_input) projection is "
+            "duplicated -- extract it to a helper. Two byte-identical copies is what "
+            "neograph-dgbqv.11 removed; a copy in a THIRD file means promote the helper "
+            "to a shared tests/ module rather than adding a second local one.\n  "
+            + "\n  ".join(sites)
+        )
+
+    def test_the_check_detects_a_reintroduced_inline_copy(self):
+        """Mutation check: the marker pair must actually match the disease shape."""
+        sample = "wired = [(e.source_node.name, e.source_output, e.destination_node.name, e.destination_input) for e in edges]"
+        assert all(m in sample for m in _WIRED_TUPLE_MARKERS)
+        assert not all(m in "edges = flow.data_flow_connections or []" for m in _WIRED_TUPLE_MARKERS)
+        # the boundary a two-marker pair slips at: an edge-EXISTENCE predicate is
+        # not the projection and must not be flagged
+        predicate = 'e.source_node.name == "seed" and e.destination_node.name == "summarize"'
+        assert not all(m in predicate for m in _WIRED_TUPLE_MARKERS)
+
+
 class TestDataFlowConnectionsReadsAreNoneGuarded:
     """Every read of the None-able ``data_flow_connections`` carries a fallback."""
 
