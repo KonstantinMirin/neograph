@@ -192,6 +192,10 @@ That is the test of whether the fix is structural rather than another patch: if
 `_llm_render.py:82` `_resolve_var`'s leaf rendering and `renderers.py:455`
 `_render_single` collapse into one function implementing §3:
 
+0. **already `Rendered` -> return it unchanged** (AMENDMENT A0, see §9). This rung
+   runs BEFORE any `hasattr` probe, so a `Rendered` value never meets
+   `hasattr(value, "render_for_prompt")` and never trips its loud `__getattr__`.
+   The function is therefore IDEMPOTENT: rendering twice equals rendering once.
 1. `render_for_prompt()` if present — wins over everything, including an explicit
    `renderer=` (this is already `_render_single`'s precedence; it is
    `_resolve_var` that must adopt it).
@@ -203,6 +207,17 @@ That is the test of whether the fix is structural rather than another patch: if
 Step 4 is the change: `_render_single`'s current "primitives pass through
 unchanged" branch is the anomaly, and `_resolve_var`'s missing step 1 is the
 other. Everything else already exists and moves unchanged.
+
+**Why rung 0 matters more than it looks.** Idempotence is what converts this
+design's central invariant from a rule people must remember ("nobody may render
+twice") into a property of the function ("rendering is safe to do anywhere"). The
+first is unenforceable across consumer code — the public `render_inputs` is
+exported, and every compiler written the way the docs teach calls it. The second
+needs no memory at all. It also dissolves three separate edges this design
+originally carried: the `build_vars` "prerequisite" in §5, the need to thread a
+`renderer=` parameter through `_llm.invoke_structured` and
+`_tool_loop._build_loop_preamble` purely so one blessed site can see
+`node.renderer`, and the brittleness of an invariant enforced by prose.
 
 ### 4.3 The type, with teeth
 
@@ -257,13 +272,33 @@ only the ones a template references, so failing loud there would break nodes tha
 declare a `FromConfig` resource and never mention it in the prompt. The loudness
 budget is spent on attribute access, which is where the silent bug lives.
 
-### 4.4 Single-type inputs get the same key as fan-in
+### 4.4 Bare values get a key — all four sources of them
 
 `_input_shape.py:121` `_extract_single_type` already iterates `state.keys()` and
 matches on `attr_name` — it just discards the name. Return `(name, value)` and key
 the normalized dict by it, so single-type and fan-in produce the same dict under
 the same key and the "sometimes a dict, sometimes a bare value" branch disappears
 along with the str-vs-model branch.
+
+**AMENDMENT A2 (see §9): `_extract_single_type` is one of FOUR producers of bare
+values, and the original text of this section wrongly implied it was the only
+one.** The other three are:
+
+- `merge_pre_process`, which "fully replaces input_data" and is typed
+  `BaseModel | dict[str, Any] | str` (`_oracle.py:293-313`);
+- the public `compile_prompt(template, input_data=SomeModel)`, whose docstring
+  explicitly advertises "a Pydantic model … or `None`";
+- `render_prompt(node, input_data)`, same shape.
+
+`build_rendered_input`'s non-dict branch returns a scalar and `for_template_ref`
+passes it through unwrapped, so all four reach the compiler unkeyed today.
+
+**The naming rule for a bare value therefore belongs in `renderers.py`, at the
+normalizer — NOT at any of the four call sites.** Putting it in `_oracle.py` to
+serve `merge_pre_process` would be this design's own definition of failure
+(§4.1). Note also that `prompt.render_inputs` currently resolves this case by
+silently dropping a bare value to `{}` (`prompt.py:96-102`) — a quiet seam of
+exactly this family, to be decided deliberately rather than inherited.
 
 `Construct.input` port values keep their existing `neo_subgraph_input` key plus
 the type-name alias (`renderers._alias_subgraph_input_port`) — unchanged, already
@@ -285,22 +320,39 @@ Consequences, all wanted:
 - The documented collision rule is unchanged: di_inputs (and their flattened
   fields) are the base layer, upstream outputs shadow on top.
 
-### 4.6 Rejected: a `raw_inputs` escape hatch
+### 4.6 `raw_inputs`: an opt-in second channel (REINSTATED — amendment A1)
 
-An opt-in `raw_inputs` kwarg (introspection-gated through the existing
-`prompt_compiler_params` / `_ACCEPT_ALL` filter, as `di_inputs` and `context`
-already are) was considered and **withdrawn**.
+An opt-in `raw_inputs` kwarg, introspection-gated through the existing
+`prompt_compiler_params` / `_ACCEPT_ALL` filter exactly as `di_inputs` and
+`context` already are:
 
-"The compiler needs structure" is not a real requirement: structured manipulation
-has two homes upstream of the compiler — `render_for_prompt()` on the model, and
-`merge_pre_process` for variants, which is documented as *"transform raw variants
-into custom input_data for the merge prompt"*. `examples/observable_pipeline.py`'s
-claim-dedup moves to `merge_pre_process` returning text, which is exactly what
-`examples/20_oracle_merge_hooks.py` already does.
+```python
+def prompt_compiler(template, input_data: PromptInput, *, raw_inputs, ...):
+    text  = input_data["claims"]   # always Rendered
+    model = raw_inputs["claims"]   # opt-in, and the compiler DECLARED it
+```
 
-Keeping `raw_inputs` would reintroduce the second shape by the front door,
-opt-in or not. Per the north star, one shape that cannot be misread beats two that
-can. Revisit only if a case appears that neither upstream seam can serve.
+**This section previously rejected it. That rejection was wrong and is
+withdrawn** (decision: user, 2026-08-11; see §9/A1).
+
+The rejection argued that structured manipulation has two homes upstream of the
+compiler — `render_for_prompt()` and `merge_pre_process`. Neither can serve the
+ordinary case: **`render_for_prompt()` is per-MODEL, not per-NODE**, so it cannot
+give node A a `{% for c in claims %}` loop and node B a flat summary of the same
+upstream model; `merge_pre_process` exists only on the merge path.
+
+The rejection also mis-stated the invariant. The ambiguity this ticket kills is
+**one channel with two possible shapes** — not **two channels with one shape
+each**. The latter is precisely the design this repo already accepted for
+`di_inputs`, and a compiler that declares `raw_inputs` has unambiguously asked
+for objects. `input_data` stays totally `Mapping[str, Rendered]` either way.
+
+Consequently `renderers.py:443-447` (BaseModel / `list[BaseModel]` children
+preserved for dotted access) **stays**, and with it the documented feature at
+`website/src/content/docs/concepts/renderers.mdx:229` and `lint.py:580`'s
+tolerance of dotted placeholders. Had totality won instead, all three would have
+had to be deleted **in this same commit** — shipping totality while three
+artifacts still advertise structure is the worst of both.
 
 ---
 
@@ -347,11 +399,25 @@ can. Revisit only if a case appears that neither upstream seam can serve.
    This is the ticket's repro and must fail on `main` before anything is written.
 2. **Attribute access on a rendered value raises** — pinning that
    `getattr(v, 'text', '')` does not silently return `""`.
-3. **Compiler-invocation monopoly**: `runtime.prompt_compiler(...)` may be called
-   only from `_compile_prompt`, same shape as G1's `Command(` monopoly in
-   `test_guards_assembly.py`.
-4. **Single-writer on the view selection**: no module outside `_llm_render.py` may
-   call `build_rendered_input` to choose a compiler-facing view.
+3. **Always-on totality assertion at the seam** (replaces the two guards this
+   section originally listed — amendment A3). One check in `_compile_prompt`
+   immediately before `runtime.prompt_compiler(...)`: every value in the mapping
+   is `Rendered`. This is worth more than both original guards combined because
+   it fires in **every consumer's process**, not only in this repo's CI.
+
+   The two it replaces, and why:
+   - *"`runtime.prompt_compiler(...)` may be called only from `_compile_prompt`"*
+     is **already true and already vacuous** — grep finds exactly one call site
+     (`_llm_render.py:215`). It pins a property that was never violated, and it
+     does not constrain the actual failure mode, which is call sites
+     **pre-rendering**, not call sites **invoking**.
+   - *"no module outside `_llm_render.py` may call `build_rendered_input` to
+     choose a compiler-facing view"* is **not mechanically checkable as worded**:
+     an AST guard cannot read intent, and `prompt.py:101` calls
+     `build_rendered_input` legitimately today.
+4. **Call-site allowlist, by concrete name**: a structural guard listing the
+   functions permitted to call `build_rendered_input`. A plain allowlist over
+   names is checkable; "to choose a view" is not.
 5. **Totality**: every value in the mapping handed to a compiler is `Rendered` —
    asserted across the four channels, not one.
 6. **Three-surface parity** (`@node` / declarative / programmatic) on the
@@ -377,6 +443,52 @@ can. Revisit only if a case appears that neither upstream seam can serve.
 9. Lint coverage for `merge_prompt` templates (may split to its own ticket).
 
 ---
+
+## 8a. Amendments from the codebase disease scan (2026-08-11/12)
+
+Four review lenses ran against this branch's tree (artifacts:
+`.claude/code-review/neograph-l2a7w/`), each building its own inventory without
+being shown this document's. They found **24 instances** where this document's
+author had found 7, and invalidated four of its sections. Six of six spot-checked
+claims verified independently.
+
+| ID | Amendment | Section |
+|----|-----------|---------|
+| A0 | Normalizer is IDEMPOTENT — rung 0, `Rendered` in -> `Rendered` out, before any `hasattr` probe | §4.2 |
+| A1 | `raw_inputs` REINSTATED as an opt-in second channel; the rejection was wrong | §4.6 |
+| A2 | Bare values come from FOUR sources, not one; the naming rule lives in `renderers.py` | §4.4 |
+| A3 | Guard 3 was vacuous, guard 4 unmechanizable; replaced by an always-on totality assertion | §6 |
+| A4 | `context` — decide explicitly (see below) | this section |
+| A5 | `PromptInputError` must NEVER subclass `AttributeError`, at any point | §4.3 |
+
+**A4, `context`.** §3 asserts `input_data`, `di_inputs` and `context` are one
+namespace under one rule, but `context` is passed as a separate kwarg typed
+`dict[str, str]`, so its type already pins it to text. Decision: **exempt, because
+the type pins it** — and separately, `context` does not even reach the template
+today (`DefaultPromptCompiler.__call__` swallows it in `**_kw`; filed as
+neograph-cbfd9), and its `str`-ness is asserted by a `cast` that no validation
+backs (neograph-ufqr7). Both are fixed on their own tickets, not here.
+
+**A5** is small and load-bearing: making `PromptInputError` subclass
+`AttributeError` "for compatibility" at any point during implementation silently
+restores the exact swallow the loudness is bought to defeat.
+
+**What the scan added that this document did not have** — the four findings that
+most change the work:
+
+1. `renderers.render_input` is **public, documented, has zero callers in `src/`**,
+   and diverges from `build_rendered_input` (different flatten-merge discipline,
+   no port alias). Left alone it guarantees a fourth divergence.
+2. `RenderedInput.available_keys_inline` / `available_keys_template` **already
+   compute** the key sets `lint._predict_input_keys` independently re-predicts,
+   and nothing reads them. `lint` returns `set()` for single-type inputs, which
+   §4.4 silently makes wrong — so lint must move in lockstep with §4.4.
+3. `_oracle._build_upstream_context` reads the same keys as
+   `_extract_fan_in_dict` **without** its Each/Loop unwrapping, so the merge path
+   is wrong in *shape*, not only in rendering (neograph-13k4i).
+4. The disease is an instance of a rule this repo has already written down —
+   `CLAUDE.md`'s `effective_producer_type` single-source-of-truth rule and the
+   `ModifierCombo` retrospective. This is the third recorded occurrence.
 
 ## 8. Open questions
 
