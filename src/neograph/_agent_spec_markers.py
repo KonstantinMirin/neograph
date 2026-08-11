@@ -38,6 +38,7 @@ _MARK_BRANCH = "neograph/branch"
 _MARK_PORTAL_SPEC = "neograph/portal_spec"
 _MARK_PORTAL_OPERATOR_SPEC = "neograph/portal_operator_spec"
 _MARK_PROMPT_SPEC = "neograph/prompt_spec"
+_MARK_PORTAL_MEMBER_SPEC = "neograph/portal_member_spec"
 
 # --- Branch labels -----------------------------------------------------------
 # The ``from_branch`` arm names the export side writes onto ``ControlFlowEdge``

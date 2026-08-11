@@ -30,6 +30,7 @@ from neograph._agent_spec_graph import _has_control_edge
 from neograph._agent_spec_group_import import _construct_from_subflow
 from neograph._agent_spec_markers import (
     _MARK_MODIFIER,
+    _MARK_PORTAL_MEMBER_SPEC,
     _MARK_PORTAL_OPERATOR_SPEC,
     _MARK_PORTAL_SPEC,
     _MARK_PROMPT_SPEC,
@@ -206,7 +207,18 @@ def _reconstruct_swarm_mesh(swarm: Any, from_spec: Callable[[Any], Construct]) -
             prompt_marker = (getattr(agent, "metadata", None) or {}).get(_MARK_PROMPT_SPEC)
             if prompt_marker is not None:
                 member = member.model_copy(update={"prompt": prompt_marker["original_text"] or None})
-            member_trigger = mesh_trigger
+            # A neograph-exported member records its OWN mode and trigger, which
+            # Swarm cannot express (handoff is mesh-level; Agent carries no mode).
+            # Prefer them, so the round trip stops converting a think member into
+            # an agent member (neograph-dgbqv.8). A FOREIGN Swarm has no marker and
+            # keeps the mesh-level inference -- correct for it, since every foreign
+            # member genuinely IS an Agent.
+            member_spec = (getattr(agent, "metadata", None) or {}).get(_MARK_PORTAL_MEMBER_SPEC)
+            if member_spec is not None:
+                member = member.model_copy(update={"mode": member_spec["mode"]})
+                member_trigger = member_spec["trigger"]
+            else:
+                member_trigger = mesh_trigger
         if idx == 0 and portal_spec is not None:
             portal = Portal(
                 to=peers,

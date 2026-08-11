@@ -127,6 +127,7 @@ _EXPECTED_MARKER_VALUES = {
     "neograph/operator_spec",
     "neograph/branch",
     "neograph/portal_spec",
+    "neograph/portal_member_spec",
     "neograph/portal_operator_spec",
     "neograph/prompt_spec",
 }

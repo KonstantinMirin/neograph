@@ -288,3 +288,81 @@ class TestToolTriggeredToolsNodeDeclaresTheMeshExit:
             "among its destinations -- its parse sibling already does. Missing: "
             f"{sorted(exits - tools_targets)} (tools declares {sorted(tools_targets)})"
         )
+
+
+class TestMixedTriggerMeshRoundTripsPerMember:
+    """neograph-dgbqv.8: a mesh mixing a tool-triggered agent member with a
+    non-tool member must not convert the second member on re-import.
+
+    ``Swarm.handoff`` is a MESH-level field, so the importer applied one trigger
+    to every member; a member with no ReAct turn then had ``trigger='tool'``
+    forced onto it, which ``_check_portal_mesh`` rejects -- except the importer
+    also hard-coded ``mode='agent'``, so the two wrongs cancelled and produced a
+    working-but-wrong round trip.
+
+    The trigger is derived PER MEMBER from a structural signal every Agent Spec
+    carries -- whether the member has tools at all -- so this holds for a FOREIGN
+    Swarm with no neograph markers just as much as for one we exported. A member
+    with no tools has no tool-call turn to trigger a handoff from, so it can only
+    route by typed output regardless of the mesh's HandoffMode.
+    """
+
+    @staticmethod
+    def _mixed_mesh():
+        from neograph.tool import Tool
+
+        def _fn(**kwargs):
+            return "x"
+
+        triage = Node(
+            name="triage",
+            mode="agent",
+            model="router",
+            prompt="test/triage",
+            inputs={"handoff": Handoff},
+            outputs=Handoff,
+            tools=[Tool(name="lookup", description="d", fn=_fn)],
+        ) | Portal(to=["scribe"], trigger="tool", max_hops=4)
+        scribe = Node(
+            name="scribe",
+            mode="think",
+            model="worker",
+            prompt="test/scribe",
+            inputs={"handoff": Handoff},
+            outputs=Handoff,
+        ) | Portal(to=["triage"])
+        return Construct("mixed-trigger-mesh", nodes=[triage, scribe])
+
+    def test_a_toolless_member_does_not_come_back_tool_triggered(self):
+        from neograph._agent_spec import to_agent_spec
+        from neograph.loader import from_agent_spec
+
+        rebuilt = from_agent_spec(to_agent_spec(self._mixed_mesh()))
+        triggers = {
+            n.name: n.modifier_set.portal.trigger for n in rebuilt.nodes if n.modifier_set.portal is not None
+        }
+        modes = {n.name: n.mode for n in rebuilt.nodes if n.modifier_set.portal is not None}
+        toolless = next(name for name in triggers if name.startswith("scribe"))
+        assert modes[toolless] == "think", (
+            "the think member must survive as a think member -- becoming an agent "
+            "member changes what it DOES at runtime, not just how it is labelled "
+            f"(got mode={modes[toolless]!r})"
+        )
+        assert triggers[toolless] == "output", (
+            "a mesh member with no tools has no ReAct tool-call turn to hand off from, "
+            "so the mesh-level HandoffMode must not force trigger='tool' onto it "
+            f"(got {triggers[toolless]!r} for {toolless!r})"
+        )
+
+    def test_the_tool_triggered_member_keeps_its_trigger(self):
+        """The contrast: deriving the trigger per member must not flatten the
+        member that legitimately IS tool-triggered."""
+        from neograph._agent_spec import to_agent_spec
+        from neograph.loader import from_agent_spec
+
+        rebuilt = from_agent_spec(to_agent_spec(self._mixed_mesh()))
+        triggers = {
+            n.name: n.modifier_set.portal.trigger for n in rebuilt.nodes if n.modifier_set.portal is not None
+        }
+        tooled = next(name for name in triggers if name.startswith("triage"))
+        assert triggers[tooled] == "tool", f"the tool-bearing member must stay tool-triggered (got {triggers[tooled]!r})"

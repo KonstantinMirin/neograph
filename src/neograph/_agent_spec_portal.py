@@ -21,6 +21,7 @@ from typing import Any, cast
 
 from neograph._agent_spec_markers import (
     _MARK_MODIFIER,
+    _MARK_PORTAL_MEMBER_SPEC,
     _MARK_PORTAL_OPERATOR_SPEC,
     _MARK_PORTAL_SPEC,
     _MARK_PROMPT_SPEC,
@@ -98,9 +99,20 @@ def _lower_portal_mesh_to_swarm(
             member.prompt or "", _properties_for(member.inputs), member.name
         )
         agent = _make_agent(member, tools_mod, ref_props, [], rewritten)
+        member_portal = member.modifier_set.portal
+        assert member_portal is not None  # collected as Portal-modified
         agent.metadata = {
             **(agent.metadata or {}),
             _MARK_PROMPT_SPEC: _prompt_spec_marker(member, flat_to_original),
+            # Swarm.handoff is MESH-level and Agent carries no mode, so without
+            # this the member's own mode and trigger never reach the wire and the
+            # importer can only guess (neograph-dgbqv.8). Foreign Swarms have no
+            # marker and keep the mesh-level inference, which is right for them:
+            # every foreign member really is an Agent.
+            _MARK_PORTAL_MEMBER_SPEC: {
+                "mode": member.mode,
+                "trigger": member_portal.trigger,
+            },
         }
         agents_by_name[member.name] = agent
 

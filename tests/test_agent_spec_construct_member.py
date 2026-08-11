@@ -287,16 +287,25 @@ class TestSwarmEncodingTable:
         with pytest.raises(_ConfigurationError):
             mesh_handoff_mode([PortalMemberClass.ATOMIC, PortalMemberClass.DISPATCH])
 
-    def test_mixed_agent_tool_and_think_mesh_round_trips_lossily_documented(self):
-        """neograph-dgbqv.8 (filed): a legal mesh of one agent(trigger='tool')
-        member + one think member exports handoff=OPTIONAL; re-import's
-        _swarm_trigger forces trigger='tool' onto EVERY member, which
-        _validation_portal.py would normally reject on a think-mode member --
-        except _agent_spec_node_import.py's markerless-agent mode='agent'
-        hard-code prevents a ConstructError. The two defects CANCEL. This test
-        PINS that lossy round trip as documented behavior, not a silent one --
-        see neograph-dgbqv.8 for the fix (do not fix either side without the
-        other)."""
+    def test_mixed_agent_tool_and_think_mesh_round_trips_per_member(self):
+        """neograph-dgbqv.8 (FIXED): a mesh of one agent(trigger='tool') member +
+        one think member now round-trips each member's OWN mode and trigger.
+
+        This test previously PINNED the lossy behaviour as documented-not-silent,
+        and said "see neograph-dgbqv.8 for the fix (do not fix either side without
+        the other)". That is exactly what happened, and the root cause was neither
+        of the two import-side sites it named: the EXPORT never wrote the member's
+        mode or trigger to the wire at all (``Swarm.handoff`` is mesh-level and
+        ``Agent`` carries no mode), so the importer's mesh-trigger-forcing and its
+        ``mode='agent'`` hard-code were the only things it COULD do. Both are now
+        fed by a ``neograph/portal_member_spec`` marker the export stamps per
+        member.
+
+        A FOREIGN Swarm carries no such marker and still takes the mesh-level
+        inference -- correct for it, because every foreign member genuinely is an
+        ``Agent``. That path is pinned by
+        ``TestHandoffModeTriggerMapping::test_optional_and_always_map_to_tool``.
+        """
         tool_member = Node(
             name="tool_member",
             mode="agent",
@@ -314,8 +323,19 @@ class TestSwarmEncodingTable:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             back = from_agent_spec(swarm)
-        # DOCUMENTED LOSSY: the think member silently becomes an agent member.
-        assert all(n.modifier_set.portal.trigger == "tool" for n in back.nodes)
+
+        by_kind = {
+            ("think" if n.name.startswith("think") else "tool"): (n.mode, n.modifier_set.portal.trigger)
+            for n in back.nodes
+        }
+        assert by_kind["think"] == ("think", "output"), (
+            "the think member must survive as a think member routing by typed output -- "
+            "becoming an agent member changes what the node DOES at runtime (a ReAct "
+            f"tool-call cycle instead of one structured completion), got {by_kind['think']}"
+        )
+        assert by_kind["tool"] == ("agent", "tool"), (
+            f"the tool-triggered agent member must keep both, got {by_kind['tool']}"
+        )
 
     def test_gated_mesh_round_trips_through_flow_from_dict(self):
         """Step 9(f): the ATOMIC_OPERATOR (gated) mesh survives a full

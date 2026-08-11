@@ -63,8 +63,7 @@ if TYPE_CHECKING:
 
 __all__ = ["to_agent_spec"]
 
-# --- extracted clusters (neograph-3ffdg.3), re-exported so the public import
-# --- surface of neograph._agent_spec is byte-identical to before the split.
+# --- extracted clusters (neograph-3ffdg.3), re-exported so this module's public import surface is unchanged.
 from neograph._agent_spec_markers import (  # noqa: E402,F401
     _MARK_AGENT_SPEC,
     _MARK_BRANCH,
@@ -75,6 +74,7 @@ from neograph._agent_spec_markers import (  # noqa: E402,F401
     _MARK_MODIFIER,
     _MARK_OPERATOR_SPEC,
     _MARK_ORACLE_SPEC,
+    _MARK_PORTAL_MEMBER_SPEC,
     _MARK_PORTAL_OPERATOR_SPEC,
     _MARK_PORTAL_SPEC,
     _MARK_PROMPT_SPEC,
