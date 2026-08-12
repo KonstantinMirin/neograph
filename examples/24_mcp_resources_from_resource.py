@@ -300,15 +300,21 @@ def _llm_factory(tier: str):
 def _prompt_compiler(template, data, *, di_inputs=None, **kw):
     """Template-ref compiler. For the consume node it folds the manifest-hydrated
     email history (a FromResource di_input) straight into the prompt text — the
-    async di_inputs path awaits the fetch before the prompt is built."""
+    async di_inputs path awaits the fetch before the prompt is built.
+
+    di_inputs values are rendered text (neograph-l2a7w -- di_inputs share the same
+    rendering rule as every other channel and have no raw_inputs=-style escape
+    hatch), so history/dossier below are already prompt-ready strings, not the
+    live EmailHistory/ActivityHistory models -- embed them directly rather than
+    reaching for .emails/.events.
+    """
     di_inputs = di_inputs or {}
     history = di_inputs.get("history")
     dossier = di_inputs.get("dossier")
     if history is not None:
-        subjects = [e.get("subject") for e in history.emails]
-        content = f"Write a one-line brief. Recent email subjects: {subjects}"
+        content = f"Write a one-line brief. Recent email history: {history}"
     elif dossier is not None:
-        content = f"Research the deal. Activity so far: {len(dossier.events)} events."
+        content = f"Research the deal. Activity so far: {dossier}"
     else:
         content = "Write a one-line brief."
     return [{"role": "user", "content": content}]
