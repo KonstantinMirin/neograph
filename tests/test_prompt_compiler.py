@@ -35,6 +35,7 @@ from neograph import (
     compile,
     construct_from_module,
     describe_type,
+    describe_value,
     node,
     run,
 )
@@ -209,15 +210,19 @@ class TestRenderInputs:
 
         assert render_inputs(None) == {}
 
-    def test_returns_empty_dict_when_single_nondict_value(self):
-        """Single-type (non-dict) inputs have no bindable var name; template-ref
-        prompts address vars by name, so a nameless value contributes no vars.
-        The contract is uniform with None: any non-dict view collapses to {}
-        (before the fix these returned a bare str -> ``dict(str)`` ValueError)."""
+    def test_keys_a_bare_value_by_its_type_name(self):
+        """A bare (non-dict) input is KEYED by its type name, not dropped.
+
+        Changed by neograph-l2a7w. The old contract collapsed any non-dict view to
+        {}, which silently removed the node's only input from the template
+        namespace -- a quiet seam of the same family as the bug this ticket fixes.
+        Keying it makes the value addressable and keeps the mapping total; `None`
+        still yields {} because there is nothing to name."""
         from neograph import render_inputs
 
-        assert render_inputs("bare string") == {}
-        assert render_inputs(RawText(text="x")) == {}
+        assert render_inputs("bare string") == {"str": "bare string"}
+        assert render_inputs(RawText(text="x")) == {"RawText": describe_value(RawText(text="x"))}
+        assert render_inputs(None) == {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -772,3 +777,285 @@ class TestRenderMessagesReceivesNodeName:
 
         assert result["analyze"].items == ["ok"]
         assert "analyze" in captured
+
+
+class TestPromptCompilerReceivesOneShape:
+    """neograph-l2a7w — every value handed to a prompt_compiler is prompt-ready
+    TEXT, on every channel.
+
+    Today the shape depends on which call site invoked the compiler: the
+    think/agent paths pre-render their input, while the Oracle merge_prompt path
+    (`_oracle._merge_prompt_input`) hands the SAME compiler raw Pydantic models,
+    and `di_inputs` are never rendered at all. A compiler written the obvious way
+    (`getattr(value, 'text', '')`) silently yields an empty payload on whichever
+    channel it did not expect, and the model answers coherently about nothing.
+
+    Design: docs/design/prompt-compiler-input-shape-2026-08-11.md
+    """
+
+    @staticmethod
+    def _capturing_compiler(calls: list) -> object:
+        """A prompt_compiler that records what it was handed, per call."""
+
+        def compiler(template, input_data, *, node_name="", di_inputs=None, **kw):
+            calls.append(
+                {
+                    "template": template,
+                    "node_name": node_name,
+                    "data": input_data,
+                    "di_inputs": di_inputs,
+                }
+            )
+            return [{"role": "user", "content": "compiled"}]
+
+        return compiler
+
+    @staticmethod
+    def _shape(value) -> str:
+        return type(value).__name__
+
+    def test_merge_prompt_hands_the_compiler_text_like_the_think_path_does(self):
+        """One compiler, one pipeline, two invocations — the think generation call
+        and the Oracle merge call — must agree on the shape of the SAME upstream.
+
+        Fails today: the think call gets `seed` as a rendered str, the merge call
+        gets the raw RawText model, and `variants` arrives as a raw list of Claims.
+        """
+        import types
+
+        calls: list = []
+
+        mod = types.ModuleType("test_l2a7w_merge_shape_mod")
+
+        @node(outputs=RawText)
+        def seed() -> RawText:
+            return RawText(text="a prose diagnosis, 5334 chars in the real incident")
+
+        @node(
+            outputs=Claims,
+            mode="think",
+            model="fast",
+            prompt="extract",
+            ensemble_n=2,
+            merge_prompt="merge",
+            merge_model="fast",
+        )
+        def analyze(seed: RawText) -> Claims: ...
+
+        mod.seed = seed
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["ok"])),
+            prompt_compiler=self._capturing_compiler(calls),
+            **build_test_compile_kwargs(),
+        )
+        run(graph, input={"node_id": "l2a7w"})
+
+        think_calls = [c for c in calls if c["template"] == "extract"]
+        merge_calls = [c for c in calls if c["template"] == "merge"]
+        assert think_calls, f"no generation call captured; saw {[c['template'] for c in calls]}"
+        assert merge_calls, f"no merge call captured; saw {[c['template'] for c in calls]}"
+
+        think_seed = think_calls[0]["data"]["seed"]
+        merge_seed = merge_calls[0]["data"]["seed"]
+
+        assert isinstance(think_seed, str), f"think path handed {self._shape(think_seed)}, expected rendered text"
+        assert isinstance(merge_seed, str), (
+            f"merge path handed {self._shape(merge_seed)} for the SAME upstream the "
+            f"think path rendered to {self._shape(think_seed)} — one compiler cannot "
+            f"serve two shapes without an isinstance dance (neograph-l2a7w)"
+        )
+
+        variants = merge_calls[0]["data"]["variants"]
+        assert isinstance(variants, str), (
+            f"merge path handed variants as {self._shape(variants)}; every value a "
+            f"prompt_compiler receives is prompt-ready text"
+        )
+
+    def test_di_inputs_reach_the_compiler_as_text_when_a_model_is_bundled(self):
+        """`di_inputs` share the template var namespace with rendered upstream
+        outputs, so they obey the same rule.
+
+        Fails today: a bundled FromInput model arrives as a live BaseModel, so a
+        `{ctx}` placeholder ships a Pydantic repr while `{seed}` ships BAML.
+        """
+        import types
+        from typing import Annotated
+
+        from pydantic import BaseModel
+
+        from neograph import FromInput
+
+        calls: list = []
+
+        class RunCtx(BaseModel):
+            node_id: str
+            project_root: str
+
+        mod = types.ModuleType("test_l2a7w_di_shape_mod")
+
+        @node(outputs=RawText)
+        def seed() -> RawText:
+            return RawText(text="hello")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="extract")
+        def analyze(seed: RawText, ctx: Annotated[RunCtx, FromInput]) -> Claims: ...
+
+        mod.seed = seed
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["ok"])),
+            prompt_compiler=self._capturing_compiler(calls),
+            **build_test_compile_kwargs(),
+        )
+        run(graph, input={"node_id": "l2a7w", "project_root": "/tmp"})
+
+        analyze_calls = [c for c in calls if c["template"] == "extract"]
+        assert analyze_calls, "no think call captured"
+        di = analyze_calls[0]["di_inputs"] or {}
+        assert "ctx" in di, f"expected a bundled ctx di_input; saw {sorted(di)}"
+
+        assert isinstance(di["ctx"], str), (
+            f"di_inputs handed ctx as {self._shape(di['ctx'])}; it shares the template "
+            f"var namespace with rendered upstream outputs and obeys the same rule "
+            f"(neograph-l2a7w)"
+        )
+
+
+class TestOneRenderingRule:
+    """neograph-l2a7w — the properties the fix rests on, beyond the reported bug.
+
+    The reproduction (TestPromptCompilerReceivesOneShape) proves the defect is
+    gone. These pin the invariants that keep a FOURTH partial implementation of
+    the rendering rule from appearing.
+    """
+
+    def test_rendering_twice_equals_rendering_once(self):
+        """Rung 0: the ladder is idempotent.
+
+        This is what lets a call site render where the node's renderer= is in
+        scope AND the seam render again. Without it the invariant would be
+        'nobody may render twice', which is unenforceable across consumer code --
+        the public render_inputs is exported and the docs teach calling it.
+        """
+        from neograph._rendered import Rendered
+        from neograph.renderers import to_rendered
+
+        once = to_rendered(RawText(text="prose"), None)
+        twice = to_rendered(once, None)
+
+        assert isinstance(once, Rendered)
+        assert twice is once, "a second render must be a no-op, not a re-render"
+        # And it holds through the public primitive a consumer compiler calls.
+        from neograph import render_inputs
+
+        view = render_inputs({"seed": RawText(text="prose")})
+        assert render_inputs(view) == view
+
+    def test_rendered_text_refuses_attribute_access_loudly(self):
+        """The acceptance criterion: the obvious getattr must not yield ''.
+
+        getattr-with-default and hasattr swallow ONLY AttributeError, so the
+        error deliberately is not one. A dunder probe still gets AttributeError
+        so copy/pickle/deepcopy keep working on what is otherwise a str.
+        """
+        import copy
+        import pickle
+
+        from neograph._rendered import Rendered
+        from neograph.errors import PromptInputError
+
+        r = Rendered("the prose the model needed")
+
+        with pytest.raises(PromptInputError):
+            getattr(r, "text", "")
+        with pytest.raises(PromptInputError):
+            hasattr(r, "model_dump")
+        assert not issubclass(PromptInputError, AttributeError)
+
+        # Behaves exactly like str everywhere else.
+        assert copy.deepcopy(r) == r
+        assert pickle.loads(pickle.dumps(r)) == r
+        assert f"{r}" == str(r) and isinstance(f"{r}", str)
+
+    def test_every_channel_hands_the_compiler_rendered_text(self):
+        """Totality across channels: node inputs, di_inputs, a bare single-type
+        value, and the Oracle merge payload all arrive Rendered."""
+        import types
+        from typing import Annotated
+
+        from neograph import FromInput
+        from neograph._rendered import Rendered
+
+        seen: list[dict] = []
+
+        def compiler(template, input_data, *, di_inputs=None, **kw):
+            seen.append({"data": input_data, "di": di_inputs or {}})
+            return [{"role": "user", "content": "x"}]
+
+        mod = types.ModuleType("test_l2a7w_totality_mod")
+
+        @node(outputs=RawText)
+        def seed() -> RawText:
+            return RawText(text="prose")
+
+        @node(
+            outputs=Claims,
+            mode="think",
+            model="fast",
+            prompt="extract",
+            ensemble_n=2,
+            merge_prompt="merge",
+            merge_model="fast",
+        )
+        def analyze(seed: RawText, domain: Annotated[str, FromInput]) -> Claims: ...
+
+        mod.seed = seed
+        mod.analyze = analyze
+        graph = compile(
+            construct_from_module(mod),
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["ok"])),
+            prompt_compiler=compiler,
+            **build_test_compile_kwargs(),
+        )
+        run(graph, input={"node_id": "t", "domain": "oncology"})
+
+        assert seen, "compiler never invoked"
+        for call in seen:
+            for key, value in call["data"].items():
+                assert isinstance(value, Rendered), f"{key} arrived as {type(value).__name__}"
+            for key, value in call["di"].items():
+                assert isinstance(value, Rendered), f"di_inputs[{key}] arrived as {type(value).__name__}"
+
+    def test_bare_values_are_keyed_from_every_producer_of_them(self):
+        """A bare unkeyed value reaches the seam from four different producers.
+        All four must be keyed by the RAW type name -- not by 'Rendered', which
+        is what a naive keying at the seam would produce for a pre-rendered one.
+        """
+        from neograph import compile_prompt, render_inputs
+        from neograph.renderers import build_rendered_input, to_prompt_input
+
+        payload = RawText(text="prose")
+
+        # 1. the public render_inputs primitive (single-type node input)
+        assert set(render_inputs(payload)) == {"RawText"}
+        # 2. a value that has ALREADY been rendered by a call site
+        pre_rendered = build_rendered_input(payload).for_template_ref
+        assert set(pre_rendered) == {"RawText"}
+        # 3. the seam normalizer, given a raw model (the merge_pre_process shape)
+        assert set(to_prompt_input(payload)) == {"RawText"}
+        # 4. the public compile_prompt entry point
+        captured: list = []
+
+        def compiler(template, input_data, **kw):
+            captured.append(input_data)
+            return [{"role": "user", "content": "x"}]
+
+        compile_prompt("tmpl", payload, prompt_compiler=compiler)
+        assert set(captured[0]) == {"RawText"}

@@ -65,22 +65,23 @@ def llm_factory(tier: str) -> ChatOpenAI:
 
 def prompt_compiler(template: str, input_data) -> list[dict]:
     if template == "decompose":
+        # input_data is a mapping of name -> rendered text on every channel, so
+        # there is nothing to unwrap and no attribute to reach for.
+        topic = "\n".join(input_data.values()) or "artificial intelligence"
         return [{"role": "user", "content": (
             "Break the following topic into 3-5 distinct factual claims. "
             "Return ONLY a JSON object with an 'items' field containing a list of strings.\n\n"
-            f"Topic: {input_data.text if input_data else 'artificial intelligence'}"
+            f"Topic: {topic}"
         )}]
     if template == "merge-claims":
-        # Oracle merge passes input_data={"variants": [<Claims>, ...]} — read the
-        # variant list, not the dict itself (neograph-iu05).
-        all_claims = []
-        for claims in input_data["variants"]:
-            all_claims.extend(claims.items)
+        # The Oracle merge hands the SAME shape as every other channel: the
+        # variant list arrives already rendered. Before neograph-l2a7w this one
+        # function held two incompatible assumptions about its own parameter.
         return [{"role": "user", "content": (
             "You received multiple decompositions of a topic. "
             "Deduplicate and synthesize into one definitive list of 3-5 claims. "
             "Return ONLY a JSON object with an 'items' field containing a list of strings.\n\n"
-            "All claims:\n" + "\n".join(f"- {c}" for c in all_claims)
+            "All claims:\n" + input_data["variants"]
         )}]
     return [{"role": "user", "content": "Hello"}]
 

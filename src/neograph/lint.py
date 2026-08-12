@@ -978,7 +978,14 @@ def _predict_input_keys(node: Node, *, include_flattened: bool = True) -> set[st
     ``_render_with_flattening`` runs. Set *include_flattened=False* for inline
     prompts, which skip flattening and only see raw input dict keys.
 
-    For single-type or None inputs: empty set (isinstance scan, no dict).
+    For single-type inputs: the value's TYPE NAME, which is the key the runtime
+    now produces for a bare value (``RenderedInput.for_template_ref``). This must
+    stay in lockstep with that keying: before neograph-l2a7w a bare value reached
+    the compiler unkeyed and lint correctly predicted no keys, so leaving this at
+    ``set()`` would flag a valid ``{MyInput}`` placeholder as unresolvable on
+    every single-type think node.
+
+    For None inputs: empty set — there is nothing to name.
     """
     ni = normalize_inputs(node.inputs)
     if ni.is_none:
@@ -995,7 +1002,13 @@ def _predict_input_keys(node: Node, *, include_flattened: bool = True) -> set[st
             if port_type is not None:
                 keys.add(port_type.__name__)
         return keys
-    # Single-type inputs: no dict keys predictable
+    # Single-type: the runtime keys a bare value by its type name. Inline prompts
+    # address the value's ATTRIBUTES (`${var.field}`) against the raw object and
+    # never see this synthesized key, so it is template-ref only — the same
+    # asymmetry the flattened fields already have.
+    single = ni.single_type
+    if include_flattened and isinstance(single, type):
+        return {single.__name__}
     return set()
 
 

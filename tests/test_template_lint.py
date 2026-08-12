@@ -640,7 +640,15 @@ class TestTemplatePlaceholderLint:
         assert _predict_input_keys(n) == set()
 
     def test_predict_input_keys_single_type(self):
-        """_predict_input_keys returns empty set for single-type inputs."""
+        """A single-type input predicts its TYPE NAME for template-ref, and
+        nothing for inline.
+
+        Lockstep with neograph-l2a7w: the runtime now keys a bare value by its
+        type name (RenderedInput.for_template_ref), so predicting set() here
+        would flag a valid {A} placeholder as unresolvable on every single-type
+        think node. Inline prompts address the raw object's attributes and never
+        see the synthesized key, which is the same asymmetry flattened fields
+        already have."""
         from neograph.lint import _predict_input_keys
 
         class A(BaseModel):
@@ -651,7 +659,8 @@ class TestTemplatePlaceholderLint:
 
         # DeprecationWarning fires at Construct assembly, not Node creation
         n = Node("test", outputs=B, inputs=A)
-        assert _predict_input_keys(n) == set()
+        assert _predict_input_keys(n) == {"A"}
+        assert _predict_input_keys(n, include_flattened=False) == set()
 
     # ── render_for_prompt return annotation introspection ─────────────
 

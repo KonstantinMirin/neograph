@@ -28,6 +28,7 @@ from neograph.errors import (
     NeographError,
     NodeOutputError,
     NonIdempotentReplayError,
+    PromptInputError,
     PromptVarMissing,
     ResourceExpiredError,
     StateMissingError,
@@ -59,6 +60,7 @@ PARENTAGE: dict[type, type] = {
     ExecutionError: EXECUTION,
     # execution-time failures — all reachable via ``except ExecutionError``
     PromptVarMissing: EXECUTION,
+    PromptInputError: EXECUTION,
     StateMissingError: EXECUTION,
     NodeOutputError: EXECUTION,
     NonIdempotentReplayError: EXECUTION,

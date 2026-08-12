@@ -26,6 +26,7 @@ from neograph._llm import (
     compile_prompt,
     render_prompt,
 )
+from neograph._rendered import PromptInput, Rendered
 from neograph.compiler import compile, describe_graph
 from neograph.conditions import parse_condition
 from neograph.construct import Construct
@@ -54,6 +55,7 @@ from neograph.errors import (
     NeographError,
     NodeOutputError,
     NonIdempotentReplayError,
+    PromptInputError,
     PromptVarMissing,
     ResourceExpiredError,
 )
@@ -145,7 +147,10 @@ __all__ = [
     "ExecutionError",
     "NodeOutputError",
     "NonIdempotentReplayError",
+    "PromptInput",
+    "PromptInputError",
     "PromptVarMissing",
+    "Rendered",
     "ResourceExpiredError",
     "CheckpointSchemaError",
     # Prompt primitives + default compiler (Layer-2 node DX)

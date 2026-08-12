@@ -125,9 +125,10 @@ def run_neograph():
             "Write a short joke about programming languages."
             if template == "generate"
             else "Pick the best joke and return it as a single item list:\n"
-                 # Oracle merge passes data={"variants": [<Jokes>, ...]} — read the
-                 # variant list, not the dict itself (neograph-iu05).
-                 + "\n".join(f"- {v.items[0]}" for v in data["variants"] if v.items)
+                 # Every value a prompt_compiler receives is prompt-ready TEXT, on
+                 # every channel — the Oracle merge included. No isinstance dance,
+                 # no reaching into models. See neograph-l2a7w.
+                 + data["variants"]
         )}],
     )
     result = run(graph, input={"node_id": "demo"})
