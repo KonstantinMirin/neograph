@@ -9,7 +9,7 @@ and signature the docs cross-link comes from this manifest.
 Run after any change to the public surface::
 
     uv run python scripts/gen_api_manifest.py                 # core only
-    uv run --extra dev --extra mcp python scripts/gen_api_manifest.py   # core + mcp
+    uv run --extra mcp python scripts/gen_api_manifest.py   # core + mcp
 
 A freshness guard (``tests/test_guards_api_manifest.py``) regenerates the
 manifest in-memory and diffs it against the committed files, so any

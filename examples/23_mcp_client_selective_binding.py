@@ -43,7 +43,7 @@ Five beats, in narrative order:
 
 Run (needs the mcp-examples extra; no API keys, no network beyond the local
 subprocess):
-    uv run --extra dev --extra mcp-examples python examples/23_mcp_client_selective_binding.py
+    uv run --extra mcp-examples python examples/23_mcp_client_selective_binding.py
 """
 
 from __future__ import annotations

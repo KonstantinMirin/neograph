@@ -30,7 +30,7 @@ Cross-stage contracts pinned by this module (from the ryn4h Refinements):
         ``github-slugger`` npm package (a transitive Starlight dep), not a
         tautological Python reimplementation.
   - Option (c): core + mcp split into two files; the mcp guard is
-        ``skipif not _HAS_MCP`` so the default ``uv run --extra dev pytest`` stays light.
+        ``skipif not _HAS_MCP`` so the default ``uv run pytest`` stays light.
 """
 
 from __future__ import annotations
@@ -205,19 +205,19 @@ class TestApiManifestFreshness:
 
         Per Option (c): the mcp surface is a SEPARATE committed file, guarded
         only when the ``mcp`` extra is present (skipif-not-_HAS_MCP). Default
-        ``uv run --extra dev pytest`` stays light; full surface guarded in
-        ``uv run --extra dev --extra mcp pytest``.
+        ``uv run pytest`` stays light; full surface guarded in
+        ``uv run --extra mcp pytest``.
         """
         gen = _load_gen_api_manifest()
         assert MCP_MANIFEST_PATH.exists(), (
             f"mcp manifest not committed at {MCP_MANIFEST_PATH}. "
-            f"Run with the extra installed:  uv run --extra dev --extra mcp python scripts/gen_api_manifest.py"
+            f"Run with the extra installed:  uv run --extra mcp python scripts/gen_api_manifest.py"
         )
         on_disk = json.loads(MCP_MANIFEST_PATH.read_text())
         generated = gen.build_mcp_manifest()
         assert on_disk == generated, (
             "api-manifest-mcp.json drifted from build_mcp_manifest(). "
-            "Regenerate with:  uv run --extra dev --extra mcp python scripts/gen_api_manifest.py"
+            "Regenerate with:  uv run --extra mcp python scripts/gen_api_manifest.py"
         )
 
     def test_forward_construct_emits_no_inherited_fields_from_construct_parent(self):

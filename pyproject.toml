@@ -1,6 +1,6 @@
 [project]
 name = "neograph"
-version = "0.7.4"
+version = "0.7.5"
 description = "Write Python. Get a production LLM graph. Declarative LLM graph compiler that compiles @node-decorated functions into LangGraph."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -43,7 +43,7 @@ langfuse = ["langfuse>=3.11"]
 # the mcp-examples extra below; src/neograph itself stays MCP-free (the
 # no-session-ownership guard scans src/neograph only). Importing neograph_mcp
 # without this extra fails loud with an install hint. Run its tests with:
-#   uv run --extra dev --extra mcp pytest tests/test_mcp_battery.py
+#   uv run --extra mcp pytest tests/test_mcp_battery.py
 mcp = [
     "langchain-mcp-adapters>=0.3",
     # <2 pin: mcp 2.0 renames FastMCP -> MCPServer; langchain-mcp-adapters 0.3.x
@@ -61,12 +61,11 @@ mcp-examples = [
     # langchain-mcp-adapters 0.3.x both target the mcp 1.x FastMCP import.
     "mcp>=1.28,<2",
 ]
-dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "ruff>=0.3",
-    "mypy>=1.8",
-]
+# neograph-4n48u: there is deliberately NO `dev` extra. The dev toolchain lives in
+# [dependency-groups].dev — the ONE group `uv run pytest` installs — because having
+# both a `dev` extra and a `dev` group is what stranded pytest-asyncio outside the
+# project's own gate (a fresh checkout's `make quality` errored on every async test).
+# One namespace, one source of truth.
 
 [project.scripts]
 neograph = "neograph.__main__:main"
@@ -156,7 +155,17 @@ markers = [
 ]
 
 [dependency-groups]
+# THE gate group. `uv run pytest` / `uv sync` install exactly this (plus
+# [project].dependencies) — extras need an explicit `--extra` and are therefore
+# invisible to `make quality`. Every dependency the quality gate needs belongs
+# HERE, not in [project.optional-dependencies]; see neograph-4n48u, where
+# pytest-asyncio sitting in the wrong namespace made every async test error out
+# on a fresh checkout while an existing worktree's stale .venv hid it.
 dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.3",
+    "mypy>=1.8",
     "hypothesis>=6.151.12",
     "langchain>=1.0",
     "langchain-openai>=1.2.2",
@@ -171,8 +180,8 @@ dev = [
     # tests/test_docs_snippets.py couples to the PRIVATE pre-1.0
     # pytest_examples.find_examples._extract_code_chunks; the upper bound guards
     # against a 0.1.x minor renaming that symbol (mirrors the mcp>=1.28,<2 pin).
-    # In [dependency-groups].dev (auto-installed by `uv run pytest`), NOT the
-    # --extra dev group, so the file collects under the bare test command.
+    # In [dependency-groups].dev (auto-installed by `uv run pytest`), so the
+    # file collects under the bare test command.
     "pytest-examples>=0.0.18,<0.1",
     "pytest-cov>=7.1.0",
     "python-dotenv>=1.2.2",

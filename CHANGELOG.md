@@ -5,7 +5,7 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.5] - 2026-08-12
 
 Six fixes on one theme: **what a `prompt_compiler` receives is decided once, and every channel obeys the same rule.** The first was reported; the rest were found by scanning for the same disease rather than by waiting for reports.
 
@@ -20,6 +20,8 @@ Six fixes on one theme: **what a `prompt_compiler` receives is decided once, and
 - **The `context` channel obeys the rendering rule** (`neograph-ufqr7`). `_extract_context` annotated its result `dict[str, str]` behind a `cast(str, ...)` that nothing backed — `state.py` types context fields `Any` and the validator only checks that a producer exists — so a channel annotated as text carried live models, and a user's own `render_for_prompt()` was ignored on it alone. It also read a peer field with neither unwrap, so a looping producer named in `context=` handed the model every superseded draft as though it were current. Both are fixed. The channel calls the one ladder with `renderer=None`, which is not an exemption from the rule but the rule called as this channel's documented contract requires: a pre-formatted string stays byte-identical (rung 2 would escape hand-written markup — `XmlRenderer` turns `<catalog>` into `&lt;catalog&gt;`), while a presenter is honoured and a model without one renders as BAML instead of a Python repr.
 
 - **A declared `context=` field is a valid template placeholder** (`neograph-ait72`). Lint reported `template_placeholder_unresolvable` for a placeholder that now resolves. Before the two fixes above the channel genuinely did not reach the template, so lint was right; making the runtime work turned a true positive into a false one. The new column is gated on the compiler declaring `context`, the exact twin of the `di_inputs` gate — a compiler that declares neither still never receives the channel, and lint still says so.
+
+- **`make quality` actually runs on a fresh checkout** (`neograph-4n48u`). `pytest-asyncio` sat in `[project.optional-dependencies].dev` — an extra `uv run pytest` never installs — so every `async def test_*` errored out on a clean clone; an existing worktree's already-warm `.venv` hid the gap, which is presumably how this shipped unnoticed. `pytest-asyncio`, `pytest`, `ruff`, and `mypy` move into `[dependency-groups].dev` (the one group `uv run pytest` / `uv sync` installs); the `dev` extra is deleted, and every documented `--extra dev` command is corrected. Verified against a genuinely fresh `.venv`, not an existing one.
 
 ### Changed
 

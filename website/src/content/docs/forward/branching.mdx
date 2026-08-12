@@ -287,7 +287,7 @@ Both `verify` and `score` get Each modifiers and run once per cluster group. `re
 `examples/27_forward_agent_wiring.py` runs every surface on this page end-to-end (keyless, scripted-node fakes standing in for agent stages): the `if` branch, `self.loop()`, `self.each()` custom-key fan-out, a fan-out-**inside**-a-loop cascade, `self.ensemble()`, and `self.interrupt()` human-in-the-loop — each traced to IR and executed with a behavioral assert:
 
 ```bash
-uv run --extra dev python examples/27_forward_agent_wiring.py
+uv run python examples/27_forward_agent_wiring.py
 ```
 
 ## try/except in v1

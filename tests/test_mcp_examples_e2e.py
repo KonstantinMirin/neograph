@@ -21,10 +21,10 @@ Two things live here:
 
 These tests need the ``mcp-examples`` extra (``mcp`` + ``langchain-mcp-adapters``).
 They are keyless and offline but NOT dependency-light, so the whole module is
-gated with ``pytest.importorskip`` — the core ``uv run --extra dev pytest`` suite
+gated with ``pytest.importorskip`` — the core ``uv run pytest`` suite
 stays light and skips this file. Run the MCP E2Es with::
 
-    uv run --extra dev --extra mcp-examples pytest tests/test_mcp_examples_e2e.py
+    uv run --extra mcp-examples pytest tests/test_mcp_examples_e2e.py
 """
 
 from __future__ import annotations

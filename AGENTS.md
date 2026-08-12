@@ -528,7 +528,7 @@ original bug, and a 200 there would mean the two identity spaces collided.
 
 ```bash
 set -a && . .env && set +a
-uv run --extra dev --extra langfuse pytest tests/test_observe_trace_live.py
+uv run --extra langfuse pytest tests/test_observe_trace_live.py
 ```
 
 Without `LANGFUSE_SECRET_KEY` + `LANGFUSE_PUBLIC_KEY` the module skips (2 skips
@@ -547,9 +547,9 @@ dependency-light**: they need `mcp` + `langchain-mcp-adapters`, which live in th
 `mcp-examples` optional extra (`[project.optional-dependencies].mcp-examples`),
 **not** core deps and **not** the default dev group. This keeps `src/neograph`
 MCP-free (the no-session-ownership guard scans `src/` only) and the core
-`uv run --extra dev pytest` suite light.
+`uv run pytest` suite light.
 
-- **Run the MCP E2E harness**: `uv run --extra dev --extra mcp-examples pytest tests/test_mcp_examples_e2e.py`
+- **Run the MCP E2E harness**: `uv run --extra mcp-examples pytest tests/test_mcp_examples_e2e.py`
 - The harness (`tests/test_mcp_examples_e2e.py`) is `pytest.importorskip`-gated, so
   the core suite **skips** it cleanly without the extra. It proves the demo server
   end-to-end (tool discovery, `get_deal` resource_link manifest, RFC-6570 email
