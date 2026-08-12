@@ -225,6 +225,13 @@ def _compile_prompt(
     di_inputs = config.get("configurable", {}).get(StateKeys.DI_INPUTS) if isinstance(config, dict) else None
     if di_inputs:
         all_kwargs["di_inputs"] = to_prompt_input(di_inputs, renderer=runtime.renderer)
+        # Opt-in escape hatch, the exact sibling of raw_inputs
+        # above: di_inputs stays rendered text for template substitution, but a
+        # compiler that needs a DI scalar for LOGIC (isinstance branches, not
+        # `{var}` fills) has no way to recover the typed value once it crosses
+        # the ladder -- to_raw_inputs is already generic over any Mapping, so
+        # di_inputs needs no new renderer-layer code, just the same channel shape.
+        all_kwargs["raw_di_inputs"] = to_raw_inputs(di_inputs)
     if runtime.prompt_compiler is None:
         raise ConfigurationError.build(
             "prompt compiler not configured",

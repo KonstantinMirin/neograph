@@ -11,6 +11,14 @@ Work in progress on `develop` toward 0.8.0 — the `Portal` dynamic-handoff surf
 
 - **The YAML spec surface can now express a `Portal` mesh member** (`neograph-2j208`). `oracle`/`each`/`loop`/`operator` had YAML `NodeSpec`/`ConstructSpec` fields; `portal` did not, so a Portal-modified node was only reachable programmatically (`Node | Portal(...)`) or via `@node(portal=...)`. `PortalSpec` forwards every explicitly-written field through to `Portal(...)` by name (never defaults), giving field-for-field `model_fields_set` parity with the programmatic form.
 
+## [0.7.6] - 2026-08-12
+
+### Fixed
+
+- **`di_inputs` gets a raw/typed escape hatch: `raw_di_inputs`** (`neograph-fqcm6`). `di_inputs` — the resolved `FromInput`/`FromConfig` values reaching a prompt template — is always rendered text, same as `input_data`. Unlike `input_data`, which has `raw_inputs=` for a compiler that needs the live object rather than the rendered form, `di_inputs` had no equivalent: a compiler using a DI scalar for LOGIC (`isinstance(deal_id, int)`), not literal template substitution, had no way to recover the type — reported from a downstream consumer after a `deal_id: int` DI param arrived at a compiler as the string `"4822"` and silently broke an `isinstance` branch. `all_kwargs["raw_di_inputs"] = to_raw_inputs(di_inputs)` closes the gap, reusing `to_raw_inputs` verbatim (already generic over any `Mapping`) and the same opt-in introspection gate `raw_inputs`/`context`/`di_inputs` already ride — zero behavior change for every existing pipeline. A new structural guard (`tests/test_guards_prompt_channels.py::TestRenderedChannelsHaveRawSiblingOrExemption`) now catches a future rendered channel shipping without a raw sibling or a reasoned exemption; it found one more standing instance (`context=`), tracked separately as `neograph-ebxdg`.
+
+- **`examples/24_mcp_resources_from_resource.py` fixed** (`neograph-rod1j`). Broken on `main` since 0.7.5: its custom `prompt_compiler` did structured attribute access (`history.emails`, `dossier.events`) on `di_inputs` values that 0.7.5's rendering unification made unconditionally rendered text. The identical bug was found and fixed during the 0.7.5→`develop` forward-port but never backported to `main`. Embeds the rendered text directly instead.
+
 ## [0.7.5] - 2026-08-12
 
 Six fixes on one theme: **what a `prompt_compiler` receives is decided once, and every channel obeys the same rule.** The first was reported; the rest were found by scanning for the same disease rather than by waiting for reports.

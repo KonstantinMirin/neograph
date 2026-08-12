@@ -421,7 +421,12 @@ class TestLlmResponsibilityDiscipline:
         # also routes through — a net dedup), and the variant-source resolver. The
         # load-bearing assertion is the name allowlist above; this proxy is widened
         # for the reviewed new names.
-        "_llm_render.py": 445,
+        # neograph-fqcm6: 445 -> 452. raw_di_inputs channel added next to the
+        # existing raw_inputs line -- one new all_kwargs entry plus a 6-line
+        # comment explaining the escape hatch, reusing to_raw_inputs (no new
+        # renderer-layer code). The load-bearing assertion is the name
+        # allowlist above.
+        "_llm_render.py": 452,
         # neograph-ble3: new pure-leaf detection module.
         "_dsml.py": 55,
         # neograph-ble3: compat shim — sum-type + Protocol + 3 adapters + factory.
