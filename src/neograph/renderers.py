@@ -19,12 +19,14 @@ Dispatch helper for the factory layer:
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from html import escape as _xml_escape
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
+from neograph._rendered import Rendered
 from neograph._state_keys import StateKeys
 from neograph.describe_type import describe_value
 from neograph.tool import ToolInteraction
@@ -56,14 +58,27 @@ class RenderedInput:
 
     @property
     def for_template_ref(self) -> dict[str, Any] | Any:
-        """What the prompt_compiler receives: rendered values + flattened fields."""
+        """What the prompt_compiler receives: rendered values + flattened fields.
+
+        A non-dict input is KEYED here, by the raw value's type name, rather than
+        travelling on as a bare scalar. It has to happen at this point because
+        this is the last place the original type is still known -- once the value
+        is rendered its type name is ``Rendered``, and the name is gone. That is
+        also why the key cannot be assigned at the compiler seam.
+
+        The same convention ``_alias_subgraph_input_port`` uses for a
+        sub-construct port, and it closes the seam where a bare value used to be
+        silently dropped to ``{}`` by ``render_inputs``.
+        """
         if isinstance(self.rendered, dict):
             merged = dict(self.rendered)
             for k, v in self.flattened.items():
                 if k not in merged:
                     merged[k] = v
             return merged
-        return self.rendered
+        if self.rendered is None or self.raw is None:
+            return {}
+        return {type(self.raw).__name__: self.rendered}
 
 
 @runtime_checkable
@@ -313,16 +328,15 @@ def render_input(input_data: Any, *, renderer: Renderer | None) -> Any:
     into the parent dict as individually addressable template vars.
     """
     if isinstance(input_data, dict):
-        result: dict[str, Any] = {}
-        for k, v in input_data.items():
-            rendered, extra = _render_with_flattening(v, renderer)
-            result[k] = rendered
-            for fname, fval in extra.items():
-                if fname not in result:
-                    result[fname] = fval
-        return result
+        # Delegate rather than re-walk. This function used to carry its own copy
+        # of the dict loop with two silent divergences from the real one: extras
+        # merged into the same dict (so a flattened field could shadow a LATER
+        # producer key) and no sub-construct port alias. It is public and
+        # documented, so a divergent copy here is a standing invitation to a
+        # fourth implementation. See neograph-l2a7w.
+        return build_rendered_input(input_data, renderer).for_template_ref
 
-    return _render_single(input_data, renderer)
+    return to_rendered(input_data, renderer)
 
 
 def build_rendered_input(
@@ -360,7 +374,7 @@ def build_rendered_input(
         )
 
     # Single value (non-dict)
-    rendered = _render_single(input_data, renderer)
+    rendered = to_rendered(input_data, renderer)
     return RenderedInput(
         raw=input_data,
         rendered=rendered,
@@ -401,13 +415,53 @@ def _alias_subgraph_input_port(
     flattened[alias] = rendered_dict[StateKeys.SUBGRAPH_INPUT]
 
 
+def to_prompt_input(value: Any, *, renderer: Renderer | None = None) -> dict[str, Rendered]:
+    """Normalize anything into the mapping a prompt_compiler receives.
+
+    The ONE place the compiler-facing shape is decided see neograph-l2a7w. Every
+    value comes out ``Rendered``; every mapping comes out keyed. Idempotent,
+    because ``to_rendered``'s rung 0 is — so a call site that already rendered
+    with the node's ``renderer=`` loses nothing when the seam normalizes again.
+
+    Bare, unkeyed values get a key here rather than at any call site. Four
+    different producers hand a bare value to the compiler -- a single-type node
+    input, a ``merge_pre_process`` return, ``compile_prompt(input_data=Model)``
+    and ``render_prompt`` -- so naming them at the seam covers all four at once
+    and keeps ``_oracle.py`` free of shape decisions (design section 4.4 / A2).
+    The key is the value's type name, the same convention
+    ``_alias_subgraph_input_port`` already uses for a sub-construct port.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return {str(k): to_rendered(v, renderer) for k, v in value.items()}
+    return {type(value).__name__: to_rendered(value, renderer)}
+
+
+def to_raw_inputs(value: Any) -> dict[str, Any]:
+    """``to_prompt_input``'s keying WITHOUT the rendering — the opt-in
+    ``raw_inputs`` channel a prompt_compiler receives only when it declares one.
+
+    Same keys as ``to_prompt_input`` so a compiler can read the two side by side:
+    ``input_data[k]`` is always text, ``raw_inputs[k]`` is the object behind it.
+    This is the home for the work rendering cannot express -- a per-NODE template
+    loop over a model's children, which ``render_for_prompt()`` cannot serve
+    because it is per-MODEL (design section 4.6).
+    """
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return {str(k): v for k, v in value.items()}
+    return {type(value).__name__: value}
+
+
 def _render_prompt_result(result: Any, renderer: Renderer | None) -> Any:
     """Render the return value of a ``render_for_prompt()`` override.
 
     Decodes the render_for_prompt return-type contract in ONE place (DRY-01): a
     str is verbatim; a BaseModel or non-empty list[BaseModel] goes through the
     explicit renderer or the BAML ``describe_value`` default; anything else
-    passes through unchanged. Both ``_render_single`` (inline/raw) and
+    passes through unchanged. Both ``to_rendered`` (inline/raw) and
     ``_render_with_flattening`` (template-ref) wrap this so the two rendering
     tails can never silently diverge on the contract.
     """
@@ -430,6 +484,12 @@ def _render_with_flattening(
     render_for_prompt() returned a BaseModel, in which case it maps each
     non-excluded field name to its individually rendered value.
     """
+    # Rung 0, before any probe. `hasattr` below would trip a Rendered value's
+    # loud __getattr__, and this function is reached by every consumer compiler
+    # that calls the public `render_inputs` -- so idempotence has to live at the
+    # probe, not only inside `to_rendered`.
+    if isinstance(value, Rendered):
+        return value, {}
     if hasattr(value, "render_for_prompt") and callable(value.render_for_prompt):
         result = value.render_for_prompt()
         whole = _render_prompt_result(result, renderer)
@@ -446,41 +506,70 @@ def _render_with_flattening(
                 elif isinstance(fval, list) and fval and isinstance(fval[0], BaseModel):
                     fields[fname] = fval
                 else:
-                    fields[fname] = _render_single(fval, renderer)
+                    fields[fname] = to_rendered(fval, renderer)
             return whole, fields
         return whole, {}
-    return _render_single(value, renderer), {}
+    return to_rendered(value, renderer), {}
 
 
-def _render_single(value: Any, renderer: Renderer | None) -> Any:
-    """Render a single value, checking for model-level override first.
+def to_rendered(value: Any, renderer: Renderer | None = None, *, prefix: str | None = None) -> Rendered:
+    """Render a single value to prompt-ready text — THE one rendering rule.
 
-    When renderer is None, Pydantic models are BAML-rendered via
-    describe_value() — symmetric with tool-result rendering.
+    Every channel that turns a pipeline value into LLM-facing text goes through
+    here: node inputs, di_inputs, Oracle merge payloads, inline ``${var}`` leaves,
+    and tool results. Three partial re-implementations of this ladder used to
+    exist and disagreed pairwise; collapsing them is neograph-l2a7w.
+
+    The ladder:
+
+    0. already ``Rendered`` -> returned unchanged. This runs FIRST, before any
+       ``hasattr`` probe, which makes the function IDEMPOTENT: rendering twice
+       equals rendering once. That is what lets a call site render where the node
+       (and its ``renderer=``) is in scope AND the seam render again, without the
+       unenforceable "nobody may render twice" rule.
+    1. ``render_for_prompt()`` — the user's presenter, wins over everything.
+    2. an explicit ``renderer=`` (Xml / Delimited / Json).
+    3. BAML ``describe_value`` for models and containers of models, including the
+       two framework container shapes.
+    4. ``str(value)``; ``None`` -> ``""``.
+
+    ``prefix`` is threaded to ``describe_value`` for the tool-result channel,
+    whose only genuine difference from the others was a ``"Tool result:"`` header.
     """
+    # 0. Idempotence — already text, and probing it would trip its loud __getattr__.
+    if isinstance(value, Rendered):
+        return value
+
     # 1. render_for_prompt() always wins, regardless of renderer config
     if hasattr(value, "render_for_prompt") and callable(value.render_for_prompt):
-        return _render_prompt_result(value.render_for_prompt(), renderer)
+        return Rendered(_render_prompt_result(value.render_for_prompt(), renderer))
 
     # 2. Explicit renderer — the renderer owns its own container handling
     # (XmlRenderer/DelimitedRenderer already walk dicts and lists), so the
     # framework-container rules below apply only to the BAML default.
     if renderer is not None:
-        return renderer.render(value)
+        return Rendered(renderer.render(value))
 
     # 3. BAML default. None renders empty (not the literal 'None'); the two
     # framework-produced container shapes render before the generic
     # list[BaseModel] rule so their specialized folding wins.
     if value is None:
-        return ""
+        return Rendered("")
     if isinstance(value, BaseModel):
-        return describe_value(value)
+        return Rendered(_describe(value, prefix))
     if _is_tool_interaction_list(value):
-        return _render_tool_interactions(value)
+        return Rendered(_render_tool_interactions(value))
     if isinstance(value, list) and value and isinstance(value[0], BaseModel):
-        return describe_value(value)
+        return Rendered(_describe(value, prefix))
     if _is_model_dict(value):
-        return _render_model_dict(value)
+        return Rendered(_render_model_dict(value))
 
-    # 4. Primitives (str, int, plain dicts, non-model lists) pass through
-    return value
+    # 4. Coerce. Primitives, plain dicts and non-model lists become text HERE
+    # rather than travelling on as live objects — the anomaly that forced every
+    # downstream consumer to branch on type.
+    return Rendered(str(value))
+
+
+def _describe(value: Any, prefix: str | None) -> str:
+    """``describe_value`` with the channel's optional header (tool results)."""
+    return describe_value(value) if prefix is None else describe_value(value, prefix=prefix)

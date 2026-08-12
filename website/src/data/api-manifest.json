@@ -49,6 +49,12 @@
       "parent": "ExecutionError"
     },
     {
+      "anchor": "promptinputerror",
+      "doc": "A prompt_compiler treated already-rendered prompt text as a model.",
+      "name": "PromptInputError",
+      "parent": "ExecutionError"
+    },
+    {
       "anchor": "promptvarmissing",
       "doc": "A ``strict`` ``substitute()`` found a placeholder with no matching variable.",
       "name": "PromptVarMissing",
@@ -890,6 +896,23 @@
       "signature": "(*args: 'object', tool_name: 'str | None' = None, node: 'str | None' = None) -> 'None'"
     },
     {
+      "anchor": "promptinput",
+      "doc": "A Mapping is a generic container for associating key/value",
+      "kind": "function",
+      "name": "PromptInput",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "anchor": "promptinputerror",
+      "bases": [
+        "ExecutionError"
+      ],
+      "doc": "A prompt_compiler treated already-rendered prompt text as a model.",
+      "kind": "exception",
+      "name": "PromptInputError",
+      "signature": "(*args: 'object', validation_errors: 'str | None' = None) -> 'None'"
+    },
+    {
       "anchor": "promptvarmissing",
       "bases": [
         "ExecutionError"
@@ -898,6 +921,14 @@
       "kind": "exception",
       "name": "PromptVarMissing",
       "signature": "(*args: 'object', var: 'str' = '', available: 'list[str] | None' = None) -> 'None'"
+    },
+    {
+      "anchor": "rendered",
+      "bases": [],
+      "doc": "Prompt-ready text. Already rendered \u2014 it has no fields.",
+      "kind": "class",
+      "name": "Rendered",
+      "signature": ""
     },
     {
       "anchor": "resourceexpirederror",

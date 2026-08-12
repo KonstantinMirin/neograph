@@ -25,7 +25,7 @@ Demonstrates:
   - construct_from_functions with input=/output= for sub-construct boundary
   - Port param resolution (claim param -> neo_subgraph_input)
   - .map() fan-out on a sub-construct
-  - context= for verbatim state injection (pre-formatted catalogs)
+  - context= + render_for_prompt() for pre-formatted catalogs
   - announce_tool_budget: the model is told its budget up front. The finite
     tool (search_evidence: 3) is announced; the unlimited tool (local_lookup,
     budget=0) is deliberately omitted. Works the same inside a sub-construct.
@@ -347,12 +347,18 @@ if __name__ == "__main__":
     print(f"  typed_result.relevance: {tool_log[0].typed_result.relevance}")
 
     # -- Context injection demo -------------------------------------------------
-    # context= injects verbatim state fields alongside typed input.
-    # The catalog is pre-formatted for LLM consumption — not BAML-rendered.
+    # context= injects state fields alongside typed input, with no renderer
+    # allowed to wrap them. The catalog is pre-formatted for LLM consumption, so
+    # it also declares render_for_prompt() -- a MODEL has no verbatim form of its
+    # own, and without a presenter the prompt gets a wrapped repr of the catalog
+    # rather than the catalog. See example 14 for the same pattern with a proof.
 
     class GraphCatalog(BaseModel, frozen=True):
         """Pre-computed graph catalog for LLM context."""
         content: str
+
+        def render_for_prompt(self) -> str:
+            return self.content
 
     ctx_mod = types.ModuleType("context_demo")
 
@@ -370,7 +376,7 @@ if __name__ == "__main__":
         outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
         model="research", prompt="verify/explore",
         tools=[Tool("search_evidence", budget=1)],
-        context=["build_catalog"],  # <-- verbatim state injection
+        context=["build_catalog"],  # <-- no renderer may wrap this
     )
     def ctx_explore(build_catalog: GraphCatalog) -> ExplorationResult: ...
 
@@ -385,6 +391,7 @@ if __name__ == "__main__":
     ctx_result = run(ctx_graph, input={"node_id": "ctx-demo"})
 
     print("\n-- Context injection --")
-    print("  context=['build_catalog'] passes the catalog verbatim to the prompt compiler.")
-    print("  The prompt compiler receives: context={'build_catalog': GraphCatalog(content=...)}")
+    print("  context=['build_catalog'] + render_for_prompt() put the catalog text,")
+    print("  and only the catalog text, in front of the model.")
+    print("  The prompt compiler receives: context={'build_catalog': '=== Graph Catalog ...'}")
     print(f"  explore result: {ctx_result['ctx_explore_result'].summary}")

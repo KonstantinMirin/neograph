@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from neograph._llm_render import _resolve_var
 from neograph._tool_loop import _render_tool_result_for_llm
 from neograph.describe_type import describe_value
-from neograph.renderers import _render_single, render_input
+from neograph.renderers import render_input, to_rendered
 
 # ── Strategies ──────────────────────────────────────────────────────────
 
@@ -107,11 +107,11 @@ class TestRenderInputNeverRaises:
 
     @given(model=any_model)
     @settings(max_examples=30)
-    def test_render_single_no_crash(self, model):
-        """_render_single never raises for any model."""
-        result = _render_single(model, None)
-        # _render_single returns a BAML string, NOT None
-        assert isinstance(result, str) and result.strip(), f"_render_single returned non-string or empty: {result!r}"
+    def testrender_value_no_crash(self, model):
+        """to_rendered never raises for any model."""
+        result = to_rendered(model, None)
+        # to_rendered returns a BAML string, NOT None
+        assert isinstance(result, str) and result.strip(), f"to_rendered returned non-string or empty: {result!r}"
 
 
 # ── Invariant: dict keys preserved ──────────────────────────────────────
@@ -143,7 +143,7 @@ class TestRenderForPromptPrecedence:
     @settings(max_examples=30)
     def test_projection_applied_in_single(self, model):
         """Single-value: render_for_prompt result is used, not raw model."""
-        result = _render_single(model, None)
+        result = to_rendered(model, None)
         # For str projections: result is the custom string
         # For BaseModel projections: result is BAML of the projected model
         if isinstance(model, WithStrProjection):

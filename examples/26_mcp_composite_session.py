@@ -40,7 +40,7 @@ federated primitives" pattern.
 
 Run (needs the mcp-examples extra; no API keys, no network beyond the local
 subprocess):
-    uv run --extra dev --extra mcp-examples python examples/26_mcp_composite_session.py
+    uv run --extra mcp-examples python examples/26_mcp_composite_session.py
 """
 
 from __future__ import annotations

@@ -29,6 +29,7 @@ Hierarchy::
             CheckpointSchemaError      (resume-time precondition mismatch)
         ExecutionError
             PromptVarMissing
+            PromptInputError
             StateMissingError
             NodeOutputError
             NonIdempotentReplayError
@@ -226,6 +227,27 @@ class PromptVarMissing(ExecutionError):
             hint=f"available variables: {avail}",
         )
         return cls(str(msg), var=var, available=list(available))
+
+
+class PromptInputError(ExecutionError):
+    """A prompt_compiler treated already-rendered prompt text as a model.
+
+    Raised by ``Rendered.__getattr__`` when a compiler reaches for a field on a
+    value that is text. It deliberately does NOT subclass ``AttributeError``:
+    ``getattr(value, "text", "")`` and ``hasattr(value, "model_dump")`` swallow
+    only ``AttributeError``, and swallowing here is the exact silent failure this
+    error exists to defeat -- an empty payload rendered into a prompt, a model
+    answering coherently about nothing, and a well-typed wrong result reaching the
+    caller. See neograph-l2a7w.
+
+    Parented under ``ExecutionError`` per this module's parentage rule: it is
+    raised while the graph is running, so ``except ExecutionError`` around
+    ``run()`` must catch it. ``ExecutionError`` is not an ``AttributeError``,
+    so the loudness survives the re-parenting.
+
+    NEVER make this subclass ``AttributeError`` "for compatibility". That single
+    change restores the swallow and makes the loudness a no-op.
+    """
 
 
 class StateMissingError(ExecutionError):

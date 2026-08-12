@@ -6,11 +6,15 @@ Scenario: A requirements verification pipeline where:
   3. verify sub-construct: for each claim, an agent explores with tools
      while seeing the catalog as verbatim context
 
-The catalog is crafted for LLM consumption (BFS-ordered, incident-encoded).
-It must NOT be re-rendered by the framework -- passed as-is via context=.
+The catalog is crafted for LLM consumption (BFS-ordered, incident-encoded), so
+it must reach the model as written. Two things make that true, and the example
+needs both: context= keeps a configured renderer off the value, and
+GraphCatalog.render_for_prompt() says what the type looks like to an LLM. Skip
+the presenter and the model sees a wrapped repr of the catalog rather than the
+catalog -- which is what this example used to do while claiming otherwise.
 
 This demonstrates:
-  - context= on @node for verbatim state injection
+  - context= on @node for state injection no renderer may wrap
   - Context forwarded from parent state into sub-constructs
   - Three rendering strategies unified in one pipeline:
       * Typed input (VerifyClaim) -- BAML via describe_value
@@ -40,6 +44,18 @@ from neograph import (
 class GraphCatalog(BaseModel, frozen=True):
     """Pre-computed graph catalog for LLM context."""
     content: str
+
+    def render_for_prompt(self) -> str:
+        """Hand the model the catalog text and nothing else.
+
+        This is what makes "verbatim" true rather than merely intended. A model
+        has no verbatim form of its own: before neograph-ufqr7 the framework
+        stringified it and the prompt received the Pydantic repr
+        ``content='=== Graph Catalog ...'`` -- wrapped, with the newlines
+        escaped. Declaring a presenter is how a type says what it looks like to
+        an LLM, and the context channel now honours it like every other channel.
+        """
+        return self.content
 
 
 class VerifyClaim(BaseModel, frozen=True):
@@ -128,7 +144,13 @@ def llm_factory(tier):
     return FakeAgentLLM()
 
 
+SEEN_CONTEXT: dict[str, str] = {}
+
+
 def prompt_compiler(template, data, **kw):
+    # Record what the context channel actually delivered, so the closing lines
+    # can PROVE the claim instead of asserting it.
+    SEEN_CONTEXT.update(kw.get("context") or {})
     return [
         {"role": "user", "content": f"template={template} context={kw.get('context', 'none')}"},
     ]
@@ -201,6 +223,12 @@ if __name__ == "__main__":
         print(f"  {cid}: {v.disposition} (evidence: {v.evidence_count})")
 
     print(f"\nResult keys: {sorted(result.keys())}")
-    print("\nThe catalog was passed VERBATIM to the agent's prompt compiler")
-    print("via context=['build_catalog'] -- not BAML-rendered, not modified.")
+    print("\nThe catalog reached the agent's prompt compiler as written --")
+    print("context=['build_catalog'] keeps any configured renderer off it, and")
+    print("GraphCatalog.render_for_prompt() gives it its verbatim text form.")
     print("The agent saw the catalog alongside its typed VerifyClaim input.")
+
+    # Proof, not narration: what the compiler received IS the catalog string.
+    delivered = SEEN_CONTEXT["build_catalog"]
+    assert delivered == result["build_catalog"].content, delivered
+    print(f"\n  first line delivered: {delivered.splitlines()[0]}")

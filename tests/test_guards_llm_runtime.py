@@ -268,6 +268,7 @@ class TestLlmResponsibilityDiscipline:
                 # are the structured-flavored re-prompt assembly the dispatch twins call.
                 "_validation_error_details",
                 "_repair_hint",
+                "_schema_block",
                 "build_structured_repair_message",
                 "structured_retry_messages",
                 # neograph-yqrsz: the empty/undecodable twin of the above. Same
@@ -390,7 +391,7 @@ class TestLlmResponsibilityDiscipline:
         # the structured arm that holds no ValidationError to feed back. Kept to
         # ONE function — the hint body is inlined rather than split into a
         # build_*_repair_message sibling — specifically to hold this proxy down.
-        "_llm_retry.py": 695,  # 693 actual
+        "_llm_retry.py": 695,  # 695 actual — at ceiling
         # neograph-v569: 310 -> 445. The public standalone compile_prompt landed
         # here (its change axis) with a thorough public docstring, a shared
         # render-then-compile core (_render_and_compile, which render_prompt now

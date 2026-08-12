@@ -26,7 +26,7 @@ revokes the current token -> exactly one 401), never by wall-clock expiry.
 
 Run with::
 
-    uv run --extra dev --extra mcp-examples pytest tests/test_mcp_oauth.py
+    uv run --extra mcp-examples pytest tests/test_mcp_oauth.py
 """
 
 from __future__ import annotations

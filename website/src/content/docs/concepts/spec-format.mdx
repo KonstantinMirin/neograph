@@ -69,7 +69,7 @@ nodes:
 | `tools` | No | Tool names for `agent`/`act` modes. |
 | `scripted_fn` | No | Registered function name for `scripted` mode. |
 | `inputs` | No | Explicit `{upstream: type}` mapping. Usually inferred. |
-| `context` | No | State field names injected verbatim into the prompt. |
+| `context` | No | State field names injected into the prompt as text; pre-formatted strings pass through untouched. |
 | `llm_config` | No | Per-node LLM settings (temperature, max_tokens, etc.). |
 
 ### Modifier blocks

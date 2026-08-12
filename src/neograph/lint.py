@@ -316,6 +316,7 @@ def lint(
         conditions=conditions,
         tool_factories=tool_factory_lookup,
         di_inputs_enabled=_compiler_accepts_di_inputs(prompt_compiler),
+        context_enabled=_compiler_accepts_context(prompt_compiler),
         resource_producer_present=_has_resource_link_producer(construct),
     )
     return issues
@@ -375,6 +376,21 @@ def _check_resource_hydration(
                     ),
                 )
             )
+
+
+def _compiler_accepts_context(prompt_compiler: Any) -> bool:
+    """True when *prompt_compiler* declares a ``context`` param or ``**kwargs``.
+
+    The FOURTH column, and the exact twin of :func:`_compiler_accepts_di_inputs`:
+    a node's declared ``context=`` field name is a valid template-ref placeholder
+    only when the compiler actually receives the channel. Until neograph-cbfd9 the
+    shipped compiler swallowed it, so lint reporting the placeholder unresolvable
+    was CORRECT; fixing the runtime turned that true positive into a false one.
+    """
+    if prompt_compiler is None:
+        return False
+    params = _accepted_params(prompt_compiler)
+    return params is _ACCEPT_ALL or "context" in params
 
 
 def _compiler_accepts_di_inputs(prompt_compiler: Any) -> bool:
@@ -438,6 +454,7 @@ def _walk(
     conditions: dict[str, Callable] | None = None,
     tool_factories: dict[str, Callable] | None = None,
     di_inputs_enabled: bool = False,
+    context_enabled: bool = False,
     resource_producer_present: bool = False,
 ) -> None:
     """Recursively walk a construct and check DI bindings + template placeholders."""
@@ -457,6 +474,7 @@ def _walk(
                 conditions=conditions,
                 tool_factories=tool_factories,
                 di_inputs_enabled=di_inputs_enabled,
+                context_enabled=context_enabled,
                 resource_producer_present=resource_producer_present,
             )
         return
@@ -487,7 +505,12 @@ def _walk(
 
     # 2. Template placeholder checks
     _check_template_placeholders(
-        item, issues, known_vars=known_vars, template_resolver=template_resolver, di_inputs_enabled=di_inputs_enabled
+        item,
+        issues,
+        known_vars=known_vars,
+        template_resolver=template_resolver,
+        di_inputs_enabled=di_inputs_enabled,
+        context_enabled=context_enabled,
     )
 
     # 3. Loop condition checks
@@ -510,6 +533,7 @@ def _check_template_placeholders(
     known_vars: frozenset[str] | set[str],
     template_resolver: Callable[[str], str | None] | None = None,
     di_inputs_enabled: bool = False,
+    context_enabled: bool = False,
 ) -> None:
     """Check that prompt placeholders resolve to known input keys.
 
@@ -569,6 +593,11 @@ def _check_template_placeholders(
         # reaches the template and the placeholder is genuinely unresolvable.
         predicted_keys = _predict_input_keys(node)
         valid_keys = predicted_keys | known_vars
+        # Fourth column: the node's declared context= fields, on the same opt-in
+        # terms as di_inputs -- the seam offers the channel, the compiler must
+        # declare it. See neograph-ait72.
+        if context_enabled:
+            valid_keys = valid_keys | set(getattr(node, "context", None) or ())
         if di_inputs_enabled:
             valid_keys = valid_keys | _di_template_var_names(node)
             resource_vars = _di_resource_template_var_names(node)
@@ -978,7 +1007,14 @@ def _predict_input_keys(node: Node, *, include_flattened: bool = True) -> set[st
     ``_render_with_flattening`` runs. Set *include_flattened=False* for inline
     prompts, which skip flattening and only see raw input dict keys.
 
-    For single-type or None inputs: empty set (isinstance scan, no dict).
+    For single-type inputs: the value's TYPE NAME, which is the key the runtime
+    now produces for a bare value (``RenderedInput.for_template_ref``). This must
+    stay in lockstep with that keying: before neograph-l2a7w a bare value reached
+    the compiler unkeyed and lint correctly predicted no keys, so leaving this at
+    ``set()`` would flag a valid ``{MyInput}`` placeholder as unresolvable on
+    every single-type think node.
+
+    For None inputs: empty set — there is nothing to name.
     """
     ni = normalize_inputs(node.inputs)
     if ni.is_none:
@@ -995,7 +1031,13 @@ def _predict_input_keys(node: Node, *, include_flattened: bool = True) -> set[st
             if port_type is not None:
                 keys.add(port_type.__name__)
         return keys
-    # Single-type inputs: no dict keys predictable
+    # Single-type: the runtime keys a bare value by its type name. Inline prompts
+    # address the value's ATTRIBUTES (`${var.field}`) against the raw object and
+    # never see this synthesized key, so it is template-ref only — the same
+    # asymmetry the flattened fields already have.
+    single = ni.single_type
+    if include_flattened and isinstance(single, type):
+        return {single.__name__}
     return set()
 
 

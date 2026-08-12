@@ -21,11 +21,12 @@ from neograph._llm_config import LlmConfig, _coerce_llm_config
 from neograph._llm_runtime import _ACCEPT_ALL, EMPTY_RUNTIME, LlmRuntime
 from neograph._placeholders import DOLLAR_RE as _VAR_RE
 from neograph._placeholders import apply_scanner
+from neograph._rendered import assert_prompt_input_total
 from neograph._state_keys import StateKeys
-from neograph.describe_type import describe_type, describe_value
+from neograph.describe_type import describe_type
 from neograph.errors import ConfigurationError
 from neograph.prompt import DefaultPromptCompiler
-from neograph.renderers import build_rendered_input
+from neograph.renderers import Renderer, build_rendered_input, to_prompt_input, to_raw_inputs, to_rendered
 
 log = structlog.get_logger()
 
@@ -79,19 +80,17 @@ def _walk_var_path(path: str, input_data: Any) -> Any:
     return obj
 
 
-def _resolve_var(path: str, input_data: Any) -> str:
+def _resolve_var(path: str, input_data: Any, renderer: Renderer | None = None) -> str:
     """Resolve a single ``${path}`` variable against *input_data* to a string.
 
-    BaseModel values at the resolved stage are BAML-rendered via
-    describe_value() instead of using str() (which gives Pydantic repr).
-    This makes inline prompt output symmetric with template-ref rendering.
+    The leaf goes through ``to_rendered`` -- the ONE rendering ladder -- so an
+    inline prompt honors ``render_for_prompt()`` and an explicit ``renderer=``
+    exactly as a template-ref prompt does. Before neograph-l2a7w this function
+    carried its own partial ladder that jumped straight to ``describe_value``,
+    so a user's presenter applied or not depending on whether the prompt happened
+    to contain a space.
     """
-    obj = _walk_var_path(path, input_data)
-    if obj is None:
-        return ""
-    if isinstance(obj, BaseModel):
-        return describe_value(obj)
-    return str(obj)
+    return to_rendered(_walk_var_path(path, input_data), renderer)
 
 
 def _resolve_var_raw(path: str, input_data: Any) -> Any:
@@ -103,12 +102,14 @@ def _resolve_var_raw(path: str, input_data: Any) -> Any:
     return _walk_var_path(path, input_data)
 
 
-def _substitute_vars(template: str, input_data: Any) -> str:
+def _substitute_vars(template: str, input_data: Any, renderer: Renderer | None = None) -> str:
     """Replace all ``${...}`` placeholders in *template* (fail-soft resolver)."""
-    return apply_scanner(template, _VAR_RE, lambda name: _resolve_var(name, input_data))
+    return apply_scanner(template, _VAR_RE, lambda name: _resolve_var(name, input_data, renderer))
 
 
-def _compile_multimodal_prompt(template: str, input_data: Any) -> list[dict[str, Any]]:
+def _compile_multimodal_prompt(
+    template: str, input_data: Any, renderer: Renderer | None = None
+) -> list[dict[str, Any]]:
     """Compile an inline prompt that contains ``${image:...}`` placeholders.
 
     Splits the template into alternating text / image-var segments, resolves
@@ -119,7 +120,7 @@ def _compile_multimodal_prompt(template: str, input_data: Any) -> list[dict[str,
 
     for i, part in enumerate(parts):
         if i % 2 == 0:
-            rendered = _substitute_vars(part, input_data).strip()
+            rendered = _substitute_vars(part, input_data, renderer).strip()
             if rendered:
                 content_blocks.append({"type": "text", "text": rendered})
         else:
@@ -183,9 +184,18 @@ def _compile_prompt(
             runtime = EMPTY_RUNTIME
     if _is_inline_prompt(template):
         if _IMAGE_RE.search(template):
-            return _compile_multimodal_prompt(template, input_data)
-        rendered = _substitute_vars(template, input_data)
+            return _compile_multimodal_prompt(template, input_data, runtime.renderer)
+        rendered = _substitute_vars(template, input_data, runtime.renderer)
         return [{"role": "user", "content": rendered}]
+
+    # THE normalization seam see neograph-l2a7w. Every path that reaches a
+    # prompt_compiler funnels through here, so the compiler-facing shape is
+    # decided ONCE instead of at each call site. `to_prompt_input` is idempotent,
+    # so a call site that already rendered with the node's own `renderer=` loses
+    # nothing -- and a path that never rendered at all (the Oracle merge) is
+    # covered without a single line in `_oracle.py`.
+    raw_inputs = to_raw_inputs(input_data)
+    prompt_input = to_prompt_input(input_data, renderer=runtime.renderer)
 
     cfg = _coerce_llm_config(llm_config)
     all_kwargs = {
@@ -194,15 +204,27 @@ def _compile_prompt(
         "output_model": output_model,
         "llm_config": cfg.as_factory_kwargs(),
         "output_schema": output_schema,
+        # Opt-in: only a compiler that DECLARES raw_inputs receives it (the same
+        # introspection gate di_inputs/context ride). input_data stays totally
+        # Rendered either way, so this is two channels with one shape each --
+        # never one channel with two shapes.
+        "raw_inputs": raw_inputs,
     }
     if context is not None:
-        all_kwargs["context"] = context
+        # The FOURTH channel, last to obey the rule see neograph-ufqr7. renderer=None is
+        # not an exemption from the ladder, it IS the ladder called as this channel's
+        # contract requires: rung 2 ESCAPES hand-crafted markup (XmlRenderer: <catalog>
+        # -> &lt;catalog&gt;), and skipping it IS "bypasses the renderer dispatch chain".
+        all_kwargs["context"] = to_prompt_input(context, renderer=None)
     # di_inputs: the dispatch layer resolves a node's FromInput/FromConfig params
     # once and stashes them on config under DI_INPUTS (the _oracle_model-style
-    # side-channel); reading here keeps DI resolution single-sourced.
+    # side-channel); reading here keeps DI resolution single-sourced. They share
+    # the template var namespace with rendered upstream outputs, so they obey the
+    # same rule -- rendered HERE rather than at the injector, which keeps the
+    # renderer choice at the one seam that knows it.
     di_inputs = config.get("configurable", {}).get(StateKeys.DI_INPUTS) if isinstance(config, dict) else None
     if di_inputs:
-        all_kwargs["di_inputs"] = di_inputs
+        all_kwargs["di_inputs"] = to_prompt_input(di_inputs, renderer=runtime.renderer)
     if runtime.prompt_compiler is None:
         raise ConfigurationError.build(
             "prompt compiler not configured",
@@ -212,7 +234,8 @@ def _compile_prompt(
         kwargs = all_kwargs
     else:
         kwargs = {k: v for k, v in all_kwargs.items() if k in runtime.prompt_compiler_params}
-    return runtime.prompt_compiler(template, input_data, **kwargs)
+    assert_prompt_input_total(prompt_input, node_name=node_name, template=template)
+    return runtime.prompt_compiler(template, prompt_input, **kwargs)
 
 
 def _render_and_compile(

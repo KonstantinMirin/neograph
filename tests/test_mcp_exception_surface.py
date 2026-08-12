@@ -22,7 +22,7 @@ boundary — has its own grouped-exception twin in
 Real transports, no protocol mocking — the shared FastMCP demo server echoes the
 ``Authorization`` header. Run with::
 
-    uv run --extra dev --extra mcp-examples pytest tests/test_mcp_exception_surface.py
+    uv run --extra mcp-examples pytest tests/test_mcp_exception_surface.py
 """
 
 from __future__ import annotations

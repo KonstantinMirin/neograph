@@ -11,7 +11,7 @@ Two tiers here:
 
 1. **Always-on** (no extra): ``import neograph`` drags in zero MCP deps, and
    ``import neograph_mcp`` without the extra fails loud with an install hint. These
-   run under the light ``uv run --extra dev pytest`` suite.
+   run under the light ``uv run pytest`` suite.
 2. **Extra-gated** one-consumer smoke: bind ONE tool from a stdio server via
    ``mcp_tool_factories`` -> ``compile()`` passes -> ``lint()`` flags the async
    binding -> an ``arun()`` call drives the real per-run tool against the FastMCP
@@ -20,7 +20,7 @@ Two tiers here:
 
 Run the gated tier with::
 
-    uv run --extra dev --extra mcp pytest tests/test_mcp_battery.py
+    uv run --extra mcp pytest tests/test_mcp_battery.py
 """
 
 from __future__ import annotations

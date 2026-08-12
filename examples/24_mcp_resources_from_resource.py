@@ -35,7 +35,7 @@ The five beats, in narrative order:
 
 Run (needs the mcp-examples extra; no keys, no network beyond the local subprocess):
 
-    uv run --extra dev --extra mcp-examples python examples/24_mcp_resources_from_resource.py
+    uv run --extra mcp-examples python examples/24_mcp_resources_from_resource.py
 """
 
 from __future__ import annotations

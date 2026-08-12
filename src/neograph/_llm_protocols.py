@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
+from neograph._rendered import PromptInput
+
 
 @runtime_checkable
 class LlmFactory(Protocol):
@@ -33,13 +35,31 @@ class LlmFactory(Protocol):
 class PromptCompiler(Protocol):
     """Builds message lists for LLM calls.
 
+    ``input_data`` is a :data:`~neograph._rendered.PromptInput` — a TOTAL mapping
+    of name -> prompt-ready text. Every channel obeys it: node inputs (fan-in
+    dict form and single-type, the latter keyed by its type name), the Oracle
+    merge payload, and ``di_inputs``. A compiler never has to ask what shape it
+    is holding, which is the whole point of neograph-l2a7w: the values used to be
+    a rendered ``str`` on one path and the raw Pydantic model on another, and the
+    obvious ``getattr`` silently yielded an empty payload on whichever path the
+    author did not expect.
+
+    Reaching for a field on a value now raises ``PromptInputError`` rather than
+    returning ``""``. A compiler that genuinely needs the objects declares a
+    ``raw_inputs`` parameter and receives them alongside, keyed identically.
+
     Backward-compatible with both shapes:
 
     * Simple:   ``(template, input_data) -> list``
     * Advanced: ``(template, input_data, *, node_name=, config=, ...) -> list``
+
+    The annotation is the DISCOVERABLE half of the contract; because this is a
+    structural Protocol and consumer compilers annotate ``Any``, the enforcing
+    half is the runtime totality assertion at the seam plus ``Rendered``'s loud
+    ``__getattr__``. Both are required — neither alone closes the hole.
     """
 
-    def __call__(self, template: str, input_data: Any, *args: Any, **kwargs: Any) -> list[Any]: ...
+    def __call__(self, template: str, input_data: PromptInput, *args: Any, **kwargs: Any) -> list[Any]: ...
 
 
 @runtime_checkable

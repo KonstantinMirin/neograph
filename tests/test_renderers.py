@@ -1031,11 +1031,16 @@ class TestRenderPromptInspector:
         )
 
         assert len(compiled_data) == 1
-        # XmlRenderer produces XML-tagged output
+        # neograph-l2a7w: a compiler always receives a KEYED mapping of rendered
+        # text, never a bare value. A single-type input is keyed by its type name
+        # (the same convention the sub-construct port alias uses), which is what
+        # makes `Mapping[str, Rendered]` total across every channel.
         rendered = compiled_data[0]
-        assert isinstance(rendered, str)
-        assert "<name>Alice</name>" in rendered
-        assert "<value>42</value>" in rendered
+        assert isinstance(rendered, dict)
+        assert set(rendered) == {"MyInput"}
+        # The node's XmlRenderer still wins over the BAML default.
+        assert "<name>Alice</name>" in rendered["MyInput"]
+        assert "<value>42</value>" in rendered["MyInput"]
 
     def test_passes_output_schema_to_compiler_when_json_mode(self):
         """render_prompt for json_mode node passes output_schema to compiler."""
@@ -1614,10 +1619,17 @@ class TestRenderInputBAMLDefault:
         assert isinstance(result["b"], str)
         assert "42" in result["b"]
 
-    def test_primitives_pass_through(self):
-        """render_input with primitives still passes them through unchanged."""
+    def test_primitives_are_coerced_to_text(self):
+        """Primitives become prompt-ready TEXT rather than travelling on as live
+        objects.
+
+        Changed by neograph-l2a7w: the old passthrough was the anomaly that made
+        every downstream consumer branch on type, and it is what made
+        `Mapping[str, Rendered]` un-typable. `str(value)` here is exactly what
+        `substitute` did at the last mile anyway, so the emitted prompt is
+        unchanged -- the value is simply text earlier, and honestly typed."""
         assert render_input("hello", renderer=None) == "hello"
-        assert render_input(42, renderer=None) == 42
+        assert render_input(42, renderer=None) == "42"
 
     def test_exclude_true_honored_in_baml_default(self):
         """Fields with exclude=True are omitted from BAML default rendering."""
@@ -1636,7 +1648,7 @@ class TestRenderInputBAMLDefault:
 class TestRenderForPromptUnconditional:
     """BUG neograph-qybn: render_for_prompt() must fire regardless of renderer config.
 
-    Currently render_for_prompt() only runs inside _render_single(), which is
+    Currently render_for_prompt() only runs inside to_rendered(), which is
     only called when a Renderer is active. With renderer=None the whole
     render_for_prompt chain is dead code.
     """
@@ -1959,7 +1971,7 @@ class TestFieldFlatteningPreservesBaseModelChildren:
     """BUG neograph-4vtb: BaseModel children in flattened fields must be preserved
     as objects for {var.attr} dotted template access.
 
-    _render_with_flattening calls _render_single on every field, which
+    _render_with_flattening calls to_rendered on every field, which
     stringifies BaseModel children via describe_value(). Templates using
     {rep_a.statement} then crash with AttributeError on the string.
     """
@@ -2044,7 +2056,7 @@ class TestFieldFlatteningPreservesBaseModelChildren:
                 return View(title=self.raw.upper(), count=42)
 
         result = render_input({"src": Source(raw="hello")}, renderer=None)
-        # Primitives pass through _render_single (which returns them as-is for primitives)
+        # Primitives pass through to_rendered (which returns them as-is for primitives)
         assert result["title"] == "hello" or result["title"] == "HELLO"
         assert result["count"] == 42 or result["count"] == "42"
 
@@ -2533,10 +2545,12 @@ class TestContainerRendering:
         out = render_input({"topic": "oncology"}, renderer=None)
         assert out["topic"] == "oncology"
 
-    def test_plain_dict_of_scalars_still_passes_through(self):
+    def test_plain_dict_of_scalars_is_coerced_not_folded(self):
         # Only dict[str, BaseModel] gets the join treatment; a scalar dict is
         # left untouched (it has no describe_value rendering).
         from neograph.renderers import render_input
 
         out = render_input({"meta": {"a": 1, "b": 2}}, renderer=None)
-        assert out["meta"] == {"a": 1, "b": 2}
+        # neograph-l2a7w: a scalar dict has no describe_value folding, so it takes
+        # the coercion rung rather than passing through as a live dict.
+        assert out["meta"] == "{'a': 1, 'b': 2}"

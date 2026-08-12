@@ -41,7 +41,7 @@ fake is the LLM, so the example is deterministic and keyless.
 
 Run (needs the mcp-examples extra; no API keys, no network beyond the local
 subprocess):
-    uv run --extra dev --extra mcp-examples python examples/25_mcp_single_tool_gateway.py
+    uv run --extra mcp-examples python examples/25_mcp_single_tool_gateway.py
 """
 
 from __future__ import annotations
