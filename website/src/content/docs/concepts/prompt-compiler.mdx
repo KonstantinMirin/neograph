@@ -167,7 +167,9 @@ graph = compile(pipeline, llm_factory=my_factory,
                 prompt_compiler=RoleCompiler(Path("prompts"), suffix=".txt"))
 ```
 
-The other two override hooks are `load_template(template)` (swap the template source) and `build_vars(input_data, *, output_model, output_schema, di_inputs)` (change the variable namespace). Override exactly one; keep the rest.
+The other two override hooks are `load_template(template)` (swap the template source) and `build_vars(input_data, *, output_model, output_schema, di_inputs, context)` (change the variable namespace). Override exactly one; keep the rest.
+
+`build_vars` layers its namespace in order of increasing specificity — `di_inputs` (run-wide ambient), then `context` (the node's declared context fields), then the rendered upstream outputs (the node's own dataflow). On a name collision the narrower binding wins. Write an override as `build_vars(self, input_data, **kw)` and forward `**kw` to `super()`: a compiler that spells out the keyword list keeps working, but has to be edited whenever the seam grows a channel.
 
 When neither the default nor a small subclass fits, write a compiler from scratch — the next section shows the production-shaped pattern.
 

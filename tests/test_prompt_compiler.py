@@ -1059,3 +1059,153 @@ class TestOneRenderingRule:
 
         compile_prompt("tmpl", payload, prompt_compiler=compiler)
         assert set(captured[0]) == {"RawText"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 9. THE CONTEXT CHANNEL reaches the template — neograph-cbfd9
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestDefaultCompilerThreadsContext:
+    """A node's declared ``context=`` must reach its template's namespace.
+
+    neograph-cbfd9. ``_compile_prompt`` passes ``context=`` to the compiler under
+    the same introspection gate ``di_inputs`` rides, and
+    ``DefaultPromptCompiler.__call__`` accepted it into ``**_kw`` and dropped it
+    on the floor. So a channel the node DECLARES is dead in the framework's own
+    90%-case compiler: with ``strict=True`` the run dies naming a var the author
+    did declare, and with ``strict=False`` the literal ``{brief}`` ships to the
+    model. That is the failure mode neograph-hjwv's strict substitution exists to
+    prevent, arriving one layer earlier -- the var never enters the namespace at
+    all, so strictness has nothing left to catch.
+
+    The context field is deliberately a node that is NOT an input of the consumer.
+    A first draft used the consumer's own upstream and proved nothing: that name is
+    already in the namespace via ``render_inputs``, so the template resolved through
+    the input channel and the context channel was never exercised.
+    """
+
+    def _run(self, tmp_path, *, strict: bool, mode: str = "think"):
+        import types
+
+        from neograph import DefaultPromptCompiler, Tool
+        from tests.fakes import FakeTool, ReActFake, register_tool_factory
+
+        seen: list[str] = []
+
+        def _record(messages):
+            seen.extend(m["content"] for m in messages if isinstance(m, dict) and "content" in m)
+
+        class RecordingFake:
+            """Records the compiled messages, then answers structurally.
+
+            NOT a StructuredFake subclass: that fake's ``with_structured_output``
+            returns a NEW StructuredFake rather than ``self``, so an override on
+            the subclass is discarded before ``invoke`` is ever reached and the
+            recorder silently captures nothing. (It did: the first run of this
+            test failed on an empty transcript, not on the bug.) Returning
+            ``self`` is the idiom the other capture fakes in this suite use.
+            """
+
+            def __init__(self, respond):
+                self._respond = respond
+                self._model = None
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def bind(self, **kw):
+                return self
+
+            def invoke(self, messages, **kw):
+                _record(messages)
+                return self._respond(self._model)
+
+            async def ainvoke(self, *a, **k):
+                return self.invoke(*a, **k)
+
+        class RecordingReAct(ReActFake):
+            def invoke(self, messages, **kw):
+                _record(messages)
+                return super().invoke(messages, **kw)
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir(parents=True, exist_ok=True)
+        (prompts / "use-ctx.md").write_text("Seed {seed}. Given {brief}, respond per {json_schema}\n")
+
+        mod = types.ModuleType(f"test_ctx_thread_{mode}_mod")
+
+        @node(outputs=RawText)
+        def seed() -> RawText:
+            return RawText(text="the seed")
+
+        @node(outputs=RawText)
+        def brief() -> RawText:
+            return RawText(text="ship it")
+
+        is_agent = mode in ("agent", "act")
+        if is_agent:
+            register_tool_factory("noop", lambda config, tool_config: FakeTool("noop", response="-"))
+        extra = {"tools": [Tool("noop", budget=1)]} if is_agent else {}
+
+        # `brief` is context-only: NOT a parameter of analyze, so {brief} can only
+        # be satisfied by the context channel.
+        @node(outputs=Claims, mode=mode, model="fast", prompt="use-ctx", context=["brief"], **extra)
+        def analyze(seed: RawText) -> Claims: ...
+
+        mod.seed = seed
+        mod.brief = brief
+        mod.analyze = analyze
+        graph = compile(
+            construct_from_module(mod),
+            llm_factory=lambda tier: (
+                RecordingReAct(tool_calls=[[]], final=lambda m: m(items=["ok"]), output_model=Claims)
+                if is_agent
+                else RecordingFake(lambda m: m(items=["ok"]))
+            ),
+            prompt_compiler=DefaultPromptCompiler(prompts, strict=strict),
+            **build_test_compile_kwargs(),
+        )
+        run(graph, input={"node_id": "ctx-thread"})
+        return "\n".join(seen)
+
+    def test_context_var_resolves_when_default_compiler_is_strict(self, tmp_path):
+        """strict=True: the run must not die on a var the author DID declare."""
+        joined = self._run(tmp_path, strict=True)
+        assert "ship it" in joined, f"declared context never reached the prompt:\n{joined}"
+
+    def test_context_reaches_the_prompt_in_agent_mode_too(self, tmp_path):
+        """The fix sits BELOW the think/agent fork -- proven, not argued.
+
+        think/raw reach the compiler via ThinkDispatch and agent/act via the ReAct
+        cycle's own turn prep; both hand context to the same _compile_prompt. The
+        trace-similar atom reasoned that a compiler-level fix therefore covers all
+        modes. Reasoning is not evidence, and the two paths have diverged before
+        (that is precisely how di_inputs needed a second wiring in _agent_cycle).
+        """
+        joined = self._run(tmp_path, strict=True, mode="agent")
+        assert "ship it" in joined, f"declared context never reached the agent prompt:\n{joined}"
+
+    def test_context_var_is_not_left_literal_when_default_compiler_is_lenient(self, tmp_path):
+        """strict=False: the literal placeholder must not ship to the model.
+
+        The lenient half matters on its own -- strict=True turns the bug into a
+        loud crash, which is survivable; strict=False turns it into a prompt that
+        silently asks the model about '{brief}'.
+        """
+        joined = self._run(tmp_path, strict=False)
+        assert "{brief}" not in joined, f"literal placeholder shipped to the model:\n{joined}"
+        assert "ship it" in joined, f"declared context never reached the prompt:\n{joined}"
+        # Pin the SHAPE, not just the substring. Context values are raw models
+        # today, and substitute() stringifies with str(), so what actually reaches
+        # the model is the Pydantic repr -- ugly, and strictly better than the
+        # crash or the literal placeholder it replaces. Asserting only "ship it"
+        # would pass either way and would NOT notice when neograph-ufqr7 makes the
+        # channel obey the one rendering rule. When ufqr7 lands, this assertion is
+        # SUPPOSED to fail; flip it to the rendered form then.
+        assert "text='ship it'" in joined, (
+            "expected the current verbatim-raw-model contract (Pydantic repr).\n"
+            f"If neograph-ufqr7 has landed, this is the expected break -- update to the\n"
+            f"rendered form. Got:\n{joined}"
+        )
