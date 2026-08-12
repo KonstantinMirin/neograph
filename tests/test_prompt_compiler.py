@@ -928,6 +928,185 @@ class TestPromptCompilerReceivesOneShape:
         )
 
 
+class TestRawDiInputsEscapeHatch:
+    """neograph-fqcm6 — `di_inputs` has no raw/typed escape hatch, unlike its two
+    sibling channels: `input_data` has `raw_inputs=` and `context` has
+    `render_for_prompt()`. A compiler that needs a DI scalar for LOGIC (e.g. an
+    `isinstance(deal_id, int)` branch), not as literal template text, has no way
+    to get the typed value back — `di_inputs["deal_id"]` is unconditionally the
+    string `"4822"`.
+
+    Fix: a `raw_di_inputs` channel next to `raw_inputs`, same opt-in shape (a
+    compiler receives it only if it declares the parameter), reusing
+    `to_raw_inputs` — the exact function `raw_inputs` itself is built from.
+    """
+
+    @staticmethod
+    def _capturing_compiler(calls: list) -> object:
+        def compiler(template, input_data, *, node_name="", di_inputs=None, raw_di_inputs=None, **kw):
+            calls.append({"template": template, "di_inputs": di_inputs, "raw_di_inputs": raw_di_inputs})
+            return [{"role": "user", "content": "compiled"}]
+
+        return compiler
+
+    def test_raw_di_inputs_carries_the_typed_value_behind_the_rendered_text(self):
+        import types
+        from typing import Annotated
+
+        from neograph import FromInput
+
+        calls: list = []
+
+        mod = types.ModuleType("test_fqcm6_raw_di_inputs_mod")
+
+        @node(outputs=RawText)
+        def seed() -> RawText:
+            return RawText(text="hello")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="extract")
+        def analyze(seed: RawText, deal_id: Annotated[int, FromInput]) -> Claims: ...
+
+        mod.seed = seed
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["ok"])),
+            prompt_compiler=self._capturing_compiler(calls),
+            **build_test_compile_kwargs(),
+        )
+        run(graph, input={"node_id": "fqcm6", "deal_id": 4822})
+
+        analyze_calls = [c for c in calls if c["template"] == "extract"]
+        assert analyze_calls, "no think call captured"
+
+        di = analyze_calls[0]["di_inputs"] or {}
+        assert di.get("deal_id") == "4822", f"di_inputs channel should stay rendered text; saw {di.get('deal_id')!r}"
+
+        raw_di = analyze_calls[0]["raw_di_inputs"] or {}
+        assert raw_di.get("deal_id") == 4822, (
+            f"raw_di_inputs should hand back the real int the DI resolver produced, not "
+            f"a stringified copy; saw {raw_di.get('deal_id')!r} ({type(raw_di.get('deal_id')).__name__})"
+        )
+
+    def test_compiler_that_does_not_declare_raw_di_inputs_does_not_receive_it(self):
+        """Opt-in, same as raw_inputs: a compiler that never asks for the raw
+        channel must not be handed it implicitly.
+
+        Explicit closed signature (no **kwargs) — a compiler with a catch-all
+        receives every channel regardless (that IS raw_inputs' existing
+        behavior too), so only a fully-declared signature exercises the gate.
+        """
+        import types
+        from typing import Annotated
+
+        from neograph import FromInput
+
+        calls: list = []
+
+        def compiler(
+            template,
+            input_data,
+            *,
+            node_name="",
+            di_inputs=None,
+            config=None,
+            output_model=None,
+            output_schema=None,
+            llm_config=None,
+            raw_inputs=None,
+        ):
+            calls.append({"template": template})
+            return [{"role": "user", "content": "compiled"}]
+
+        mod = types.ModuleType("test_fqcm6_raw_di_inputs_optout_mod")
+
+        @node(outputs=RawText)
+        def seed() -> RawText:
+            return RawText(text="hello")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="extract")
+        def analyze(seed: RawText, deal_id: Annotated[int, FromInput]) -> Claims: ...
+
+        mod.seed = seed
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["ok"])),
+            prompt_compiler=compiler,
+            **build_test_compile_kwargs(),
+        )
+        # Must not raise a TypeError from an unexpected raw_di_inputs kwarg — the
+        # introspection gate must have filtered it out before the call.
+        run(graph, input={"node_id": "fqcm6-optout", "deal_id": 4822})
+
+        analyze_calls = [c for c in calls if c["template"] == "extract"]
+        assert analyze_calls, "no think call captured"
+
+    def test_raw_di_inputs_reaches_the_agent_cycle_compiler_too(self, tmp_path):
+        """Three-surface parity across MODES (think/agent/act), not API surfaces:
+        di_inputs itself has both TestDiInputReachesModelEndToEnd (think) and
+        TestDiInputReachesAgentModelEndToEnd (agent) because agent/act nodes
+        compile to the ReAct cycle (_agent_cycle.py), a separate call site into
+        the same _compile_prompt seam via its own _turn_prep_kwargs pre-prep.
+        raw_di_inputs needs the identical pairing for the identical reason."""
+        from typing import Annotated
+
+        from neograph import DefaultPromptCompiler, FromInput, Tool, construct_from_functions
+        from tests.fakes import FakeTool, ReActFake, register_tool_factory
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir(parents=True, exist_ok=True)
+        (prompts / "explore.md").write_text("Analyze deal {deal_id}.\n")
+
+        base = DefaultPromptCompiler(prompts, strict=False)
+        captured: dict[str, object] = {}
+
+        def capturing_compiler(*a, raw_di_inputs=None, **kw):
+            captured["raw_di_inputs"] = raw_di_inputs
+            return base(*a, **kw)
+
+        lookup = FakeTool("lookup", response="found")
+        register_tool_factory("lookup", lambda config, tool_config: lookup)
+
+        fake = ReActFake(
+            tool_calls=[
+                [{"name": "lookup", "args": {"q": "x"}, "id": "c1"}],
+                [],
+            ],
+            final=lambda m: m(items=["done"]),
+            output_model=Claims,
+        )
+
+        @node(
+            mode="agent",
+            outputs=Claims,
+            model="reason",
+            prompt="explore",
+            tools=[Tool(name="lookup", budget=2)],
+        )
+        def explore(deal_id: Annotated[int, FromInput]) -> Claims: ...
+
+        graph = compile(
+            construct_from_functions("p", [explore]),
+            **build_test_compile_kwargs(
+                llm_factory=lambda tier: fake,
+                prompt_compiler=capturing_compiler,
+            ),
+        )
+        result = run(graph, input={"deal_id": 4822, "node_id": "explore"})
+
+        assert isinstance(result["explore"], Claims)
+        raw_di = captured["raw_di_inputs"] or {}
+        assert raw_di.get("deal_id") == 4822, (
+            f"agent-cycle raw_di_inputs should hand back the real int; saw "
+            f"{raw_di.get('deal_id')!r} ({type(raw_di.get('deal_id')).__name__})"
+        )
+
+
 class TestOneRenderingRule:
     """neograph-l2a7w — the properties the fix rests on, beyond the reported bug.
 
