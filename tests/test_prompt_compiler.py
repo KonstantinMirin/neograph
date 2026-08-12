@@ -1197,15 +1197,212 @@ class TestDefaultCompilerThreadsContext:
         joined = self._run(tmp_path, strict=False)
         assert "{brief}" not in joined, f"literal placeholder shipped to the model:\n{joined}"
         assert "ship it" in joined, f"declared context never reached the prompt:\n{joined}"
-        # Pin the SHAPE, not just the substring. Context values are raw models
-        # today, and substitute() stringifies with str(), so what actually reaches
-        # the model is the Pydantic repr -- ugly, and strictly better than the
-        # crash or the literal placeholder it replaces. Asserting only "ship it"
-        # would pass either way and would NOT notice when neograph-ufqr7 makes the
-        # channel obey the one rendering rule. When ufqr7 lands, this assertion is
-        # SUPPOSED to fail; flip it to the rendered form then.
-        assert "text='ship it'" in joined, (
-            "expected the current verbatim-raw-model contract (Pydantic repr).\n"
-            f"If neograph-ufqr7 has landed, this is the expected break -- update to the\n"
-            f"rendered form. Got:\n{joined}"
+        # Pin the SHAPE, not just the substring -- "ship it" alone passes under any
+        # contract and would notice no change at all.
+        #
+        # This assertion was written by neograph-cbfd9 as a TRIPWIRE: at that commit
+        # context values were raw models and substitute() stringified them with str(),
+        # so the model received the Pydantic repr text='ship it'. cbfd9 recorded that
+        # neograph-ufqr7 would change it and said so here. ufqr7 landed, the tripwire
+        # fired on cue, and this is its updated form: BAML, because the context channel
+        # now goes through the one rendering ladder like every other channel.
+        assert 'text: "ship it"' in joined, (
+            "expected the context value BAML-rendered by the one ladder.\n"
+            f"Got:\n{joined}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 10. THE CONTEXT CHANNEL obeys the one rendering rule — neograph-ufqr7
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestContextObeysTheRenderingRule:
+    """``context=`` is the fourth channel, and it was exempted on a false premise.
+
+    neograph-l2a7w made every channel hand the prompt_compiler prompt-ready TEXT,
+    and amendment A4 exempted ``context`` with the reasoning "the type pins it" --
+    ``_extract_context`` is annotated ``dict[str, str]`` and casts to ``str``. The
+    cast is a runtime no-op that nothing validates: state types context fields
+    ``Any`` and the validator only checks that SOME upstream produces the field.
+    So the annotation was a claim, not a fact, and raw Pydantic models flowed down
+    a channel typed as text.
+
+    Two consequences, one test each. Both are the same bug l2a7w fixed everywhere
+    else, surviving in the one place A4 waved through.
+    """
+
+    def _prompt_for(self, tmp_path, ctx_node, *, template="Ctx: {brief}\n", renderer=None):
+        import types
+
+        from neograph import DefaultPromptCompiler
+
+        seen: list[str] = []
+
+        class Recorder:
+            def __init__(self, respond):
+                self._respond, self._model = respond, None
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def bind(self, **kw):
+                return self
+
+            def invoke(self, messages, **kw):
+                seen.extend(m["content"] for m in messages if isinstance(m, dict) and "content" in m)
+                return self._respond(self._model)
+
+            async def ainvoke(self, *a, **k):
+                return self.invoke(*a, **k)
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir(parents=True, exist_ok=True)
+        (prompts / "ctx.md").write_text(template)
+
+        mod = types.ModuleType(f"test_ufqr7_{ctx_node.name}_mod")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="ctx", context=["brief"])
+        def analyze() -> Claims: ...
+
+        mod.brief = ctx_node
+        mod.analyze = analyze
+        graph = compile(
+            construct_from_module(mod),
+            llm_factory=lambda tier: Recorder(lambda m: m(items=["ok"])),
+            prompt_compiler=DefaultPromptCompiler(prompts, strict=False),
+            renderer=renderer,
+            **build_test_compile_kwargs(),
+        )
+        run(graph, input={"node_id": "ufqr7"})
+        return "\n".join(seen)
+
+    def test_context_honors_the_models_own_presenter(self, tmp_path):
+        """A ``render_for_prompt()`` on a context model must be honored.
+
+        This is the l2a7w bug verbatim -- a user declares how their model should
+        look to an LLM and one channel ignores it -- surviving on the channel A4
+        exempted. Today the value reaches ``substitute`` as a live model and is
+        stringified with ``str()``, so what ships is the Pydantic repr and the
+        presenter is never consulted.
+        """
+
+        from pydantic import BaseModel
+
+        class Briefing(BaseModel):
+            headline: str
+
+            def render_for_prompt(self) -> str:
+                return f"<<{self.headline.upper()}>>"
+
+        @node(outputs=Briefing)
+        def brief() -> Briefing:
+            return Briefing(headline="ship it")
+
+        joined = self._prompt_for(tmp_path, brief)
+        assert "<<SHIP IT>>" in joined, (
+            "the context model's own render_for_prompt() was ignored; the prompt got:\n" + joined
+        )
+
+    def test_context_from_a_loop_node_is_the_latest_value_not_the_whole_history(self, tmp_path):
+        """A Loop-modified producer named in ``context=`` yields its LATEST value.
+
+        Found by neograph-13k4i's trace-similar sweep: ``_extract_context`` reads a
+        peer field with neither unwrap, so a Loop node's append-list arrives whole
+        and every superseded draft is handed to the model as if it were current.
+        """
+
+        from pydantic import BaseModel
+
+        class Draft(BaseModel):
+            body: str
+
+        @node(outputs=Draft)
+        def seed() -> Draft:
+            return Draft(body="v0")
+
+        @node(outputs=Draft, loop_when=lambda d: d is None or d.body != "v2", max_iterations=5)
+        def brief(seed: Draft) -> Draft:
+            return Draft(body={"v0": "v1", "v1": "v2"}.get(seed.body, "v2"))
+
+        import types
+
+        from neograph import DefaultPromptCompiler
+
+        seen: list[str] = []
+
+        class Recorder:
+            def __init__(self, respond):
+                self._respond, self._model = respond, None
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def bind(self, **kw):
+                return self
+
+            def invoke(self, messages, **kw):
+                seen.extend(m["content"] for m in messages if isinstance(m, dict) and "content" in m)
+                return self._respond(self._model)
+
+            async def ainvoke(self, *a, **k):
+                return self.invoke(*a, **k)
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir(parents=True, exist_ok=True)
+        (prompts / "ctx.md").write_text("Ctx: {brief}\n")
+
+        mod = types.ModuleType("test_ufqr7_loop_mod")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="ctx", context=["brief"])
+        def analyze() -> Claims: ...
+
+        mod.seed = seed
+        mod.brief = brief
+        mod.analyze = analyze
+        graph = compile(
+            construct_from_module(mod),
+            llm_factory=lambda tier: Recorder(lambda m: m(items=["ok"])),
+            prompt_compiler=DefaultPromptCompiler(prompts, strict=False),
+            **build_test_compile_kwargs(),
+        )
+        run(graph, input={"node_id": "ufqr7-loop"})
+        joined = "\n".join(seen)
+
+        assert "v2" in joined, f"latest loop value missing from context:\n{joined}"
+        assert "v1" not in joined, (
+            "the whole Loop append-list reached the prompt -- every superseded draft "
+            f"presented to the model as current:\n{joined}"
+        )
+
+    def test_a_preformatted_string_survives_byte_identical(self, tmp_path):
+        """The promise this change puts most at risk, pinned.
+
+        ``context=`` is documented as the escape hatch for content already crafted
+        for an LLM -- graph catalogs, briefings, cached summaries -- and its
+        contract is "do not wrap my content". Routing the channel through the one
+        ladder keeps that literally: rungs 0/1/3 do not apply to a ``str`` and rung
+        4 ``str()`` is the identity.
+
+        The case that made this test necessary is the CONFIGURED-RENDERER one. Rung
+        2 hands the value to an explicit ``renderer=``, and ``XmlRenderer`` escapes
+        markup -- ``<catalog>`` becomes ``&lt;catalog&gt;``. Measuring that is what
+        decided the design: the context channel calls the ladder with
+        ``renderer=None``, which is exactly what "bypasses the renderer dispatch
+        chain" means in the docs.
+        """
+        from neograph import XmlRenderer
+
+        catalog = "<catalog>UC-001,UC-002</catalog>"
+
+        @node(outputs=str)
+        def brief() -> str:
+            return catalog
+
+        joined = self._prompt_for(tmp_path, brief, renderer=XmlRenderer())
+        assert catalog in joined, (
+            "a pre-formatted context string was transformed on its way to the model.\n"
+            f"That is the one thing context= promises not to do. Got:\n{joined}"
         )

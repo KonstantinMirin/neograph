@@ -211,7 +211,11 @@ def _compile_prompt(
         "raw_inputs": raw_inputs,
     }
     if context is not None:
-        all_kwargs["context"] = context
+        # The FOURTH channel, last to obey the rule see neograph-ufqr7. renderer=None is
+        # not an exemption from the ladder, it IS the ladder called as this channel's
+        # contract requires: rung 2 ESCAPES hand-crafted markup (XmlRenderer: <catalog>
+        # -> &lt;catalog&gt;), and skipping it IS "bypasses the renderer dispatch chain".
+        all_kwargs["context"] = to_prompt_input(context, renderer=None)
     # di_inputs: the dispatch layer resolves a node's FromInput/FromConfig params
     # once and stashes them on config under DI_INPUTS (the _oracle_model-style
     # side-channel); reading here keeps DI resolution single-sourced. They share

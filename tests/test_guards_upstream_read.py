@@ -64,11 +64,11 @@ MODULE_ALLOWLIST: dict[str, str] = {
 # names across call boundaries is the honest next ratchet if a peer read ever
 # hides there.
 
-# Functions inside the reader module that predate the extraction and still compose
-# their own read. Temporary by construction -- each names the ticket that deletes it.
-FUNCTION_ALLOWLIST: dict[str, str] = {
-    "_extract_context": "neograph-ufqr7 migrates this onto the reader and DELETES this entry",
-}
+# Functions that predate the extraction and still compose their own read. Temporary
+# by construction -- each names the ticket that deletes it. EMPTY, and the emptying
+# was the point: _extract_context was the sole entry and neograph-ufqr7 removed it on
+# schedule. A ratchet that never reaches zero is a backlog wearing a guard's clothes.
+FUNCTION_ALLOWLIST: dict[str, str] = {}
 
 
 def _reads_a_peer_field(fn: ast.AST) -> bool:

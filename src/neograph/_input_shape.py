@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, assert_never, cast
+from typing import Any, assert_never
 
 from neograph._normalize import normalize_inputs, primary_output_field
 from neograph._state_bus import StateBus
@@ -145,21 +145,35 @@ def _extract_input(state: StateBus, node: Node) -> Any:
     assert_never(shape)
 
 
-def _extract_context(state: StateBus, node: Node) -> dict[str, str] | None:
-    """Extract verbatim context fields from state for LLM nodes.
+def _extract_context(state: StateBus, node: Node) -> dict[str, Any] | None:
+    """Extract the node's declared context fields from state for LLM nodes.
 
-    Returns a dict of ``{context_name: state_value}`` if the node declares
-    context fields, or None if none is configured. Context values are
-    user-declared string fields rendered verbatim into prompts.
+    Returns ``{context_name: state_value}`` if the node declares context fields,
+    or None if none is configured.
 
     Read-side input shaping (sibling of ``_extract_input``); lives here so both
     node-body executors — the straight-line ``_execute`` lifecycle and the
     inline agent cycle (``_agent_cycle``) — reuse ONE implementation. It was
     parked in ``_execute`` only while ``_execute_node`` was its sole caller.
+
+    The return type used to be ``dict[str, str]``, produced by a ``cast(str, ...)``
+    that nothing backed: ``state.py`` types context fields ``Any`` and the
+    validator only checks that SOME upstream produces the field, never its type.
+    A cast is erased at runtime, so all it did was tell the next reader something
+    untrue — and it was untrue: live Pydantic models flowed down a channel
+    annotated as text. Deleting it is neograph-ufqr7; the channel becomes text
+    for real, one layer up, where ``_llm_render`` renders it through the one
+    ladder.
+
+    Reads go through ``read_upstream`` like every other peer-field read
+    see neograph-13k4i. ``expected_type=str`` is what the channel wants:
+    the Loop unwrap fires (a context field naming a looping node means its LATEST
+    value, not its whole history), and the Each unwrap correctly no-ops, since a
+    fan-out dict has no single latest element to pick.
     """
     if not node.context:
         return None
     # REQUIRED: context fields are validator-guaranteed (see
     # _construct_validation.py); missing → wiring bug, fail loud rather than
     # render the literal string "None" into the LLM prompt.
-    return {name: cast(str, state.get_required(field_name_for(name), node_label=node.name)) for name in node.context}
+    return {name: read_upstream(state, name, str, required=True, node_label=node.name) for name in node.context}

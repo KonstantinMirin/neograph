@@ -1750,7 +1750,11 @@ class TestNodeSubConstruct:
         kw = captured["j66/score"]["kw"]
         assert "context" in kw, f"Expected 'context' kwarg, got: {list(kw.keys())}"
         assert "catalog" in kw["context"]
-        assert kw["context"]["catalog"].text == "<catalog>UC-001,UC-002</catalog>"
+        # neograph-ufqr7: context reaches the compiler as prompt-ready TEXT, like every
+        # other channel. The .text attribute access this line used to make is now what
+        # Rendered.__getattr__ raises on -- loudly, which is how this test found the
+        # change instead of quietly asserting against an empty string.
+        assert "<catalog>UC-001,UC-002</catalog>" in kw["context"]["catalog"]
         # Result still surfaces
         assert result["scorer"].disposition == "ctx-confirmed"
 
