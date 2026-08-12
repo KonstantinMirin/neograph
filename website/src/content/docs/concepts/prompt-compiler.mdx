@@ -239,6 +239,17 @@ Like `di_inputs` and `context`, it is introspection-gated: a compiler that does
 not declare it never receives it. Reaching for a field on a rendered value
 instead raises `PromptInputError` rather than silently yielding `""`.
 
+`di_inputs` has the same escape hatch: declare `raw_di_inputs` alongside
+`di_inputs` to get the typed value a `FromInput`/`FromConfig` param resolved to,
+not its rendered text — useful when a compiler branches on the value
+(`isinstance(deal_id, int)`) rather than substituting it into a template:
+
+```python
+def prompt_compiler(template_name, input_data, *, di_inputs, raw_di_inputs, **kw):
+    text = di_inputs["deal_id"]       # "4822" — always rendered text
+    value = raw_di_inputs["deal_id"]  # 4822 — the int the DI resolver produced
+```
+
 This is application-specific code. Neograph doesn't ship this because every project's notion of "system message," "schema injection," and "registry" is different. The pieces you compose — a template registry, a renderer for BAML-pre-rendered input, an output_schema serializer, a node-name → message-shape policy — are all yours to define.
 
 A typical production project has roughly this structure:
