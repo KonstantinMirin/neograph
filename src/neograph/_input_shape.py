@@ -8,7 +8,7 @@ from typing import Any, assert_never, cast
 from neograph._normalize import normalize_inputs, primary_output_field
 from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
-from neograph.di import _isinstance_safe, _unwrap_each_dict, _unwrap_loop_value
+from neograph.di import _isinstance_safe, _unwrap_each_dict, _unwrap_loop_value, read_upstream
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.naming import field_name_for
 from neograph.node import Node
@@ -73,11 +73,12 @@ def _extract_loop_reentry(state: StateBus, node: Node) -> Any:
     placed_latest = False
     for key, expected_type in by_name.items():
         state_key = field_name_for(key)
-        # StateBus.get optional: loop-bootstrap — sibling keys may not have
-        # been re-produced this iteration; documented sentinel for "use latest".
-        upstream_val = state.get(state_key)
+        # StateBus.get optional (via read_upstream required=False): loop-bootstrap —
+        # sibling keys may not have been re-produced this iteration; documented
+        # sentinel for "use latest".
+        upstream_val = read_upstream(state, key, expected_type, required=False, node_label=node.name)
         if upstream_val is not None and state_key != node_own_field:
-            result[key] = _unwrap_loop_value(upstream_val, expected_type)
+            result[key] = upstream_val
         else:
             result[key] = latest
             placed_latest = True
@@ -109,11 +110,8 @@ def _extract_fan_in_dict(state: StateBus, node: Node) -> dict[str, Any]:
             # REQUIRED: node IS the fan-out target; EACH_ITEM is the dispatched value.
             value = state.get_required(StateKeys.EACH_ITEM, node_label=node.name)
         else:
-            state_key = field_name_for(input_name)
             # REQUIRED: fan-in upstreams guaranteed by _validate_node_chain.
-            value = state.get_required(state_key, node_label=node.name)
-            value = _unwrap_loop_value(value, expected_type)
-            value = _unwrap_each_dict(value, expected_type)
+            value = read_upstream(state, input_name, expected_type, required=True, node_label=node.name)
         result[input_name] = value
     return result
 

@@ -7,13 +7,15 @@ Four types/helpers live here:
 - ``DIBinding`` — a fully resolved DI parameter binding
 - ``_unwrap_loop_value`` — Loop append-list unwrap (shared by factory, compiler, DI)
 - ``_unwrap_each_dict`` — Each dict-to-list unwrap (shared by factory, DI)
+- ``read_upstream`` — THE state-bus read: the two unwraps composed with the read,
+  the exact sibling of ``DIBinding.resolve``'s config-side read-then-unwrap
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 from typing import get_args as _get_args
 from typing import get_origin as _get_origin
 
@@ -27,6 +29,10 @@ from neograph.errors import ConfigurationError as _ConfigurationError
 from neograph.errors import ExecutionError as _ExecutionError
 from neograph.errors import NonIdempotentReplayError as _NonIdempotentReplayError
 from neograph.errors import ResourceExpiredError as _ResourceExpiredError
+from neograph.naming import field_name_for
+
+if TYPE_CHECKING:
+    from neograph._state_bus import StateBus
 
 log = structlog.get_logger()
 
@@ -264,6 +270,52 @@ async def hydrate_resource_ref(
         ) from exc
     _enforce_max_bytes(content, max_bytes, name=getattr(ref, "kind", "?"), uri=fresh_uri)
     return parse_resource_content(content, mime, output_model, parse, marker_mime=marker_mime)
+
+
+def read_upstream(
+    state: StateBus,
+    key: str,
+    expected_type: Any,
+    *,
+    required: bool,
+    node_label: str = "",
+) -> Any:
+    """Read ONE upstream node's output off the state bus, shaped for its consumer.
+
+    THE reader see neograph-13k4i. Reading an upstream is a RULE, not a line:
+    resolve the field name, read it, then unwrap the Loop append-list and the
+    Each result dict **against the type the consumer declared**. Both unwraps
+    no-op unless the stored value and the declared type actually disagree, which
+    is why one function serves every caller.
+
+    ``required`` is the only real variation between call sites, so it is a
+    parameter rather than a second function: a fan-in upstream is guaranteed by
+    ``_validate_node_chain``, so its absence is a wiring bug worth failing loud
+    on, while merge-prompt context and loop-bootstrap reads are best-effort and
+    treat absence as "nothing to say".
+
+    Lives HERE, beside the two unwraps it composes, rather than in
+    ``_input_shape`` where its callers live: ``_oracle`` and ``_input_shape`` are
+    both declared leaves of the assembly-cluster import DAG, and ``_input_shape``
+    is by guard reserved to node-body executors. A shared helper in a leaf module
+    would have meant widening one of those two rules to buy a fix — so the helper
+    moved to the module that already owns both halves of the rule and is already
+    imported by both callers. It is the state-bus sibling of ``DIBinding.resolve``,
+    which does the same read-then-unwrap-against-declared-type over config.
+
+    Before this existed, ``_oracle._build_upstream_context`` re-derived the read
+    and knew only the first half, so an Each-produced upstream reached the node's
+    own prompt as the declared ``list[X]`` and the merge prompt as the raw Each
+    dict. ``tests/test_guards_upstream_read.py`` keeps a second reader from
+    reappearing.
+    """
+    state_key = field_name_for(key)
+    # StateBus.get optional (required=False): best-effort callers — merge-prompt
+    # context treats an absent upstream as nothing to say, and loop bootstrap has
+    # no sibling value on iteration 0.
+    value = state.get_required(state_key, node_label=node_label) if required else state.get(state_key)
+    value = _unwrap_loop_value(value, expected_type)
+    return _unwrap_each_dict(value, expected_type)
 
 
 def _unwrap_loop_value(val: Any, expected_type: Any) -> Any:

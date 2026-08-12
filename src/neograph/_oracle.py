@@ -23,9 +23,10 @@ from neograph._normalize import normalize_outputs, primary_output_field
 from neograph._sidecar import get_merge_fn_metadata
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
+from neograph.di import read_upstream
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.modifiers import Each, EachFailure, Oracle
-from neograph.naming import field_name_for, output_field_name, split_output_field
+from neograph.naming import output_field_name, split_output_field
 from neograph.node import HasName, TypeSpecStatic
 
 
@@ -223,20 +224,27 @@ def _build_oracle_merge_result(
 def _build_upstream_context(bus: StateBus, node_inputs: dict[str, TypeSpecStatic] | None) -> dict[str, Any]:
     """Extract upstream node-input values from state for merge-prompt injection.
 
-    Returns ``{key: value}`` for each ``node_inputs`` key whose state field
-    (``field_name_for(key)``) is present and non-None. This is the SINGLE source
-    of the upstream-context rule (``field_name_for`` + None-skip), shared by the
-    standard Oracle merge (``make_oracle_merge_fn``) and the Each×Oracle fused
-    merge (``_wiring.group_merge_barrier``) so the two paths cannot diverge.
+    Returns ``{key: value}`` for each ``node_inputs`` key whose upstream value is
+    present and non-None. Shared by the standard Oracle merge
+    (``make_oracle_merge_fn``) and the Each×Oracle fused merge
+    (``_wiring.group_merge_barrier``).
+
+    What this function owns is the BEST-EFFORT policy — an absent or None upstream
+    is decoration the merge prompt can do without, so it is skipped rather than
+    raised on. What it does NOT own is how an upstream is read: that is
+    ``di.read_upstream``, and delegating to it is the fix for
+    neograph-13k4i. This function used to re-derive the read and so skipped the
+    Loop/Each unwrapping the fan-in reader applies to the very same keys, which
+    handed the merge prompt a raw Each dict where the node's own prompt got the
+    declared ``list[X]``. Agreeing with its sibling is not the same as being one
+    rule with the reader.
 
     Reads go through the StateBus; callers ``adapt_state(state)`` first.
     """
     ctx: dict[str, Any] = {}
     if isinstance(node_inputs, dict):
-        for key in node_inputs:
-            # StateBus.get optional: upstream-context is best-effort — an
-            # absent/None upstream field is skipped, not required.
-            val = bus.get(field_name_for(key))
+        for key, expected_type in node_inputs.items():
+            val = read_upstream(bus, key, expected_type, required=False)
             if val is not None:
                 ctx[key] = val
     return ctx
