@@ -118,6 +118,8 @@ Lint validates placeholders in both inline prompts and template-ref prompts. The
 
 **Template-ref prompts** are bare names like `"rw/summarize"`. Lint uses the `template_resolver` callable to read the template text, then extracts `{placeholder}` names (Python `str.format` syntax). These are validated against predicted input keys plus flattened fields from `render_for_prompt` plus framework extras. Template-ref prompts go through `_render_with_flattening` at runtime, so they have access to the full key set.
 
+Two further columns are **opt-in, and the opt-in belongs to your prompt compiler**. The seam offers a node's resolved `FromInput`/`FromConfig` values as `di_inputs` and its declared `context=` fields as `context`, but a compiler only receives a channel it declares (or absorbs via `**kwargs`). So lint accepts `{domain}` for a `domain: Annotated[str, FromInput]` parameter, and `{brief}` for `context=["brief"]`, **only when the compiler you pass to `lint(..., prompt_compiler=...)` declares that parameter**. Pass a compiler that declares neither and the placeholder is genuinely unresolvable at runtime — so lint still reports it, which is the correct answer for that compiler.
+
 If no `template_resolver` is provided, template-ref prompts are silently skipped.
 
 ### Inline vs template-ref key differences
@@ -127,6 +129,8 @@ If no `template_resolver` is provided, template-ref prompts are silently skipped
 | Flattened fields | Not available | Available |
 | Framework extras | Not available | Available |
 | `render_for_prompt` fields | Not available | Available (as top-level vars) |
+| DI param names (`FromInput`/`FromConfig`) | Not available | Available **iff** the compiler declares `di_inputs` |
+| Declared `context=` field names | Not available | Available **iff** the compiler declares `context` |
 
 This distinction matters because a placeholder that resolves correctly in a template-ref prompt may fail in an inline prompt, and vice versa.
 
