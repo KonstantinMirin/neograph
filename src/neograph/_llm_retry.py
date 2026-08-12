@@ -137,6 +137,12 @@ def _validation_error_details(exc: ValidationError) -> str:
     return "; ".join(f"{'.'.join(str(loc) for loc in e['loc'])}: {e['msg']}" for e in exc.errors())
 
 
+def _schema_block(output_model: type[BaseModel] | None) -> str:
+    """The ``Expected output schema:`` block every re-prompt hint shares — see neograph-55s4k.
+    Only the block: the diagnosis sentences stay divergent on purpose."""
+    return "" if output_model is None else f"\n\nExpected output schema:\n{describe_type(output_model, prefix='')}\n"
+
+
 def _repair_hint(details: str | None, output_model: type[BaseModel] | None) -> str:
     """Pure repair-hint message: validation details + expected schema + directive.
 
@@ -144,9 +150,7 @@ def _repair_hint(details: str | None, output_model: type[BaseModel] | None) -> s
     :func:`build_structured_repair_message` so both re-prompts phrase the schema
     and the "correct the JSON" directive identically. When *details* is falsy the
     message covers the unparseable-response case."""
-    schema_block = ""
-    if output_model is not None:
-        schema_block = f"\n\nExpected output schema:\n{describe_type(output_model, prefix='')}\n"
+    schema_block = _schema_block(output_model)
 
     if details:
         return (
@@ -264,9 +268,7 @@ def empty_response_retry_messages(
     parsed" actively-wrong advice. Schema block and emit-only directive stay
     identical to the sibling hints, so the re-prompts differ only in diagnosis.
     Single-sited so the assembly cannot drift between the dispatch twins."""
-    schema_block = ""
-    if output_model is not None:
-        schema_block = f"\n\nExpected output schema:\n{describe_type(output_model, prefix='')}\n"
+    schema_block = _schema_block(output_model)
     retry = list(messages)
     if raw_text and raw_text.strip():
         retry.append({"role": "assistant", "content": raw_text})

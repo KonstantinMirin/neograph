@@ -194,6 +194,7 @@ class DefaultPromptCompiler:
         output_model: type[BaseModel] | None = None,
         output_schema: str | None = None,
         di_inputs: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Render inputs and, when an output type is known, inject its schema.
 
@@ -209,8 +210,24 @@ class DefaultPromptCompiler:
         ``{name}`` binding changes meaning when a FromInput param happens to
         collide. ``None`` collapses to ``{}`` (the render_inputs total-dict
         contract), so an all-DI leaf node still gets its ``{domain}`` var.
+
+        ``context`` are the node's declared verbatim context fields, and they sit
+        BETWEEN the two for the same reason: more specific than run-wide ambient
+        DI, less specific than the node's own dataflow. Threading them at all is
+        neograph-cbfd9 -- ``__call__`` used to swallow the kwarg in ``**_kw``, so a
+        channel the node author DECLARED was dead in the framework's own compiler:
+        a fail-loud compiler raised ``PromptVarMissing`` naming a var the author
+        had declared, and a lenient one shipped the literal ``{brief}`` to the model.
+
+        Context values are raw MODELS today, not rendered text, so ``substitute``
+        stringifies them with ``str()`` and a Pydantic model arrives as its repr.
+        That is the CURRENT contract (``_extract_context`` reads them verbatim and
+        ``tests/modes/test_llm_internals`` pins it), not an oversight of this fix;
+        making the context channel obey the one rendering rule every other channel
+        already obeys is neograph-ufqr7.
         """
         vars: dict[str, Any] = dict(di_inputs or {})
+        vars.update(context or {})
         vars.update(render_inputs(input_data))
         if output_model is not None or output_schema is not None:
             vars = inject_schema(
@@ -253,6 +270,7 @@ class DefaultPromptCompiler:
         output_model: type[BaseModel] | None = None,
         output_schema: str | None = None,
         di_inputs: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
         node_name: str = "",
         **_kw: Any,
     ) -> list[dict[str, str]]:
@@ -262,5 +280,6 @@ class DefaultPromptCompiler:
             output_model=output_model,
             output_schema=output_schema,
             di_inputs=di_inputs,
+            context=context,
         )
         return self.render_messages(text, vars, node_name=node_name)

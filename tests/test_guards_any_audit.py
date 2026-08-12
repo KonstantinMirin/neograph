@@ -501,6 +501,11 @@ def _has_arbitrary_types_justification(path: pathlib.Path, lineno: int, prefix: 
 # review. Update the key when the line moves, and confirm the boundary
 # reason still applies.
 NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
+    # ── _rendered.py — Python descriptor-protocol boundary ──
+    # Rendered.__getattr__ is LOUD (PromptInputError) for user-facing names, but a
+    # dunder probe MUST get AttributeError or copy/pickle/deepcopy break on a value
+    # that is otherwise an ordinary str.
+    "_rendered.py:44": "AttributeError is the Python descriptor-protocol contract for dunder probes on a str subclass",
     # ── conditions.py — string-grammar parser (stdlib parser contract) ──
     # parse_condition() implements a tiny expression grammar; ValueError is
     # the documented contract and tests depend on it. AttributeError raises
@@ -584,6 +589,7 @@ class TestPublicFunctionsRaiseNeographError:
             "StateMissingError",
             "NodeOutputError",
             "PromptVarMissing",
+            "PromptInputError",
             "NonIdempotentReplayError",
             "ResourceExpiredError",
         }

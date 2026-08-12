@@ -404,101 +404,26 @@ class TestExampleStructuredOutputModelsAreTyped:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# neograph-iu05 — an Oracle merge_prompt prompt_compiler receives
-# input_data = {"variants": [<variant models>], ...} (a dict), NOT list[Pydantic].
-# Iterating the bare data param walks the dict's keys (strings) and crashes.
-# Compilers must read data["variants"]. Scripted @node bodies (no `template`
-# param) are exempt — they receive their real typed input.
+# RETIRED: TestExampleMergeCompilerReadsVariants + its AST scanner (neograph-iu05)
+#
+# That guard scanned example prompt_compilers for iteration over the bare `data`
+# param, because an Oracle merge handed the compiler a shape no other channel
+# used: {"variants": [<raw models>], ...} while the think path handed the same
+# logical key a rendered str. Authors could only be TOLD the rule, so a source
+# scanner enforced it.
+#
+# neograph-l2a7w removed the ambiguity it was compensating for. A prompt_compiler
+# now receives PromptInput -- a total mapping of name -> prompt-ready text -- on
+# EVERY channel, the merge included. That is enforced at runtime in every
+# consumer's process by _rendered.assert_prompt_input_total plus Rendered's loud
+# __getattr__: reaching for .items on a rendered value raises PromptInputError
+# instead of silently yielding "".
+#
+# Deleted rather than carried alongside: the design's reading of iu05 is that it
+# fixed the symptom, not the shape, and keeping a source-text scanner for a shape
+# that can no longer occur is the band-aid this ticket exists to remove.
+# Coverage moved to tests/test_prompt_compiler.py::TestOneRenderingRule.
 # ═══════════════════════════════════════════════════════════════════════════
-
-_PROMPT_COMPILER_TEMPLATE_PARAMS = {"template", "tmpl", "t"}
-
-
-def _prompt_compiler_data_param(args_node: ast.arguments) -> str | None:
-    """If `args_node` looks like a prompt_compiler signature (first param is a
-    template name, with a following data param), return the data param name."""
-    args = args_node.args
-    if args and args[0].arg in _PROMPT_COMPILER_TEMPLATE_PARAMS and len(args) >= 2:
-        return args[1].arg
-    return None
-
-
-def _scan_bare_data_iteration(source: str) -> list[tuple[int, str]]:
-    """(lineno, data_param) for every prompt_compiler that iterates its bare data
-    param -- via a for-statement OR a comprehension generator. Reading
-    data["variants"] (a Subscript) or data.attr (an Attribute) is NOT flagged."""
-    tree = ast.parse(source)
-    offenders: set[tuple[int, str]] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            continue
-        data_param = _prompt_compiler_data_param(node.args)
-        if data_param is None:
-            continue
-        for inner in ast.walk(node):
-            iters: list[ast.expr] = []
-            if isinstance(inner, ast.For):
-                iters.append(inner.iter)
-            elif isinstance(inner, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
-                iters.extend(gen.iter for gen in inner.generators)
-            for it in iters:
-                if isinstance(it, ast.Name) and it.id == data_param:
-                    offenders.add((inner.lineno, data_param))
-    return sorted(offenders)
-
-
-class TestExampleMergeCompilerReadsVariants:
-    """neograph-iu05 — example merge prompt_compilers must read data["variants"],
-    not iterate the bare data dict.
-    """
-
-    def test_no_bare_data_iteration_in_example_compilers(self):
-        offenders: list[str] = []
-        for path in _iter_example_pipelines():
-            rel = path.relative_to(REPO_ROOT).as_posix()
-            for lineno, data_param in _scan_bare_data_iteration(path.read_text()):
-                offenders.append(
-                    f"{rel}:{lineno} — prompt_compiler iterates bare `{data_param}` "
-                    f"(the Oracle merge passes {{'variants': [...]}}; read {data_param}['variants'])"
-                )
-        assert not offenders, (
-            "Example prompt_compiler iterates its bare data param (neograph-iu05). "
-            "Oracle merge_prompt input_data is a dict — read data['variants'].\n" + "\n".join(offenders)
-        )
-
-    def test_meta_catches_bare_iteration_comprehension(self):
-        """Positive (comprehension form, like 03_map_reduce)."""
-        source = (
-            "graph = compile(pipeline, prompt_compiler=lambda template, data, **kw: "
-            '[{"role": "user", "content": "\\n".join(f"- {j}" for j in data)}])\n'
-        )
-        assert _scan_bare_data_iteration(source), "must flag bare `for j in data` comprehension"
-
-    def test_meta_catches_bare_iteration_for_statement(self):
-        """Would-be-missed (for-statement form, like observable_pipeline)."""
-        source = (
-            "def prompt_compiler(template, input_data):\n"
-            "    acc = []\n"
-            "    for claims in input_data:\n"
-            "        acc.extend(claims.items)\n"
-            "    return acc\n"
-        )
-        assert _scan_bare_data_iteration(source), "must flag bare `for ... in input_data` statement"
-
-    def test_meta_passes_subscript_variants(self):
-        """Negative: reading data['variants'] (the fix) is not flagged."""
-        source = (
-            "graph = compile(pipeline, prompt_compiler=lambda template, data, **kw: "
-            '[{"role": "user", "content": "\\n".join(f"- {v}" for v in data["variants"])}])\n'
-        )
-        assert not _scan_bare_data_iteration(source), "subscript data['variants'] must not be flagged"
-
-    def test_meta_passes_scripted_node_body(self):
-        """Negative: a scripted @node body (no `template` param) iterating its
-        typed input is exempt (examples 05/10)."""
-        source = "def format_report(input_data):\n    for claim in input_data.items:\n        print(claim)\n"
-        assert not _scan_bare_data_iteration(source), "scripted node body must not be flagged"
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # neograph-b6hm — every third-party module an example imports must be a declared

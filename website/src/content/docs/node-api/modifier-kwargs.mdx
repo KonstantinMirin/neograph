@@ -512,7 +512,7 @@ When to use:
 
 ## Context injection with context
 
-Inject verbatim state fields into the LLM prompt alongside typed input. Unlike regular inputs, context values are not type-checked or rendered through the framework's BAML renderer -- they are passed as-is to the prompt compiler.
+Inject state fields into the LLM prompt alongside typed input. Unlike regular inputs, context values are not type-checked, and pre-formatted text passes through untouched -- `context=` is the channel for content you have already crafted for an LLM.
 
 ```python
 from pydantic import BaseModel
@@ -554,7 +554,8 @@ pipeline = construct_from_functions("pipeline", [build_catalog, decompose, score
 How it works:
 
 - **`context=`** takes a list of state field names (strings). At runtime, the factory reads each named field from state and passes the values as a `context` dict to the prompt compiler: `invoke_structured(..., context={"build_catalog": <value>})`.
-- Context values bypass the renderer dispatch chain. The prompt compiler receives them verbatim -- no BAML `describe_value`, no XML/JSON wrapping. This is the right choice for pre-formatted content like graph catalogs, domain briefings, or cached summaries that are already crafted for LLM consumption.
+- Context values bypass the **renderer dispatch chain**: a configured `renderer=` (XML/JSON/delimited) is not applied to them, so a hand-written `<catalog>` reaches the model as `<catalog>` and not as escaped text. That is what makes `context=` the right channel for pre-formatted content like graph catalogs, domain briefings, or cached summaries.
+- They are still **prompt-ready text** by the time a compiler sees them, like every other channel: a `str` is passed through byte-identical, a model's own `render_for_prompt()` is honored, and a model without one renders as BAML rather than as a Python `repr`. A context field naming a looping node yields that node's latest value, not its whole history.
 - Context names are validated at compile time. The state model creates fields for each declared context name, and the validator checks that the names correspond to known upstream producers.
 
 Difference from inputs:
@@ -562,7 +563,7 @@ Difference from inputs:
 | | `inputs` | `context` |
 |---|---|---|
 | Type-checked | Yes (Pydantic model matching) | No (passed as-is) |
-| Rendered | Yes (BAML / renderer chain) | No (verbatim) |
+| Rendered | Yes (BAML / renderer chain) | Text, but never renderer-wrapped: `str` passes through byte-identical; a presenter is honored |
 | Topology wiring | Determines DAG edges | Does not affect topology |
 | Prompt placement | Main input section | Separate `context` dict |
 

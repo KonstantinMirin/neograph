@@ -268,6 +268,7 @@ class TestLlmResponsibilityDiscipline:
                 # are the structured-flavored re-prompt assembly the dispatch twins call.
                 "_validation_error_details",
                 "_repair_hint",
+                "_schema_block",
                 "build_structured_repair_message",
                 "structured_retry_messages",
                 # neograph-yqrsz: the empty/undecodable twin of the above. Same
@@ -408,10 +409,12 @@ class TestLlmResponsibilityDiscipline:
         # (empty_response_retry_messages is registered there; zhwgh's
         # _unwrap_optional / _descend_null_defaults moved to _null_defaults.py),
         # and the sub-500 repo-wide rule already binds the file harder than 695.
-        # The five entries that remain are all comfortably under 500, so the
-        # repo-wide guard makes no claim about them: they stay as the tighter,
-        # topic-scoped anti-accretion proxy behind this class's load-bearing
-        # name-set assertion.
+        # 0.7.5 forward-port (neograph-55s4k, _schema_block dedup): same story --
+        # the file is 471 lines post-merge, still comfortably under 500, so this
+        # entry stays deleted. The five entries that remain are all comfortably
+        # under 500, so the repo-wide guard makes no claim about them: they stay
+        # as the tighter, topic-scoped anti-accretion proxy behind this class's
+        # load-bearing name-set assertion.
         # neograph-v569: 310 -> 445. The public standalone compile_prompt landed
         # here (its change axis) with a thorough public docstring, a shared
         # render-then-compile core (_render_and_compile, which render_prompt now

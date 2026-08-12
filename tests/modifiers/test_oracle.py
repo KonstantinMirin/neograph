@@ -33,6 +33,9 @@ from tests.fakes import (
 )
 from tests.schemas import (
     Claims,
+    ClusterGroup,
+    Clusters,
+    MatchResult,
     RawText,
 )
 
@@ -1343,6 +1346,161 @@ class TestMergePromptUpstreamContext:
 
         prompt = captured_input.get("prompt", "")
         assert "Test Site" in prompt, f"Upstream context 'Test Site' missing from programmatic merge prompt: {prompt}"
+
+    def test_merge_context_matches_the_node_prompt_for_an_each_upstream(self):
+        """One upstream, one shape — in the node's OWN prompt and in its merge prompt.
+
+        neograph-13k4i. ``_extract_fan_in_dict`` unwraps an Each-produced upstream
+        (``dict[str, X]``) into the ``list[X]`` the consumer declared;
+        ``_oracle._build_upstream_context`` reads the SAME key off the SAME bus and
+        does not, so the merge prompt saw the raw Each dict — Each's internal
+        ``map_key`` s leaking into an LLM prompt as if they were data the author
+        asked for.
+
+        Asserted as an EQUALITY between the two channels, PLUS an anchor on the
+        correct value. The equality alone is the invariant but is not sufficient
+        evidence: once both channels read through one function, deleting the
+        unwrap inside it breaks them together and the equality still holds. That
+        mutant was run and it survived, which is why the anchor is here.
+        """
+        seen: dict[str, str] = {}
+
+        class CaptureBoth:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                text = messages[0]["content"] if messages else ""
+                # tier is the discriminator: generators run on "fast", the merge on "reason".
+                seen.setdefault("merge" if self._tier == "reason" else "generator", text)
+                return self._model(text="drafted")
+
+        __llm_kw = configure_fake_llm(lambda tier: CaptureBoth(tier))
+
+        @node(mode="scripted", outputs=Clusters)
+        def gen_clusters() -> Clusters:
+            return Clusters(groups=[ClusterGroup(label="alpha", claim_ids=["1"])])
+
+        @node(mode="scripted", outputs=MatchResult, map_over="gen_clusters.groups", map_key="label")
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=["m-alpha"])
+
+        @node(
+            outputs=Draft,
+            ensemble_n=2,
+            prompt="UP<${verify}>END",
+            merge_prompt="UP<${verify}>END among ${variants}",
+            model="fast",
+        )
+        def judge(verify: list[MatchResult]) -> Draft: ...
+
+        mod = self._fresh_module("test_merge_each_ctx")
+        mod.gen_clusters = gen_clusters
+        mod.verify = verify
+        mod.judge = judge
+
+        pipeline = construct_from_module(mod, name="merge-each-ctx")
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
+        run(graph, input={"node_id": "t5"})
+
+        def _between(text: str) -> str:
+            return text.split("UP<", 1)[-1].split(">END", 1)[0]
+
+        assert "generator" in seen and "merge" in seen, f"did not capture both prompts: {sorted(seen)}"
+        gen_ctx, merge_ctx = _between(seen["generator"]), _between(seen["merge"])
+        assert merge_ctx == gen_ctx, (
+            "the same upstream reached the two channels in two shapes.\n"
+            f"  node prompt  (fan-in reader, unwrapped): {gen_ctx!r}\n"
+            f"  merge prompt (_build_upstream_context):  {merge_ctx!r}\n"
+            "The merge path re-derives the read instead of reusing the fan-in reader, "
+            "so it skips _unwrap_each_dict / _unwrap_loop_value."
+        )
+        # ...and they agree on the LIST the consumer declared, not on the raw Each
+        # dict. Without this, deleting the unwrap inside the shared reader leaves
+        # both channels equally wrong and the equality above still passes.
+        assert merge_ctx.lstrip().startswith("["), (
+            f"declared list[MatchResult], but the value rendered as a mapping — "
+            f"Each's map_key leaked into the prompt: {merge_ctx!r}"
+        )
+
+    def test_merge_context_matches_the_node_prompt_for_a_loop_upstream(self):
+        """The Loop half of the same rule — see the Each twin above.
+
+        ``read_upstream`` restores BOTH unwraps to the merge path. Each is covered
+        by the twin; without this case the Loop arm would ship on the strength of
+        'the same function does it', which is how the original divergence survived
+        review in the first place. A Loop node stores ``list[T]`` under the append
+        reducer, so the un-unwrapped merge prompt sees every iteration where the
+        node's own prompt sees the latest.
+        """
+        seen: dict[str, str] = {}
+
+        class CaptureBoth:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                text = messages[0]["content"] if messages else ""
+                seen.setdefault("merge" if self._tier == "reason" else "generator", text)
+                return self._model(text="drafted")
+
+        __llm_kw = configure_fake_llm(lambda tier: CaptureBoth(tier))
+
+        @node(mode="scripted", outputs=UpstreamContext)
+        def seed() -> UpstreamContext:
+            return UpstreamContext(site_name="pass-0", tone="terse")
+
+        # Two iterations, so the append-list holds more than one entry and the
+        # whole-list-vs-latest difference is observable at all.
+        @node(mode="scripted", outputs=UpstreamContext, loop_when=lambda v: v is None or v.site_name != "pass-2", max_iterations=5)
+        def refine(seed: UpstreamContext) -> UpstreamContext:
+            nxt = {"pass-0": "pass-1", "pass-1": "pass-2"}.get(seed.site_name, "pass-2")
+            return UpstreamContext(site_name=nxt, tone=seed.tone)
+
+        @node(
+            outputs=Draft,
+            ensemble_n=2,
+            prompt="UP<${refine}>END",
+            merge_prompt="UP<${refine}>END among ${variants}",
+            model="fast",
+        )
+        def judge(refine: UpstreamContext) -> Draft: ...
+
+        mod = self._fresh_module("test_merge_loop_ctx")
+        mod.seed = seed
+        mod.refine = refine
+        mod.judge = judge
+
+        pipeline = construct_from_module(mod, name="merge-loop-ctx")
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
+        run(graph, input={"node_id": "t6"})
+
+        def _between(text: str) -> str:
+            return text.split("UP<", 1)[-1].split(">END", 1)[0]
+
+        assert "generator" in seen and "merge" in seen, f"did not capture both prompts: {sorted(seen)}"
+        gen_ctx, merge_ctx = _between(seen["generator"]), _between(seen["merge"])
+        assert merge_ctx == gen_ctx, (
+            "the same Loop upstream reached the two channels in two shapes.\n"
+            f"  node prompt  (latest):      {gen_ctx!r}\n"
+            f"  merge prompt (whole list?): {merge_ctx!r}"
+        )
+        # ...and on the LATEST iteration, not the whole append-list. Same reason as
+        # the Each twin: the equality alone survives deleting the shared unwrap.
+        # refine's append-list is ["pass-1", "pass-2"] — "pass-0" is SEED's output on a
+        # different field, so asserting its absence would have been vacuous (the
+        # mutation run proved it: mutant-A survived that spelling).
+        assert "pass-2" in merge_ctx and "pass-1" not in merge_ctx, (
+            f"expected only the latest loop value; got the whole append-list: {merge_ctx!r}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

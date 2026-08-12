@@ -60,12 +60,10 @@ class _ExamplePromptCompiler(DefaultPromptCompiler):
     def build_vars(self, input_data: Any, **kw: Any) -> dict[str, Any]:
         vars = super().build_vars(input_data, **kw)
         # Expose the lone upstream value as ${input} (see class docstring).
-        if isinstance(input_data, dict):
-            if len(input_data) == 1:
-                key = next(iter(input_data))
-                vars.setdefault("input", vars.get(key))
-        elif isinstance(input_data, str):
-            vars.setdefault("input", input_data)
+        # input_data is always a mapping of name -> rendered text, so the shape
+        # check the two isinstance branches used to perform is gone.
+        if len(input_data) == 1:
+            vars.setdefault("input", next(iter(input_data.values())))
         return vars
 
 
@@ -155,15 +153,15 @@ def _manual_template_prompt_compiler(
     prompt_dir = Path(prompt_dir)
 
     def compiler(template: str, data: Any, **_kw: Any) -> list[dict[str, str]]:
+        # No isinstance dance. `data` is ALWAYS a mapping of name -> prompt-ready
+        # text, on every channel -- node inputs, the Oracle merge payload, a
+        # single-type input keyed by its type name. That totality is the point of
+        # neograph-l2a7w; a compiler that branches on the shape of its input is
+        # working around a seam that no longer exists.
         raw = (prompt_dir / f"{template}{extension}").read_text()
-        if isinstance(data, dict):
-            if len(data) == 1:
-                data = {**data, "input": next(iter(data.values()))}
-            content = Template(raw).safe_substitute(**data)
-        elif isinstance(data, str):
-            content = Template(raw).safe_substitute(input=data)
-        else:
-            content = raw
-        return [{"role": "user", "content": content}]
+        vars = dict(data)
+        if len(vars) == 1:
+            vars["input"] = next(iter(vars.values()))
+        return [{"role": "user", "content": Template(raw).safe_substitute(**vars)}]
 
     return compiler

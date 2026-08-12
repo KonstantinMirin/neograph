@@ -65,6 +65,9 @@ mcp-examples = [
 # [dependency-groups].dev — the ONE group `uv run pytest` installs — because having
 # both a `dev` extra and a `dev` group is what stranded pytest-asyncio (and
 # pyagentspec) outside the project's own gate. One namespace, one source of truth.
+# The identical disease recurred independently on main, which branched before this
+# fix landed — see neograph-4n48u, ported back here as a no-op (this file already
+# has the fix).
 # neograph-nkjv9: Agent Spec Property<->spec_types type-registry bridge.
 # CONSUMER-facing optional extra — src/neograph stays Agent-Spec-free by default
 # (imports of pyagentspec in spec_types.py / _agent_spec.py are function-local and
@@ -166,8 +169,14 @@ markers = [
 # [project].dependencies) — extras need an explicit `--extra` and are therefore
 # invisible to `make quality`. Every dependency the quality gate needs belongs
 # HERE, not in [project.optional-dependencies]; see neograph-x75es, where a dep
-# in the wrong namespace hid 271 tests and broke the gate outright.
+# in the wrong namespace hid 271 tests and broke the gate outright (the same
+# disease recurred independently on main as neograph-4n48u, ported back as a
+# no-op).
 dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.3",
+    "mypy>=1.8",
     "hypothesis>=6.151.12",
     "langchain>=1.0",
     "langchain-openai>=1.2.2",

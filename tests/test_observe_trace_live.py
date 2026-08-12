@@ -10,7 +10,7 @@ RUN IT (keys required; mirrors the MCP e2e harness convention — "no-network !=
 no-run", the credentials are the extra here):
 
     set -a && . .env && set +a
-    uv run --extra dev --extra langfuse pytest tests/test_observe_trace_live.py
+    uv run --extra langfuse pytest tests/test_observe_trace_live.py
 
 Without ``LANGFUSE_SECRET_KEY`` + ``LANGFUSE_PUBLIC_KEY`` the module skips. That
 skip is a KNOWN, DOCUMENTED hole, not silent coverage: the offline file is the

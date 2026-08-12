@@ -167,7 +167,9 @@ graph = compile(pipeline, llm_factory=my_factory,
                 prompt_compiler=RoleCompiler(Path("prompts"), suffix=".txt"))
 ```
 
-The other two override hooks are `load_template(template)` (swap the template source) and `build_vars(input_data, *, output_model, output_schema, di_inputs)` (change the variable namespace). Override exactly one; keep the rest.
+The other two override hooks are `load_template(template)` (swap the template source) and `build_vars(input_data, *, output_model, output_schema, di_inputs, context)` (change the variable namespace). Override exactly one; keep the rest.
+
+`build_vars` layers its namespace in order of increasing specificity — `di_inputs` (run-wide ambient), then `context` (the node's declared context fields), then the rendered upstream outputs (the node's own dataflow). On a name collision the narrower binding wins. Write an override as `build_vars(self, input_data, **kw)` and forward `**kw` to `super()`: a compiler that spells out the keyword list keeps working, but has to be edited whenever the seam grows a channel.
 
 When neither the default nor a small subclass fits, write a compiler from scratch — the next section shows the production-shaped pattern.
 
@@ -179,7 +181,7 @@ When you need more — system/user splits, JSON schema injection for structured-
 ```python
 def prompt_compiler(
     template_name: str,
-    input_data: Any,
+    input_data: PromptInput,
     *,
     node_name: str | None = None,
     config: dict | None = None,
@@ -188,13 +190,11 @@ def prompt_compiler(
     llm_config: dict | None = None,
     context: dict[str, Any] | None = None,
 ) -> list[dict]:
-    # Build template_vars from input_data + context
-    template_vars = {}
-    if isinstance(input_data, dict):
-        for k, v in input_data.items():
-            template_vars[k] = ... # custom handling per type
-    elif isinstance(input_data, str):
-        template_vars["_single_input"] = input_data
+    # Build template_vars from input_data + context.
+    # input_data is ALWAYS a mapping of name -> prompt-ready text (`PromptInput`),
+    # on every channel: node inputs, a single-type input keyed by its type name,
+    # and the Oracle merge payload. There is no shape to branch on.
+    template_vars = dict(input_data)
 
     # Forward context, inject node_id, project-specific defaults
     configurable = (config or {}).get("configurable", {})
@@ -219,6 +219,25 @@ def prompt_compiler(
         {"role": "user", "content": prompt_text},
     ]
 ```
+
+### When you need the objects, not the text
+
+Every value in `input_data` is text. If a template needs to loop over a model's
+children — `{% for c in claims %}` in one node and a flat summary in another —
+declare a `raw_inputs` parameter and you receive the underlying objects
+alongside the rendered text, keyed identically:
+
+```python
+from neograph import PromptInput
+
+def prompt_compiler(template_name, input_data: PromptInput, *, raw_inputs, **kw):
+    text  = input_data["claims"]   # always rendered text
+    model = raw_inputs["claims"]   # the object behind it, because you asked
+```
+
+Like `di_inputs` and `context`, it is introspection-gated: a compiler that does
+not declare it never receives it. Reaching for a field on a rendered value
+instead raises `PromptInputError` rather than silently yielding `""`.
 
 This is application-specific code. Neograph doesn't ship this because every project's notion of "system message," "schema injection," and "registry" is different. The pieces you compose — a template registry, a renderer for BAML-pre-rendered input, an output_schema serializer, a node-name → message-shape policy — are all yours to define.
 

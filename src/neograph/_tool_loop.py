@@ -16,7 +16,6 @@ from typing import Any, NoReturn
 
 import structlog
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel
 
 from neograph._agent_output_schema_preamble import render_output_schema_preamble
 from neograph._dsml import message_text
@@ -47,9 +46,8 @@ from neograph._tool_call_coercion import (  # noqa: E402,F401
     _unparseable_args_raw,
 )
 from neograph._usage import _usage_dict
-from neograph.describe_type import describe_value
 from neograph.errors import ConfigurationError, ExecutionError
-from neograph.renderers import Renderer
+from neograph.renderers import Renderer, to_rendered
 
 log = structlog.get_logger()
 
@@ -62,17 +60,13 @@ log = structlog.get_logger()
 def _render_tool_result_for_llm(result: Any, renderer: Renderer | None = None) -> str:
     """Render a typed tool result for the LLM's ToolMessage content.
 
-    When ``renderer`` is provided, it is used for Pydantic models and lists
-    of models.  Otherwise falls back to ``describe_value`` (BAML-style
-    notation with field descriptions as inline ``//`` comments).
-    Falls back to str() for non-Pydantic returns.
+    Delegates to ``to_rendered`` -- the ONE rendering ladder -- with this
+    channel's only genuine difference, the ``"Tool result:"`` header. Before
+    neograph-l2a7w this carried a third partial copy of the rule that ignored
+    ``render_for_prompt()``, emitted the literal ``"None"`` for a None result,
+    and shipped a Python repr for a ``dict[str, BaseModel]``.
     """
-    if isinstance(result, BaseModel) or (isinstance(result, list) and result and isinstance(result[0], BaseModel)):
-        if renderer is not None:
-            return renderer.render(result)
-        return describe_value(result, prefix="Tool result:")
-
-    return str(result)
+    return to_rendered(result, renderer, prefix="Tool result:")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

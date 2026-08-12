@@ -467,6 +467,13 @@ ProducingCall(tool_name: str, args: dict[str, Any] = <factory:dict>, producer_id
 PromptCompiler(*args, **kwargs)
 ```
 
+### PromptInput
+
+{/* test-skip: generated API signature (declaration, not runnable) */}
+```python
+PromptInput(*args, **kwargs)
+```
+
 ### RawNodeFn
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
@@ -503,6 +510,8 @@ render_inputs(input_data: 'Any', *, renderer: 'Renderer | None' = None) -> 'dict
 ```python
 render_prompt(node: 'Any', input_data: 'Any', *, config: 'RunnableConfig | None' = None, runtime: 'LlmRuntime | None' = None) -> 'str'
 ```
+
+### Rendered
 
 ### Renderer
 
@@ -765,6 +774,7 @@ NeographError (base)
   │     └── CheckpointSchemaError  — checkpoint state schema mismatch on resume
   └── ExecutionError               — runtime failures during a run
         ├── PromptVarMissing          — strict prompt placeholder had no value
+        ├── PromptInputError          — a prompt_compiler read a field off already-rendered text
         ├── StateMissingError         — required state read missed
         ├── NodeOutputError           — a node ran and produced None vs its declared output
         ├── NonIdempotentReplayError  — refused to replay a non-idempotent producing tool
@@ -773,7 +783,7 @@ NeographError (base)
 
 **`CheckpointSchemaError`** — raised when resuming from a checkpoint whose state schema fingerprint differs from the current graph. Has an `invalidated_nodes: set[str]` attribute listing which state fields changed. Only raised when `auto_resume=False`; when `auto_resume=True` (the default), `run()` automatically rewinds instead. It subclasses `ConfigurationError`, not `ExecutionError`: it fires at resume, before any node re-executes, as a precondition check on the persisted checkpoint against the current graph — a configuration mismatch you resolve with a new `thread_id` or a schema migration, not a retry of node logic.
 
-All errors are importable: `from neograph import ConstructError, CompileError, ConfigurationError, CheckpointSchemaError, ExecutionError, PromptVarMissing, NonIdempotentReplayError, ResourceExpiredError`.
+All errors are importable: `from neograph import ConstructError, CompileError, ConfigurationError, CheckpointSchemaError, ExecutionError, PromptVarMissing, PromptInputError, NonIdempotentReplayError, ResourceExpiredError`.
 
 ---
 

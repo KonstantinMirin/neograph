@@ -640,7 +640,15 @@ class TestTemplatePlaceholderLint:
         assert _predict_input_keys(n) == set()
 
     def test_predict_input_keys_single_type(self):
-        """_predict_input_keys returns empty set for single-type inputs."""
+        """A single-type input predicts its TYPE NAME for template-ref, and
+        nothing for inline.
+
+        Lockstep with neograph-l2a7w: the runtime now keys a bare value by its
+        type name (RenderedInput.for_template_ref), so predicting set() here
+        would flag a valid {A} placeholder as unresolvable on every single-type
+        think node. Inline prompts address the raw object's attributes and never
+        see the synthesized key, which is the same asymmetry flattened fields
+        already have."""
         from neograph.lint import _predict_input_keys
 
         class A(BaseModel):
@@ -651,7 +659,8 @@ class TestTemplatePlaceholderLint:
 
         # DeprecationWarning fires at Construct assembly, not Node creation
         n = Node("test", outputs=B, inputs=A)
-        assert _predict_input_keys(n) == set()
+        assert _predict_input_keys(n) == {"A"}
+        assert _predict_input_keys(n, include_flattened=False) == set()
 
     # ── render_for_prompt return annotation introspection ─────────────
 
@@ -1322,3 +1331,84 @@ class TestResourceTemplateRefColumn:
         assert len(unresolvable) == 1
         assert unresolvable[0].param == "history"
         assert [i for i in issues if i.kind == "template_var_requires_async_driver"] == []
+
+
+class TestContextTemplateRefColumn:
+    """FOURTH column of the inline/template-ref key asymmetry — neograph-ait72.
+
+    A node's declared ``context=`` field name is a VALID template-ref placeholder,
+    on the same opt-in terms as ``di_inputs``: the seam offers the channel and a
+    compiler receives it only if it declares one (or takes ``**kwargs``).
+
+    This column did not exist because until neograph-cbfd9 the channel genuinely
+    did not reach the template -- ``DefaultPromptCompiler`` swallowed it -- so
+    lint's complaint was CORRECT. Fixing the runtime turned a true positive into
+    a false one: lint kept reporting ``template_placeholder_unresolvable`` for a
+    placeholder that now resolves. That is the "lint predicts what the runtime
+    produces" disease of neograph-0h16l, arriving from the other direction.
+
+    Inline ``${var}`` prompts get NO context column: they never reach a compiler
+    at all (``_substitute_vars`` resolves against input_data alone), which is the
+    same reason they get no di_inputs and no flattened column.
+    """
+
+    def _build(self):
+        import types
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Brief(BaseModel):
+            headline: str
+
+        mod = types.ModuleType("test_ctx_lint_col_mod")
+
+        @node(outputs=Brief)
+        def brief() -> Brief:
+            return Brief(headline="x")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="use-ctx", context=["brief"])
+        def analyze() -> Claims: ...
+
+        mod.brief = brief
+        mod.analyze = analyze
+        return construct_from_module(mod)
+
+    @staticmethod
+    def _resolver(name):
+        return "Given {brief}, respond." if name == "use-ctx" else None
+
+    def _kinds(self, compiler):
+        from neograph.lint import lint
+
+        issues = lint(
+            self._build(),
+            config={"node_id": "n"},
+            template_resolver=self._resolver,
+            prompt_compiler=compiler,
+        )
+        return [i.kind for i in issues]
+
+    def test_context_field_is_a_valid_template_ref_when_compiler_accepts_context(self):
+        """ACCEPT: a compiler declaring ``context`` resolves ``{brief}``.
+
+        Proven at runtime by test_prompt_compiler.py::TestDefaultCompilerThreadsContext,
+        which runs the pipeline and reads what the model receives. This asserts lint
+        agrees with that observed behaviour instead of contradicting it.
+        """
+
+        def compiler(template, input_data, *, context=None, **kw):
+            return [{"role": "user", "content": template}]
+
+        assert "template_placeholder_unresolvable" not in self._kinds(compiler)
+
+    def test_context_field_is_unresolvable_when_compiler_ignores_context(self):
+        """REJECT: a compiler that declares neither ``context`` nor ``**kwargs``
+        never receives the channel, so the placeholder really is unresolvable —
+        exactly the pre-cbfd9 world, which is still reachable with a narrow
+        custom compiler."""
+
+        def compiler(template, input_data, *, output_model=None):
+            return [{"role": "user", "content": template}]
+
+        assert "template_placeholder_unresolvable" in self._kinds(compiler)

@@ -87,10 +87,21 @@ class TestNodeContext:
         kw = captured["with-context"]["kw"]
         assert "context" in kw, f"Expected 'context' in prompt compiler kwargs, got: {list(kw.keys())}"
         assert "build_catalog" in kw["context"]
-        # Verbatim — the raw RawText, not BAML-rendered
+        # CONTRACT CHANGE, neograph-ufqr7. This used to assert the compiler received
+        # the raw RawText model ("Verbatim — the raw RawText, not BAML-rendered"), and
+        # that was the last place a prompt channel handed a compiler a live object
+        # instead of prompt-ready text. It rested on _extract_context's cast(str, ...),
+        # which nothing validated: state types context fields Any and the validator only
+        # checks that a producer exists. So the channel was ANNOTATED as text and
+        # CARRIED models, and a user's own render_for_prompt() was ignored on it alone.
+        #
+        # What "verbatim" protects is unchanged and is pinned separately by
+        # test_a_preformatted_string_survives_byte_identical: a pre-formatted string
+        # passes through untouched, renderer or no renderer. What changed is the case
+        # where "verbatim" meant a Pydantic repr, which nobody crafted on purpose.
         ctx_val = kw["context"]["build_catalog"]
-        assert hasattr(ctx_val, "text"), f"Expected raw RawText model, got {type(ctx_val)}"
-        assert ctx_val.text == "<catalog>UC-001,UC-002,UC-003</catalog>"
+        assert isinstance(ctx_val, str), f"context should reach the compiler as text, got {type(ctx_val)}"
+        assert "<catalog>UC-001,UC-002,UC-003</catalog>" in ctx_val
 
     def test_no_context_kwarg_when_node_has_no_context(self):
         """Prompt compiler does NOT receive context when node doesn't declare it."""
@@ -171,7 +182,8 @@ class TestNodeContext:
         assert "agent-with-ctx" in captured
         kw = captured["agent-with-ctx"]["kw"]
         assert "context" in kw, f"Expected 'context' kwarg, got: {list(kw.keys())}"
-        assert kw["context"]["catalog"].text == "graph-catalog-data"
+        # neograph-ufqr7: text, not a live model -- see the sibling think-mode test.
+        assert "graph-catalog-data" in kw["context"]["catalog"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
