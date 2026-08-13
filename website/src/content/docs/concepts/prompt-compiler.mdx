@@ -250,6 +250,23 @@ def prompt_compiler(template_name, input_data, *, di_inputs, raw_di_inputs, **kw
     value = raw_di_inputs["deal_id"]  # 4822 — the int the DI resolver produced
 ```
 
+`context` completes the set: declare `raw_context` to get the typed object each
+context value was rendered *from*, for a compiler that iterates or branches on it
+rather than substituting it:
+
+```python
+def prompt_compiler(template_name, input_data, *, context, raw_context, **kw):
+    text = context["build_catalog"]     # rendered text, as the template sees it
+    model = raw_context["build_catalog"]  # the model that text was rendered from
+    n = len(model.items)
+```
+
+A model's `render_for_prompt()` override is not a substitute: it customizes the
+rendered *text*, and it is per-model rather than per-node, so it never hands the
+compiler the typed object. Note "rendered from", not "the raw state value" — a
+context field resolves through the same upstream read the rendered channel uses,
+so a `Loop`-modified upstream yields the latest element, not the loop history.
+
 This is application-specific code. Neograph doesn't ship this because every project's notion of "system message," "schema injection," and "registry" is different. The pieces you compose — a template registry, a renderer for BAML-pre-rendered input, an output_schema serializer, a node-name → message-shape policy — are all yours to define.
 
 A typical production project has roughly this structure:
@@ -305,6 +322,10 @@ You DO need one if:
 | `output_model` (kw) | `type | None` | @node's `outputs` annotation | Present for structured-output nodes |
 | `output_schema` (kw) | `str | None` | Compiled JSON schema | Present for structured-output nodes |
 | `llm_config` (kw) | `dict | None` | Merged LLM config | Present |
-| `context` (kw) | `dict | None` | @node's `context=[...]` resolutions | Present when configured |
+| `context` (kw) | `dict | None` | @node's `context=[...]` resolutions | Present when configured; rendered text |
+| `di_inputs` (kw) | `dict | None` | Resolved `FromInput`/`FromConfig` params | Present for LLM-mode nodes with DI params; rendered text |
+| `raw_inputs` (kw) | `dict` | Same source as `data` | Opt-in; the objects `data` was rendered from |
+| `raw_di_inputs` (kw) | `dict` | Same source as `di_inputs` | Opt-in; the typed values `di_inputs` was rendered from |
+| `raw_context` (kw) | `dict` | Same source as `context` | Opt-in; the objects `context` was rendered from |
 
 Your compiler can accept any subset via `**kwargs`. The protocol is forward-compatible — neograph may pass additional kwargs in future versions; your compiler keeps working.

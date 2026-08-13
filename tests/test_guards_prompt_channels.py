@@ -49,6 +49,13 @@ KNOWN_IGNORED: dict[str, str] = {
         "rendered di_inputs text. DefaultPromptCompiler renders everything itself, "
         "so NOT declaring it is the correct opt-out, not an oversight"
     ),
+    "raw_context": (
+        "opt-IN by design (neograph-ebxdg), the exact sibling of raw_inputs and "
+        "raw_di_inputs — a compiler declares raw_context to receive the typed "
+        "object each context value was rendered FROM. It is a LOGIC channel with "
+        "no template-var meaning, so DefaultPromptCompiler (which forwards only "
+        "template-var channels into build_vars) must NOT declare it"
+    ),
 }
 
 
@@ -121,6 +128,7 @@ class TestSeamChannelsAreAnswered:
             "di_inputs",
             "raw_inputs",
             "raw_di_inputs",
+            "raw_context",
         ):
             assert expected in offered, f"seam scan missed {expected!r}; found {sorted(offered)}"
 
@@ -140,14 +148,9 @@ class TestSeamChannelsAreAnswered:
 # never rendered and so have no "raw form" question at all) with no companion
 # raw_<channel> sibling giving a compiler the typed value behind the text. This
 # is exactly the shape di_inputs had until fqcm6 added raw_di_inputs.
-NO_RAW_SIBLING_ALLOWLIST: dict[str, str] = {
-    "context": (
-        "same disease, deferred separately (neograph-ebxdg) -- context's claimed "
-        "escape hatch (a model's render_for_prompt() override) only customizes "
-        "rendered TEXT, it never hands back the live object, so this is a real, "
-        "tracked gap, not a false positive"
-    ),
-}
+# The ratchet is now EMPTY (neograph-ebxdg closed the last entry, `context`).
+# It may only ever shrink: a new rendered channel gets a raw sibling, not a row here.
+NO_RAW_SIBLING_ALLOWLIST: dict[str, str] = {}
 
 
 def _rendered_channels(tree: ast.AST, seam_fn: str, seam_dict: str) -> set[str]:

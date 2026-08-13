@@ -426,7 +426,23 @@ class TestLlmResponsibilityDiscipline:
         # comment explaining the escape hatch, reusing to_raw_inputs (no new
         # renderer-layer code). The load-bearing assertion is the name
         # allowlist above.
-        "_llm_render.py": 452,
+        # neograph-ebxdg: 452 -> 467. raw_context, the LAST rendered channel to
+        # get a raw sibling -- one all_kwargs entry plus the comment recording
+        # why context's render_for_prompt() hatch does not substitute for it and
+        # what "rendered FROM" means for a Loop-modified upstream. Reuses
+        # to_raw_inputs unchanged; no renderer-layer code.
+        # WHY BUMPING THIS IS SANCTIONED, NOT A RATCHET BREACH: LINE_BUDGETS is
+        # the reviewed PROXY documented above ("not the load-bearing assertion"),
+        # and it has a history of reviewed widenings (310->445 neograph-v569,
+        # 445->452 fqcm6). The shrink-only ratchet is test_guards_file_size.py's
+        # LIMIT = 500, where _llm_render.py has NO entry and stays under it. The
+        # two are deliberately disjoint. Splitting the file to avoid the bump
+        # would be actively harmful: test_guards_prompt_channels.py hardcodes
+        # SEAM_FILE=_llm_render.py / SEAM_FN=_compile_prompt, so moving the seam
+        # breaks that AST guard's premise. Value is the exact post-edit wc -l
+        # (zero headroom, per fqcm6); trimming the comment to squeak under 452
+        # would be gaming the guard -- the comment IS the deliverable.
+        "_llm_render.py": 467,
         # neograph-ble3: new pure-leaf detection module.
         "_dsml.py": 55,
         # neograph-ble3: compat shim — sum-type + Protocol + 3 adapters + factory.

@@ -216,6 +216,21 @@ def _compile_prompt(
         # contract requires: rung 2 ESCAPES hand-crafted markup (XmlRenderer: <catalog>
         # -> &lt;catalog&gt;), and skipping it IS "bypasses the renderer dispatch chain".
         all_kwargs["context"] = to_prompt_input(context, renderer=None)
+        # Opt-in escape hatch, the exact sibling of raw_inputs
+        # above and raw_di_inputs below -- the LAST rendered channel to get one,
+        # which empties NO_RAW_SIBLING_ALLOWLIST. context stays rendered text for
+        # template substitution, but a compiler that needs a context value for
+        # LOGIC (iterate a model's children, branch on a field) rather than a
+        # `{var}` fill cannot recover it once it crosses the ladder: context's
+        # only claimed hatch, a model's render_for_prompt() override, customizes
+        # rendered TEXT and is per-MODEL, never per-NODE, so it never hands back
+        # the typed object. What this yields is "the object context[k] was
+        # rendered FROM", not the raw state value: _extract_context reads each
+        # field via read_upstream(expected_type=str), so a Loop-modified upstream
+        # gives the LATEST element, not the append-list -- exact parity with the
+        # rendered channel beside it, which is the point. to_raw_inputs is
+        # already Mapping-generic, so no renderer-layer code is needed.
+        all_kwargs["raw_context"] = to_raw_inputs(context)
     # di_inputs: the dispatch layer resolves a node's FromInput/FromConfig params
     # once and stashes them on config under DI_INPUTS (the _oracle_model-style
     # side-channel); reading here keeps DI resolution single-sourced. They share

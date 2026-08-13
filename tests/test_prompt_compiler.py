@@ -1107,6 +1107,230 @@ class TestRawDiInputsEscapeHatch:
         )
 
 
+class TestRawContextEscapeHatch:
+    """neograph-ebxdg — `context` is the last rendered channel with no typed
+    sibling. `_compile_prompt` renders THREE channels to text (`input_data`,
+    `di_inputs`, `context`); two offer the objects behind that text through an
+    opt-in raw sibling — `raw_inputs` and `raw_di_inputs` (neograph-fqcm6).
+    `context` does not.
+
+    Since neograph-ufqr7 made the context channel obey the one rendering ladder,
+    a compiler that needs a context value for LOGIC (iterate a catalog model's
+    children, branch on a field) rather than literal template substitution
+    receives a string and cannot reach the live model. `context`'s CLAIMED escape
+    hatch — a model's `render_for_prompt()` override — only customizes rendered
+    TEXT and is per-MODEL, not per-NODE, so it never hands back the typed object.
+
+    Fix: a `raw_context` channel next to `raw_di_inputs`, same opt-in shape (a
+    compiler receives it only if it declares the parameter), reusing the same
+    `to_raw_inputs`. `raw_context[k]` is the object `context[k]` was rendered
+    FROM — not "the raw state value": `_extract_context` reads through
+    `read_upstream(..., expected_type=str)`, so a Loop-modified upstream yields
+    the LATEST element, exactly as the rendered channel beside it does.
+    """
+
+    @staticmethod
+    def _capturing_compiler(calls: list) -> object:
+        def compiler(template, input_data, *, node_name="", context=None, raw_context=None, **kw):
+            calls.append({"template": template, "context": context, "raw_context": raw_context})
+            return [{"role": "user", "content": "compiled"}]
+
+        return compiler
+
+    def test_raw_context_carries_the_typed_value_behind_the_rendered_text(self):
+        import types
+
+        calls: list = []
+
+        mod = types.ModuleType("test_ebxdg_raw_context_mod")
+
+        @node(outputs=RawText)
+        def build_catalog() -> RawText:
+            return RawText(text="<catalog>UC-001,UC-002,UC-003</catalog>")
+
+        @node(
+            outputs=Claims,
+            mode="think",
+            model="fast",
+            prompt="with-context",
+            context=["build_catalog"],
+        )
+        def analyze(build_catalog: RawText) -> Claims: ...
+
+        mod.build_catalog = build_catalog
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["ok"])),
+            prompt_compiler=self._capturing_compiler(calls),
+            **build_test_compile_kwargs(),
+        )
+        run(graph, input={"node_id": "ebxdg"})
+
+        ctx_calls = [c for c in calls if c["template"] == "with-context"]
+        assert ctx_calls, "no think call captured"
+
+        ctx = ctx_calls[0]["context"] or {}
+        ctx_val = ctx.get("build_catalog")
+        assert isinstance(ctx_val, str), (
+            f"the context channel must STAY rendered text (the neograph-ufqr7 contract is "
+            f"untouched by this ticket); saw {type(ctx_val).__name__}"
+        )
+
+        raw_ctx = ctx_calls[0]["raw_context"] or {}
+        raw_val = raw_ctx.get("build_catalog")
+        assert isinstance(raw_val, RawText), (
+            f"raw_context should hand back the live model the rendered text was produced "
+            f"from, not a stringified copy; saw {raw_val!r} ({type(raw_val).__name__})"
+        )
+        assert raw_val.text == "<catalog>UC-001,UC-002,UC-003</catalog>", (
+            f"the live model's fields must be readable for LOGIC (the whole point of the "
+            f"escape hatch); saw {raw_val.text!r}"
+        )
+
+    def test_compiler_that_does_not_declare_raw_context_does_not_receive_it(self):
+        """Opt-in, same as raw_inputs/raw_di_inputs: a compiler that never asks
+        for the raw channel must not be handed it implicitly.
+
+        Explicit closed signature (no **kwargs) declaring `context` but NOT
+        `raw_context` — a compiler with a catch-all receives every channel
+        regardless (`_accepted_params` returns `_ACCEPT_ALL`), so only a
+        fully-declared signature exercises the introspection gate.
+        """
+        import types
+
+        calls: list = []
+
+        def compiler(
+            template,
+            input_data,
+            *,
+            node_name="",
+            context=None,
+            di_inputs=None,
+            config=None,
+            output_model=None,
+            output_schema=None,
+            llm_config=None,
+            raw_inputs=None,
+            raw_di_inputs=None,
+        ):
+            calls.append({"template": template})
+            return [{"role": "user", "content": "compiled"}]
+
+        mod = types.ModuleType("test_ebxdg_raw_context_optout_mod")
+
+        @node(outputs=RawText)
+        def build_catalog() -> RawText:
+            return RawText(text="<catalog>UC-001</catalog>")
+
+        @node(
+            outputs=Claims,
+            mode="think",
+            model="fast",
+            prompt="with-context",
+            context=["build_catalog"],
+        )
+        def analyze(build_catalog: RawText) -> Claims: ...
+
+        mod.build_catalog = build_catalog
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["ok"])),
+            prompt_compiler=compiler,
+            **build_test_compile_kwargs(),
+        )
+        # Must not raise a TypeError from an unexpected raw_context kwarg — the
+        # introspection gate must have filtered it out before the call.
+        run(graph, input={"node_id": "ebxdg-optout"})
+
+        ctx_calls = [c for c in calls if c["template"] == "with-context"]
+        assert ctx_calls, "no think call captured"
+
+    def test_raw_context_reaches_the_agent_cycle_compiler_too(self, tmp_path):
+        """Parity across MODES (think vs agent/act), not API surfaces: agent/act
+        nodes compile to the ReAct cycle (`_agent_cycle.py`), an independent call
+        site into the same `_compile_prompt` seam via its own `_turn_prep_kwargs`
+        pre-prep. `raw_di_inputs` needed the identical pairing for the identical
+        reason, and so does `raw_context`.
+
+        This also closes the mode axis for the RENDERED side: ufqr7's
+        `isinstance(ctx_val, str)` pin lives only in think-mode
+        (`tests/modes/test_llm_internals.py::TestNodeContext`), so the two extra
+        lines here make the guarantee symmetric across modes.
+        """
+        from neograph import DefaultPromptCompiler, Tool, construct_from_functions
+        from tests.fakes import FakeTool, ReActFake, register_tool_factory
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir(parents=True, exist_ok=True)
+        (prompts / "explore.md").write_text("Catalog: {build_catalog}\n")
+
+        base = DefaultPromptCompiler(prompts, strict=False)
+        captured: dict[str, object] = {}
+
+        def capturing_compiler(*a, context=None, raw_context=None, **kw):
+            captured["context"] = context
+            captured["raw_context"] = raw_context
+            return base(*a, context=context, **kw)
+
+        lookup = FakeTool("lookup", response="found")
+        register_tool_factory("lookup", lambda config, tool_config: lookup)
+
+        fake = ReActFake(
+            tool_calls=[
+                [{"name": "lookup", "args": {"q": "x"}, "id": "c1"}],
+                [],
+            ],
+            final=lambda m: m(items=["done"]),
+            output_model=Claims,
+        )
+
+        @node(outputs=RawText)
+        def build_catalog() -> RawText:
+            return RawText(text="<catalog>UC-001,UC-002</catalog>")
+
+        @node(
+            mode="agent",
+            outputs=Claims,
+            model="reason",
+            prompt="explore",
+            tools=[Tool(name="lookup", budget=2)],
+            context=["build_catalog"],
+        )
+        def explore(build_catalog: RawText) -> Claims: ...
+
+        graph = compile(
+            construct_from_functions("p", [build_catalog, explore]),
+            **build_test_compile_kwargs(
+                llm_factory=lambda tier: fake,
+                prompt_compiler=capturing_compiler,
+            ),
+        )
+        result = run(graph, input={"node_id": "explore"})
+
+        assert isinstance(result["explore"], Claims)
+
+        ctx = captured["context"] or {}
+        assert isinstance(ctx.get("build_catalog"), str), (
+            f"the agent-cycle context channel must STAY rendered text too (ufqr7 across "
+            f"modes); saw {type(ctx.get('build_catalog')).__name__}"
+        )
+
+        raw_ctx = captured["raw_context"] or {}
+        raw_val = raw_ctx.get("build_catalog")
+        assert isinstance(raw_val, RawText), (
+            f"agent-cycle raw_context should hand back the live model; saw {raw_val!r} "
+            f"({type(raw_val).__name__})"
+        )
+        assert raw_val.text == "<catalog>UC-001,UC-002</catalog>"
+
+
 class TestOneRenderingRule:
     """neograph-l2a7w — the properties the fix rests on, beyond the reported bug.
 

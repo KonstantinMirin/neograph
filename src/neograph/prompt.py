@@ -219,12 +219,15 @@ class DefaultPromptCompiler:
         a fail-loud compiler raised ``PromptVarMissing`` naming a var the author
         had declared, and a lenient one shipped the literal ``{brief}`` to the model.
 
-        Context values are raw MODELS today, not rendered text, so ``substitute``
-        stringifies them with ``str()`` and a Pydantic model arrives as its repr.
-        That is the CURRENT contract (``_extract_context`` reads them verbatim and
-        ``tests/modes/test_llm_internals`` pins it), not an oversight of this fix;
-        making the context channel obey the one rendering rule every other channel
-        already obeys is neograph-ufqr7.
+        Context values arrive as RENDERED TEXT: neograph-ufqr7 made this channel
+        obey the one rendering rule every other channel already obeyed, so the
+        seam hands over ``to_prompt_input(context, renderer=None)`` and
+        ``tests/modes/test_llm_internals::TestNodeContext`` pins the ``str``.
+        A compiler that needs the typed object each value was rendered FROM --
+        for LOGIC, not a ``{var}`` fill -- declares the opt-in ``raw_context``
+        kwarg, the sibling of ``raw_inputs``/``raw_di_inputs``.
+        This compiler deliberately does NOT declare it: ``build_vars`` builds a
+        template-var namespace, and ``raw_context`` has no template-var meaning.
         """
         vars: dict[str, Any] = dict(di_inputs or {})
         vars.update(context or {})
