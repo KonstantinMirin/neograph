@@ -133,7 +133,25 @@ Each hop is one superstep, so with a checkpointer every handoff is its own check
 
 ### Human-in-the-loop around a mesh
 
-An `Operator` (the human-in-the-loop gate) may NOT sit on a mesh member -- a member compiles to a `Command(goto)` wrapper with no room for an interrupt, and mixing the two is rejected at assembly. Express approval by placing the `Operator` BEFORE the mesh entry (gate the ticket before it is routed) or AFTER the mesh exit (review the resolution before it ships). The gate wraps the mesh; it does not live inside it.
+An `Operator` (the human-in-the-loop gate) MAY sit on a mesh member -- the approval pause sits ON the dynamic path, not beside it:
+
+```python
+from neograph import Operator
+
+guarded = (
+    Node.scripted("triage", fn="fn_triage", outputs=Handoff)
+    | Portal(to=["billing"], max_hops=6)
+    | Operator(when="needs_approval")
+)
+```
+
+There is no `approve=` kwarg on `Portal`; you reuse `Operator` as-is. A guarded member routes to a generated `{member}__approve` node instead of straight to its peer, and that approval node is the **only** place an `interrupt()` happens. On resume it emits the `Command(goto=...)` to the approved target.
+
+That placement is the whole point. The naive shape -- interrupting inside the member's own wrapper -- re-runs the member on resume, so its LLM and tool calls are paid for twice. Routing through a separate approval node means the member's spend happens **exactly once** across the pause and the resume, and an approved handoff costs exactly one hop against `max_hops`.
+
+A falsy predicate passes straight through without pausing, so `Operator(when=...)` gates *whether* the human is asked, not whether the node is wrapped. Leaving the mesh is unguarded: an `Operator` guards a handoff, and exiting the mesh is not a handoff.
+
+Placing the `Operator` BEFORE the mesh entry (gate the ticket before it is routed) or AFTER the mesh exit (review the resolution before it ships) still works and is the right shape when you want to gate the mesh as a whole rather than an individual handoff.
 
 ## Dynamic flow dispatch (route='decide')
 

@@ -271,3 +271,42 @@ that also carry an implementation-decision entry.
    walk) then 720→735 (T6 dispatch arm); `FUNCTION_LOCAL_IMPORT_ALLOWLIST` +1 (factory.py's
    function-local `compile` import — a real cycle from runtime-compile in mode (b)). No
    disease-pattern baselines grew.
+
+---
+
+## Addendum 2026-08-13 — D4 LIFTED (Portal + Operator is now legal)
+
+**D4 above is superseded.** It cut the combo from v1 because `_add_operator_check` appends a
+*static* post-edge that a `Command(goto)`-returning member bypasses — the gate was silently
+dropped, so v1 made the combo illegal rather than ship a false approval. The v2 path D4 named
+("raise `interrupt()` inside the keymaker wrapper") turned out to be the WRONG shape, and the
+spike that proved it is why the lift looks different from what D4 predicted.
+
+**What the spike (neograph-airpr) found.** Interrupting inside the member's own wrapper makes
+LangGraph re-enter the member on resume, so the member's LLM and tool spend is paid TWICE
+across pause+resume. Pinned failing-first in `tests/test_spike_portal_operator_approval.py`.
+
+**The shape that shipped (neograph-kdr1u).** The approval pause sits ON the dynamic path as a
+separate node, never in the member wrapper and never as a statically-appended edge:
+
+- `_wiring._add_portal_mesh` generates a `{member}__approve` node per Operator-guarded member
+  (`_wiring.py:275,290-295`), built by `factory.make_portal_approval_fn` (`factory.py:296`) so
+  the G1 `Command(` monopoly (factory.py/runner.py only) still holds.
+- `factory.py:339` is the ONLY `interrupt()` site on a guarded member's path; on resume the
+  approval node emits `Command(goto=approved_target)`.
+- Hop budget: the approval node increments ONLY on approval (`factory.py:190`), so an approved
+  handoff costs exactly one hop and a rejected one costs none.
+- `HANDOFF_END` (leaving the mesh) stays direct and unguarded — an Operator guards a *handoff*,
+  and exiting the mesh is not a handoff.
+
+**Surface.** `member | Portal(to=[...]) | Operator(when=...)` — `Operator` reused as-is, no
+`approve=` kwarg on `Portal`. A falsy predicate passes through without pausing.
+
+**Ratchet.** `tests/check_fixtures/should_fail/portal_operator_combo.py` was MOVED to
+`should_pass/` (not deleted — it now pins the lift, and says so in its header comment). Three
+new `should_fail` fixtures pin the shapes that stay illegal: `portal_operator_agent_member.py`,
+`portal_operator_construct_member.py`, `portal_operator_dispatch_mode.py`.
+
+**Status of the D-table row.** `D-NO-OPERATOR-COMBO` (= D4) reads "SHIPPED" for v1; as of this
+addendum it is SUPERSEDED-BY-KDR1U. Design + implementation sketch:
+`docs/design/portal-operator-approval-gate-2026-07-14.md`.
