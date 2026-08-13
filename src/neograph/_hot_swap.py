@@ -34,9 +34,13 @@ less path is Tier-1, a different feature. The helper raises ``ConfigurationError
 in that case rather than let the silent seam through.
 
 SCOPE BOUND: think / scripted (+ Oracle/Each/Loop/Operator modifiers) pipelines
-only. ``from_agent_spec`` fails loud on an ``AgentNode`` (agent/act mode); a
-hot-swap of an agent/act mesh awaits its importer support and is out of scope
-here — the fail-loud on import is the honest, correct bound today.
+are what this helper is PINNED for (``tests/test_hot_swap_agent_spec.py``).
+``from_agent_spec`` no longer fails loud on an ``AgentNode`` — agent/act import
+landed with neograph-aa5gq (``_agent_spec_node_import._reconstruct_agent_node``),
+so an agent/act pipeline is no longer categorically rejected on the way in. What
+remains out of scope is the DURABLE hot-swap of an agent/act mesh: nothing here
+proves a mid-ReAct-cycle rewind reuses checkpointed tool state correctly, so
+treat it as unproven rather than supported until a test pins it.
 """
 
 from __future__ import annotations
