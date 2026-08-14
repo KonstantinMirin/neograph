@@ -17,6 +17,7 @@ from typing import cast, get_args, get_origin
 
 from neograph._ir_protocols import ConstructLike
 from neograph._state_keys import StateKeys
+from neograph._validation_arms import _build_cross_arm_error
 from neograph._validation_types import (
     _MISSING,
     NodeItem,
@@ -39,6 +40,7 @@ def _check_item_input(
     item: NodeItem,
     input_type: TypeSpecStatic,
     producers: ProducerMap,
+    all_producers: ProducerMap | None = None,
 ) -> None:
     """Validate that `item.inputs` is satisfied by some upstream producer.
 
@@ -47,6 +49,13 @@ def _check_item_input(
       - No upstream producers at all (first-of-chain).
       - `dict` / non-class input types (multi-field or raw extraction).
       - Each modifier whose root segment doesn't match a known producer.
+
+    ``producers`` is the caller's VISIBLE set (arm-scoped when ``item`` is a
+    branch-arm consumer — see neograph-ftnxl.2). ``all_producers`` is an
+    optional diagnostics-only superset (every producer known anywhere in this
+    construct level, unfiltered) used SOLELY to distinguish "genuinely
+    unknown name" from "known, but not reachable from here" when building the
+    "not found" error — it never affects a pass/fail decision.
     """
     if not producers:
         # Even with no producers, reject self-referencing dict-form inputs
@@ -72,7 +81,7 @@ def _check_item_input(
         # dict is invariant; the narrowed input_type is dict[str, type] (a
         # subtype of dict[str, TypeSpecStatic] semantically but not by mypy
         # rules).
-        _check_fan_in_inputs(construct, item, cast(dict[str, TypeSpecStatic], input_type), producers)
+        _check_fan_in_inputs(construct, item, cast(dict[str, TypeSpecStatic], input_type), producers, all_producers)
         return
     # Raw dict class: inputs=dict — multi-field isinstance extraction,
     # defers to runtime.
@@ -93,7 +102,7 @@ def _check_item_input(
     ms = getattr(item, "modifier_set", None)
     each = ms.each if ms is not None else None
     if each is not None:
-        _check_each_path(construct, item, input_type, each, producers)
+        _check_each_path(construct, item, input_type, each, producers, all_producers)
         return
 
     # Plain input: any producer whose output is assignable to input_type wins.
@@ -101,7 +110,7 @@ def _check_item_input(
         if _loop_aware_compatible(p, input_type):
             return
 
-    error = _build_no_producer_error(construct, item, input_type, producers)
+    error = _build_no_producer_error(construct, item, input_type, producers, all_producers)
     raise error
 
 
@@ -110,6 +119,7 @@ def _check_fan_in_inputs(
     item: NodeItem,
     inputs_dict: dict[str, TypeSpecStatic],
     producers: ProducerMap,
+    all_producers: ProducerMap | None = None,
 ) -> None:
     """Validate a fan-in ``inputs={'name': Type, ...}`` spec against the
     producer map by upstream name (neograph-kqd.2).
@@ -173,6 +183,11 @@ def _check_fan_in_inputs(
                 item_field = field_name_for(item.name)
                 if upstream_name == item_field:
                     continue
+            if all_producers is not None and upstream_name in all_producers and upstream_name not in producers:
+                cross_arm_error = _build_cross_arm_error(
+                    construct, item, upstream_name, expected_type, producers, all_producers
+                )
+                raise cross_arm_error
             raise ConstructError.build(
                 f"declares inputs['{upstream_name}']={_fmt_type(expected_type)} "
                 f"but no upstream node named '{upstream_name}' exists",
@@ -201,6 +216,7 @@ def _check_each_path(
     input_type: TypeSpecStatic,
     each: Each,
     producers: ProducerMap,
+    all_producers: ProducerMap | None = None,
 ) -> None:
     """Resolve each.over against producers; verify it lands on list[input_type]."""
     root, segments = split_each_path(each.over)
@@ -213,6 +229,11 @@ def _check_each_path(
         if root == StateKeys.SUBGRAPH_INPUT:
             return
         known_roots = set(producers)
+        if all_producers is not None and root in all_producers and root not in producers:
+            cross_arm_error = _build_cross_arm_error(
+                construct, item, root, input_type, producers, all_producers, each_over=each.over
+            )
+            raise cross_arm_error
         raise ConstructError.build(
             f"Each(over='{each.over}') root '{root}' does not match any upstream node",
             found=f"known producers: {sorted(known_roots)}" if known_roots else "no producers available",
@@ -279,7 +300,23 @@ def _build_no_producer_error(
     item: NodeItem,
     input_type: TypeSpecStatic,
     producers: ProducerMap,
+    all_producers: ProducerMap | None = None,
 ) -> NeographError:
+    if all_producers is not None:
+        unreachable = [p for name, p in all_producers.items() if name not in producers]
+        if unreachable and any(_types_compatible(p.effective_type, input_type) for p in unreachable):
+            return ConstructError.build(
+                f"declares "
+                f"{'inputs' if isinstance(item, Node) else 'input'}="
+                f"{_fmt_type(input_type)} but the only compatible producer is on a "
+                f"branch arm this node cannot reach",
+                expected="a producer reachable on every path to this node",
+                found=f"available upstreams: {sorted(producers) or '(none)'}",
+                hint="move the producer above the branch, or have every arm produce a compatible value",
+                node=item.name,
+                construct=construct.name,
+                location=_source_location(),
+            )
     if producers:
         producer_summary = "\n".join(f"    - {p.label}: {_fmt_type(p.effective_type)}" for p in producers.values())
     else:

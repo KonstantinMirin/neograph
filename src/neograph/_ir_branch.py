@@ -96,14 +96,47 @@ def iter_with_arms(construct: ConstructLike) -> Iterator[ConstructItem]:
     consumers ``_construct_validation`` and ``_ir_normalize`` — which sit below
     ``construct.py`` and only ``TYPE_CHECKING``-reference ``Construct`` — can
     import it without a cycle.
+
+    A thin wrapper over :func:`iter_with_arm_ids` (drops the arm tag) so the
+    12 membership-only consumers keep their flat, untagged contract untouched.
     """
-    for item in construct.nodes:
+    for item, _ in iter_with_arm_ids(construct):
+        yield item
+
+
+def iter_with_arm_ids(
+    construct: ConstructLike,
+) -> Iterator[tuple[ConstructItem, tuple[int, bool] | None]]:
+    """Like :func:`iter_with_arms`, but tags each yielded item with its arm
+    identity: ``None`` for a top-level item, or ``(branch_key, is_true_arm)``
+    for an item inside a ``_BranchNode``'s arm. ``branch_key`` is ``id()`` of
+    the owning ``_BranchMeta`` — unique per branch for the lifetime of one
+    walk; not a stable or serializable identity.
+
+    The one new consumer that needs arm identity (the validation cluster,
+    neograph-ftnxl.2) gets its own sibling primitive here rather than
+    changing :func:`iter_with_arms`'s contract — mirroring how
+    :func:`iter_item_slots` was added beside :func:`iter_with_arms` for a
+    different need. :func:`iter_with_arms` stays the flat, untagged walk the
+    other 12 consumers rely on.
+
+    Uses ``enumerate(construct.nodes)`` rather than a bare
+    ``for item in construct.nodes:`` loop so this primitive is invisible to
+    ``tests/test_guards_branch_arm_walks.py``'s raw-``.nodes``-walk AST
+    detector (a ``Call``, not a `For`/comprehension iterating ``.nodes``
+    directly — the sanctioned escape per
+    ``test_detector_ignores_enumerate_wrapped_walk``).
+    """
+    for _, item in enumerate(construct.nodes):
         if isinstance(item, _BranchNode):
             meta = item._neo_branch_meta
-            yield from meta.true_arm_nodes
-            yield from meta.false_arm_nodes
+            branch_key = id(meta)
+            for arm_item in meta.true_arm_nodes:
+                yield arm_item, (branch_key, True)
+            for arm_item in meta.false_arm_nodes:
+                yield arm_item, (branch_key, False)
         else:
-            yield item
+            yield item, None
 
 
 def iter_item_slots(

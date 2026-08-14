@@ -32,11 +32,12 @@ from enum import Enum
 import structlog
 
 from neograph._fan_agent import raise_if_unsupported_fan_over_agent
-from neograph._ir_branch import iter_with_arms
+from neograph._ir_branch import iter_with_arm_ids
 from neograph._ir_protocols import ConstructLike
 from neograph._normalize import _declared_output
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._state_keys import StateKeys
+from neograph._validation_arms import ArmScopedProducers
 from neograph._validation_inputs import _check_item_input
 from neograph._validation_modifiers import (
     _validate_merge_hooks,
@@ -127,28 +128,21 @@ def _validate_node_chain(
     pass will re-walk this sub-construct ``IN_CONTEXT`` with ambient supplied.
     """
     mode = ValidationMode.STANDALONE if ambient_producers is None else ValidationMode.IN_CONTEXT
-    producers: ProducerMap = OrderedDict()
+    # Arm-scoped producer bookkeeping (neograph-ftnxl.2): a Branch's two arms
+    # are mutually exclusive at runtime, so a producer registered by one arm
+    # must not be visible to the other arm or to anything after the join, by
+    # NAME. See _validation_arms.py's module docstring for the full design
+    # (including why the construct.output boundary check is the one
+    # TYPE-based exception).
+    arms = ArmScopedProducers(construct.output)
+    arms.seed_subgraph_input(construct.input, construct.name)
 
-    # The Construct's own input port is the first producer, if declared —
-    # used by inner nodes that read from `neo_subgraph_input`.
-    if construct.input is not None:
-        producers[StateKeys.SUBGRAPH_INPUT] = Producer(
-            field_name=StateKeys.SUBGRAPH_INPUT,
-            effective_type=construct.input,
-            label=f"construct '{construct.name}' input port",
-        )
-
-    # iter_with_arms expands _BranchNode sentinels into their arm items so a
-    # bare arm Node is producer-registered and input-type-validated at the
-    # parent level (arm Constructs self-validate via the recursion below, as
-    # before). Registering a conditional arm output as a parent-scope producer
-    # is intentional: it matches the state field compile_state_model actually
-    # creates for that arm node. Cross-arm leakage (a false-arm node reading a
-    # true-arm output) is NOT caught here — arms are flattened without recording
-    # which arm each producer belongs to; this is a documented limitation, not a
-    # regression (it was uncaught before this walk saw arm nodes at all). See
-    # neograph-vn5f (site 1).
-    for item in iter_with_arms(construct):
+    # iter_with_arm_ids expands _BranchNode sentinels into their arm items,
+    # tagged with (branch_id, is_true_arm) so a bare arm Node is
+    # producer-registered and input-type-validated ARM-SCOPED (arm
+    # Constructs self-validate via the recursion below, as before).
+    for item, arm_key in iter_with_arm_ids(construct):
+        visible_producers = arms.visible_for(arm_key)
         # Fail loud, first: a fan (Each/Oracle/Loop) modifier over an agent/act
         # node is only supported for Oracle over a self-contained agent (the
         # compiler auto-wraps that into an isolated sub-construct). Every other
@@ -168,7 +162,7 @@ def _validate_node_chain(
         if input_type is not None:
             # Warn on single-type inputs (isinstance scan) — dict-form is safer.
             if (
-                isinstance(item, Node) and not isinstance(input_type, dict) and producers  # not the first node
+                isinstance(item, Node) and not isinstance(input_type, dict) and visible_producers  # not the first node
             ):
                 import warnings
 
@@ -181,7 +175,7 @@ def _validate_node_chain(
                     DeprecationWarning,
                     stacklevel=2,
                 )
-            _check_item_input(construct, item, input_type, producers)
+            _check_item_input(construct, item, input_type, visible_producers, arms.all_producers)
 
         # Validate context= references against ambient (parent) + local producers.
         # When walked STANDALONE on a sub-construct (ambient is None and
@@ -189,7 +183,7 @@ def _validate_node_chain(
         # parent's recursive call will re-validate IN_CONTEXT with ambient.
         context_checkable = mode is ValidationMode.IN_CONTEXT or construct.input is None
         if isinstance(item, Node) and item.context and context_checkable:
-            known_fields = set(ambient_producers or ()) | set(producers)
+            known_fields = set(ambient_producers or ()) | set(visible_producers)
             for ctx_name in item.context:
                 ctx_field = field_name_for(ctx_name)
                 if ctx_field not in known_fields:
@@ -205,7 +199,7 @@ def _validate_node_chain(
         # The TypeGuard narrows `item` to ConstructLike — no untyped cast.
         if _is_construct_like(item) and context_checkable:
             ambient_for_recursion: ProducerMap = OrderedDict(ambient_producers or {})
-            ambient_for_recursion.update(producers)
+            ambient_for_recursion.update(visible_producers)
             _validate_node_chain(
                 item,
                 ambient_producers=ambient_for_recursion,
@@ -225,21 +219,29 @@ def _validate_node_chain(
                     # Per-key modifier rule via the single source of truth —
                     # the same helper the whole-node producer path uses.
                     producer_type = effective_producer_type_for(key_type, item.modifier_set)
-                    producers[key_field] = Producer(
-                        field_name=key_field,
-                        effective_type=producer_type,
-                        label=key_label,
-                        is_loop=item.modifier_set.loop is not None,
+                    arms.register(
+                        key_field,
+                        Producer(
+                            field_name=key_field,
+                            effective_type=producer_type,
+                            label=key_label,
+                            is_loop=item.modifier_set.loop is not None,
+                        ),
+                        arm_key,
                     )
             else:
                 label = f"node '{name}'" if isinstance(item, Node) else f"sub-construct '{name}'"
                 item_modifier_set = getattr(item, "modifier_set", None)
                 # Shared helper decides the modifier-adjusted state-bus type.
-                producers[field_name] = Producer(
-                    field_name=field_name,
-                    effective_type=effective_producer_type(item),
-                    label=label,
-                    is_loop=item_modifier_set is not None and item_modifier_set.loop is not None,
+                arms.register(
+                    field_name,
+                    Producer(
+                        field_name=field_name,
+                        effective_type=effective_producer_type(item),
+                        label=label,
+                        is_loop=item_modifier_set is not None and item_modifier_set.loop is not None,
+                    ),
+                    arm_key,
                 )
 
             # Portal DISPATCH (route="decide", design §4.2): besides its own
@@ -255,10 +257,14 @@ def _validate_node_chain(
                     if isinstance(resolved, str):
                         resolved = lookup_type(resolved)
                     dispatch_field = output_field_name(field_name, "dispatch")
-                    producers[dispatch_field] = Producer(
-                        field_name=dispatch_field,
-                        effective_type=resolved,
-                        label=f"node '{name}' dispatch result",
+                    arms.register(
+                        dispatch_field,
+                        Producer(
+                            field_name=dispatch_field,
+                            effective_type=resolved,
+                            label=f"node '{name}' dispatch result",
+                        ),
+                        arm_key,
                     )
 
         # Loop + skip_when without skip_value is surprising.
@@ -296,7 +302,7 @@ def _validate_node_chain(
                 if meta is not None and meta[1]:
                     _, merge_param_res = meta
                     item_field = field_name_for(item.name)
-                    known_producers = {p.field_name: (p.effective_type, p.label) for p in producers.values()}
+                    known_producers = {p.field_name: (p.effective_type, p.label) for p in visible_producers.values()}
                     for pname, binding in merge_param_res.items():
                         if binding.kind != _DIKind.FROM_STATE:
                             continue
@@ -344,6 +350,11 @@ def _validate_node_chain(
             if oracle is not None and oracle.merge_prompt is not None:
                 _validate_merge_hooks(oracle, item, construct.name)
 
+    # Flush any branch still open when the walk ends (the last top-level item
+    # was a _BranchNode) so arms.output_reachable_on_every_arm reflects it
+    # before the output-boundary check below reads it.
+    arms.finalize()
+
     # Portal mesh rules (design §5): a single end-of-walk helper enforces every
     # mesh assembly rule for this construct level (peers, contiguity, single mesh,
     # uniform payload, route field, reserved-key typing, entry-only knobs). Runs
@@ -353,16 +364,21 @@ def _validate_node_chain(
     _check_portal_dispatch_error_handler(construct)
 
     # Sub-construct output boundary contract: if construct.output is declared,
-    # at least one internal node must produce a compatible type.
+    # at least one internal node must produce a compatible type — either
+    # unconditionally (a top-level producer in `arms.producers`) or on EVERY
+    # arm of some branch (arms.output_reachable_on_every_arm; neograph-ftnxl.2
+    # — see _validation_arms.py for why differently-named arm producers are
+    # the reachable shape there, unlike the name-based fan-in checks above).
     # Exclude neo_subgraph_input — the input port is NOT a valid producer
     # for the output contract.
-    if construct.output is not None and producers:
+    if construct.output is not None and (arms.producers or arms.output_reachable_on_every_arm):
         declared_output = construct.output
-        internal_producers = [p for p in producers.values() if p.field_name != StateKeys.SUBGRAPH_INPUT]
-        for p in internal_producers:
-            if p.effective_type is not None and _types_compatible(p.effective_type, declared_output):
-                break
-        else:
+        internal_producers = [p for p in arms.producers.values() if p.field_name != StateKeys.SUBGRAPH_INPUT]
+        satisfied = arms.output_reachable_on_every_arm or any(
+            p.effective_type is not None and _types_compatible(p.effective_type, declared_output)
+            for p in internal_producers
+        )
+        if not satisfied:
             producer_summary = "\n".join(
                 f"    - {p.label}: {_fmt_type(p.effective_type)}"
                 for p in internal_producers

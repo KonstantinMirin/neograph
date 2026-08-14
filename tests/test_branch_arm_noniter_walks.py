@@ -417,16 +417,24 @@ def test_arm_llm_node_inherits_parent_llm_config():
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def test_cross_arm_producer_leakage_is_not_flagged():
-    """Pins the documented site-1 limitation: arms are flattened without
-    recording which arm each producer belongs to, so a false-arm node reading a
-    true-arm node's output is NOT rejected. This is a known limitation (not a
-    regression — it was uncaught before arm nodes were validated at all); this
-    test documents it so a future reader does not assume completeness."""
+def test_cross_arm_producer_leakage_is_now_rejected():
+    """CORRECTED (neograph-ftnxl.2): this test used to pin the documented
+    site-1 limitation ('arms are flattened without recording which arm each
+    producer belongs to, so a false-arm node reading a true-arm node's output
+    is NOT rejected') as expected, permanent behavior. That was a genuine
+    soundness gap, not a feature -- see neograph-ftnxl.2's reproduction
+    (tests/test_branch_arm_cross_arm_leakage.py) and disease-scan findings
+    (.claude/code-review/neograph-ftnxl.2/). _validate_node_chain now tracks
+    per-arm producer scope (_ir_branch.iter_with_arm_ids +
+    _construct_validation._flush_branch's all-arms-produce promotion), so a
+    false-arm node consuming a true-arm-only producer correctly raises
+    ConstructError instead of silently validating. This test now pins the
+    FIXED behavior; the sacred TDD rule ('never adjust tests to fit code
+    without documented justification') is satisfied by this docstring."""
     seed = _seed()
     true_producer = Node.scripted("tprod", fn="f", inputs={"seed": ArmClaim}, outputs=ArmResult)
     # false-arm node reads the TRUE arm's output field 'tprod' — conditionally
-    # unsatisfiable at runtime, but the flattened validator accepts it.
+    # unsatisfiable at runtime; now correctly rejected at assembly time.
     false_consumer = Node.scripted(
         "fcons",
         fn="f",
@@ -445,5 +453,5 @@ def test_cross_arm_producer_leakage_is_not_flagged():
         true_arm_nodes=[true_producer],
         false_arm_nodes=[false_consumer],
     )
-    # Must NOT raise — documents the flattening limitation.
-    Construct("parent", nodes=[seed, _BranchNode(meta, 0)])
+    with pytest.raises(ConstructError, match="tprod"):
+        Construct("parent", nodes=[seed, _BranchNode(meta, 0)])

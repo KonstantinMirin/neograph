@@ -1463,7 +1463,17 @@ class TestBranchArmContextFields:
         # branch-arm nodes validate their context= like top-level and non-arm
         # sub-construct nodes); the deferred-context sub-construct form is the
         # scenario where compile_state_model's arm-context-field path applies.
-        pipeline = Construct("ctx-test", input=Draft, output=RawText, nodes=[seed_node, branch])
+        #
+        # NO output= here (CORRECTED, neograph-ftnxl.2): the original fixture
+        # declared output=RawText, satisfied only by ctx_node in the TRUE arm
+        # while false_arm_nodes=[] produces nothing — genuinely unsound (the
+        # boundary is not guaranteed on the false path) but silently accepted
+        # pre-fix because the old flat producer map didn't distinguish which
+        # arm a producer came from. The fixed, arm-scoped output-boundary
+        # check correctly rejects it now. output= plays no role in what this
+        # test actually asserts (compile_state_model's context-field
+        # creation), so it is dropped rather than papered over.
+        pipeline = Construct("ctx-test", input=Draft, nodes=[seed_node, branch])
         state_model = compile_state_model(pipeline)
 
         # Context field should be created
@@ -1515,7 +1525,13 @@ class TestBranchArmContextFields:
         # Sub-construct (input=) so arm-node context= is forwarded from the parent
         # rather than requiring a local producer — see the companion test above
         # (neograph-vn5f made branch-arm context validate like top-level nodes).
-        pipeline = Construct("ccs-test", input=Draft, output=SubOutput, nodes=[seed_node, branch])
+        #
+        # NO output= here (CORRECTED, neograph-ftnxl.2) — see the companion
+        # test above for why: output=SubOutput was satisfied only by the TRUE
+        # arm's `sub` while false_arm_nodes=[] produces nothing, genuinely
+        # unsound and now correctly rejected by the arm-scoped boundary
+        # check. Not needed for this test's actual assertions.
+        pipeline = Construct("ccs-test", input=Draft, nodes=[seed_node, branch])
         state_model = compile_state_model(pipeline)
 
         # Node's context should be present, Construct's internal context should NOT

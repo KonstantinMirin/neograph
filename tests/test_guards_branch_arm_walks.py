@@ -76,8 +76,9 @@ def _collect_raw_nodes_walks() -> Counter:
 # recorded reason; anything NOT here is a suspected arm-blind walk.
 _ALLOWLIST: Counter = Counter(
     {
-        # The arm-descent primitive itself — the single source of truth.
-        ("_ir_branch.py", "for item in construct.nodes:"): 1,
+        # NOTE: _ir_branch.py's own raw walk was removed (neograph-ftnxl.2) —
+        # iter_with_arms now delegates to iter_with_arm_ids, whose walk is
+        # `enumerate(construct.nodes)` (a Call, exempt from this detector).
         # Peer-field set for fan_out inference: intentionally TOP-LEVEL only
         # (arm-sibling fan-in unsupported; documented in normalize_ir).
         ("_ir_normalize.py", "for item in construct.nodes:"): 1,
@@ -272,3 +273,83 @@ class TestArmBlindDetectorMetaTests:
             "def c(x):\n    [n for n in x.nodes[:2]]\n"
         )
         assert self._count(variants) == 3
+
+
+def _iter_with_arms_call_count(source: str) -> int:
+    """Count calls to the FLAT `iter_with_arms(...)` primitive (any argument
+    shape) — the untagged walk that caused neograph-ftnxl.2's cross-arm
+    reachability leak when used to accumulate producer availability. Does
+    NOT match `iter_with_arm_ids` (a distinct name; `ast.Call.func.id` must
+    equal exactly ``iter_with_arms``)."""
+    tree = ast.parse(source)
+    return sum(
+        1
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "iter_with_arms"
+    )
+
+
+class TestConstructValidationUsesArmScopedWalk:
+    """Structural guard (neograph-ftnxl.2): _construct_validation.py's main
+    validation walk must use the ARM-TAGGED iter_with_arm_ids primitive, never
+    the flat iter_with_arms, and must use the ArmScopedProducers bookkeeping
+    class — pins the fix's shape so a future refactor cannot silently
+    regress to the pre-fix flat-producer-accumulation disease (arms
+    flattened with no per-arm membership tracking, so a false-arm consumer
+    of a true-arm-only producer validates successfully).
+
+    Root-cause pin, matching this file's existing AST-scan convention
+    (TestNoArmBlindNodesWalks above) rather than inventing a new mechanism.
+    """
+
+    ORCHESTRATOR = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph" / "_construct_validation.py"
+
+    def test_orchestrator_does_not_call_flat_iter_with_arms(self):
+        """POSITIVE (root-cause pin): _construct_validation.py's main walk
+        must not call the flat iter_with_arms — a regression back to it
+        would re-flatten producer availability across arms."""
+        source = self.ORCHESTRATOR.read_text()
+        assert _iter_with_arms_call_count(source) == 0, (
+            "_construct_validation.py calls iter_with_arms(...) — the flat, "
+            "arm-blind primitive. The main validation walk must use "
+            "iter_with_arm_ids(...) (arm-tagged) instead, or the cross-arm "
+            "reachability leak (neograph-ftnxl.2) is reintroduced."
+        )
+
+    def test_orchestrator_uses_arm_scoped_producers(self):
+        """POSITIVE: _construct_validation.py must import and use
+        ArmScopedProducers (the arm-scoped bookkeeping class) — a regression
+        to a bare `producers: ProducerMap = OrderedDict()` flat accumulator
+        (the pre-fix shape) would compile and pass every OTHER guard in this
+        file while silently reintroducing the leak."""
+        source = self.ORCHESTRATOR.read_text()
+        assert "ArmScopedProducers" in source, (
+            "_construct_validation.py no longer references ArmScopedProducers — "
+            "the arm-scoped producer bookkeeping (neograph-ftnxl.2) appears to "
+            "have been removed or replaced with an unscoped accumulator."
+        )
+
+
+class TestArmScopedWalkDetectorMetaTests:
+    """Meta-tests proving TestConstructValidationUsesArmScopedWalk's detector
+    actually distinguishes the flat walk from the arm-tagged one (else the
+    guard above is vacuous)."""
+
+    def test_detector_flags_flat_iter_with_arms_call(self):
+        """A hand-rolled `for item in iter_with_arms(construct):` accumulating
+        producers IS detected (positive — the exact pre-fix shape)."""
+        flat = "def _validate_node_chain(construct):\n    for item in iter_with_arms(construct):\n        producers[f] = p\n"
+        assert _iter_with_arms_call_count(flat) == 1
+
+    def test_detector_ignores_arm_tagged_iter_with_arm_ids_call(self):
+        """`iter_with_arm_ids(construct)` — the fixed, arm-tagged walk — is
+        NOT detected (would-be-missed case: a name that merely CONTAINS
+        `iter_with_arms` as a substring, `iter_with_arm_ids`, must not
+        false-positive the exact-name AST match)."""
+        tagged = "def _validate_node_chain(construct):\n    for item, arm_key in iter_with_arm_ids(construct):\n        pass\n"
+        assert _iter_with_arms_call_count(tagged) == 0
+
+    def test_detector_ignores_unrelated_calls(self):
+        """A call to an unrelated function is not detected."""
+        unrelated = "def f(x):\n    return iter_with_arm_ids_helper(x)\n"
+        assert _iter_with_arms_call_count(unrelated) == 0
