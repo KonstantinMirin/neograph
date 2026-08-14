@@ -27,13 +27,13 @@ from neograph import _llm, _output_classify
 from neograph._config_carrier import _with_configurable
 from neograph._llm_render import _is_inline_prompt
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
-from neograph._normalize import NormalizedOutputs, normalize_outputs
+from neograph._normalize import NormalizedOutputs, resolve_primary_output
 from neograph._run_cache import aget_or_build
 from neograph._sidecar import _get_param_res
 from neograph._state_keys import StateKeys
 from neograph.di import DI_TEMPLATE_KINDS, DIKind
 from neograph.errors import ConfigurationError, ExecutionError
-from neograph.node import Node, TypeSpecStatic
+from neograph.node import Node
 from neograph.renderers import build_rendered_input
 
 
@@ -375,25 +375,11 @@ def _render_input(
     return ri.for_template_ref
 
 
-def _resolve_primary_output(node: Node) -> tuple[TypeSpecStatic, str | None]:
-    """Resolve the LLM output model and primary key for dict-form outputs.
-
-    For dict-form outputs, the LLM produces the primary type (first key).
-    Secondary outputs (e.g. tool_log) are framework-collected.
-
-    When ``node.oracle_gen_type`` is set (Oracle with type-transforming merge_fn),
-    the generator type overrides ``node.outputs`` — the LLM should produce the
-    per-variant type, not the post-merge type.
-
-    Returns (output_model, primary_key) where primary_key is None for
-    single-type outputs.
-    """
-    # Oracle generator type override: merge_fn transforms A -> B, generators produce A.
-    if node.oracle_gen_type is not None:
-        return node.oracle_gen_type, None
-
-    no = normalize_outputs(node.outputs)
-    return no.primary, no.primary_key
+# Relocated to _normalize.py (neograph-ftnxl.17) so _llm_render.py -- which
+# _dispatch.py already imports FROM -- can reach the ONE canonical resolver
+# without a module-level import cycle. Re-exported here under the original
+# private name so _agent_cycle.py's existing import keeps resolving.
+_resolve_primary_output = resolve_primary_output
 
 
 def _dispatch_for_mode(

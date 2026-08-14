@@ -2554,3 +2554,88 @@ class TestContainerRendering:
         # neograph-l2a7w: a scalar dict has no describe_value folding, so it takes
         # the coercion rung rather than passing through as a live dict.
         assert out["meta"] == "{'a': 1, 'b': 2}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# render_prompt() / _dispatch._resolve_primary_output output-model parity
+# (neograph-ftnxl.17)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestRenderPromptOutputModelParity:
+    """render_prompt()'s output-model resolution must agree with the real
+    dispatch path's _resolve_primary_output -- otherwise compile_prompt()'s
+    advertised in-/out-of-graph parity is false for dict-form-outputs and
+    Oracle (oracle_gen_type) nodes.
+    """
+
+    def test_render_prompt_diverges_from_dispatch_for_dict_form_outputs(self):
+        from neograph._dispatch import _resolve_primary_output
+        from neograph._llm import render_prompt
+        from tests.fakes import build_fake_runtime
+
+        compiler_kwargs = []
+
+        def tracking_compiler(template, data, **kw):
+            compiler_kwargs.append(kw)
+            return [{"role": "user", "content": "test"}]
+
+        n = Node(
+            name="dict-form-node",
+            mode="think",
+            outputs={"result": Claims, "tool_log": list},
+            model="fast",
+            prompt="test",
+        )
+
+        render_prompt(n, "hi", runtime=build_fake_runtime(prompt_compiler=tracking_compiler))
+        rendered_output_model = compiler_kwargs[0]["output_model"]
+
+        dispatch_output_model, _primary_key = _resolve_primary_output(n)
+
+        # BUG: render_prompt passes the raw dict-form node.outputs (unresolved)
+        # to the compiler, while the real dispatch path resolves it down to the
+        # primary type (Claims) via normalize_outputs. These currently disagree.
+        assert rendered_output_model == dispatch_output_model, (
+            f"render_prompt resolved output_model={rendered_output_model!r} but the real "
+            f"dispatch path (_resolve_primary_output) resolves {dispatch_output_model!r} for "
+            "the SAME dict-form-outputs node -- compile_prompt()'s in-/out-of-graph parity "
+            "is broken (neograph-ftnxl.17)."
+        )
+
+    def test_render_prompt_diverges_from_dispatch_for_oracle_gen_type_override(self):
+        from neograph._dispatch import _resolve_primary_output
+        from neograph._llm import render_prompt
+        from tests.fakes import build_fake_runtime
+        from tests.schemas import RawText
+
+        compiler_kwargs = []
+
+        def tracking_compiler(template, data, **kw):
+            compiler_kwargs.append(kw)
+            return [{"role": "user", "content": "test"}]
+
+        n = Node(
+            name="oracle-gen-node",
+            mode="think",
+            outputs=Claims,
+            oracle_gen_type=RawText,
+            model="fast",
+            prompt="test",
+        )
+
+        render_prompt(n, "hi", runtime=build_fake_runtime(prompt_compiler=tracking_compiler))
+        rendered_output_model = compiler_kwargs[0]["output_model"]
+
+        dispatch_output_model, _primary_key = _resolve_primary_output(n)
+
+        # BUG: render_prompt ignores oracle_gen_type entirely and reports the
+        # post-merge declared type (Claims), while dispatch overrides to the
+        # per-variant generator type (RawText) that the LLM is actually asked
+        # to produce.
+        assert rendered_output_model == dispatch_output_model, (
+            f"render_prompt resolved output_model={rendered_output_model!r} but the real "
+            f"dispatch path (_resolve_primary_output) resolves {dispatch_output_model!r} "
+            "(the oracle_gen_type override) for the SAME node -- compile_prompt()'s "
+            "in-/out-of-graph parity is broken (neograph-ftnxl.17)."
+        )

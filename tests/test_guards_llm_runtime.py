@@ -448,7 +448,12 @@ class TestLlmResponsibilityDiscipline:
         # breaks that AST guard's premise. Value is the exact post-edit wc -l
         # (zero headroom, per fqcm6); trimming the comment to squeak under 452
         # would be gaming the guard -- the comment IS the deliverable.
-        "_llm_render.py": 467,
+        # neograph-ftnxl.17: 467 -> 471. render_prompt's output-model resolution
+        # now routes through resolve_primary_output (_normalize.py) instead of a
+        # raw getattr(node, "outputs", None), which diverged from the real
+        # dispatch path for dict-form/oracle_gen_type nodes; a cast (mirroring
+        # _dispatch.py's own pattern) resolves the mypy type gap.
+        "_llm_render.py": 471,
         # neograph-ble3: new pure-leaf detection module.
         "_dsml.py": 55,
         # neograph-ble3: compat shim — sum-type + Protocol + 3 adapters + factory.

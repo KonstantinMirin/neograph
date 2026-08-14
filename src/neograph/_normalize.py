@@ -97,6 +97,33 @@ def normalize_outputs(outputs: Any) -> NormalizedOutputs:
     )
 
 
+def resolve_primary_output(node: Node) -> tuple[TypeSpecStatic, str | None]:
+    """Resolve the LLM output model and primary key for dict-form outputs.
+
+    For dict-form outputs, the LLM produces the primary type (first key).
+    Secondary outputs (e.g. tool_log) are framework-collected.
+
+    When ``node.oracle_gen_type`` is set (Oracle with type-transforming merge_fn),
+    the generator type overrides ``node.outputs`` -- the LLM should produce the
+    per-variant type, not the post-merge type.
+
+    Returns (output_model, primary_key) where primary_key is None for
+    single-type outputs.
+
+    Relocated from ``_dispatch.py`` (neograph-ftnxl.17) so a sibling module
+    that must NOT import ``_dispatch.py`` (``_llm_render.py`` -- ``_dispatch.py``
+    already imports FROM it, so the reverse import would cycle) can reach the
+    ONE canonical resolver instead of re-deriving it via raw ``node.outputs``
+    access.
+    """
+    # Oracle generator type override: merge_fn transforms A -> B, generators produce A.
+    if node.oracle_gen_type is not None:
+        return node.oracle_gen_type, None
+
+    no = normalize_outputs(node.outputs)
+    return no.primary, no.primary_key
+
+
 def normalize_inputs(inputs: Any) -> NormalizedInputs:
     """Discriminate ``Node.inputs`` into a normalized view.
 

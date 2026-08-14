@@ -10,7 +10,7 @@ here.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from langchain_core.runnables import RunnableConfig
@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from neograph._image import resolve_image
 from neograph._llm_config import LlmConfig, _coerce_llm_config
 from neograph._llm_runtime import _ACCEPT_ALL, EMPTY_RUNTIME, LlmRuntime
+from neograph._normalize import resolve_primary_output
 from neograph._placeholders import DOLLAR_RE as _VAR_RE
 from neograph._placeholders import apply_scanner
 from neograph._rendered import assert_prompt_input_total
@@ -426,7 +427,10 @@ def render_prompt(
     output_schema = None
     cfg = _coerce_llm_config(getattr(node, "llm_config", None))
     strategy = cfg.output_strategy
-    output_model = getattr(node, "outputs", None)
+    # neograph-ftnxl.17: canonical resolver, not raw node.outputs; cast mirrors
+    # _dispatch.py's own established pattern (think mode always resolves concrete).
+    raw_output_model, _primary_key = resolve_primary_output(node)
+    output_model = cast("type[BaseModel] | None", raw_output_model)
     if strategy == "json_mode" and output_model is not None:
         output_schema = describe_type(output_model)
 
