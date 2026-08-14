@@ -44,6 +44,7 @@ from neograph.decorators import (
     node,
 )
 from neograph.describe_type import (
+    Carried,
     ExcludeFromOutput,
     describe_type,
     describe_value,
@@ -171,6 +172,7 @@ __all__ = [
     "describe_value",
     "type_display_name",
     "ExcludeFromOutput",
+    "Carried",
     # Prompt inspection
     "render_prompt",
     "compile_prompt",

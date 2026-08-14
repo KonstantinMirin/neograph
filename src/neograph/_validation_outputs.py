@@ -1,0 +1,188 @@
+"""Assembly-time validation for output-field markers (neograph-ftnxl.4).
+
+Joins the validation cluster (``VALIDATION_CLUSTER`` in
+``tests/test_guards_assembly.py``) as the sibling of ``_validation_arms.py`` --
+same shape, different concern: this owns the SCOPE FENCE and the depth-0-only
+restriction for ``Carried``/``ExcludeFromOutput`` markers, wired into
+``_validate_node_chain`` via one delegating call, the exact
+``_check_portal_mesh`` precedent.
+
+Four rejections, all fail-loud ``ConstructError`` at assembly time (never a
+silent pass-through to a runtime surprise):
+
+1. A ``Carried`` path whose root is not a name the node itself declares (a
+   ``node.inputs`` key or a ``_param_res`` DI param name) -- the SCOPE FENCE.
+   Where the root is not statically resolvable (single-form ``inputs=``, an
+   opaque ``FromConfig`` type), this defers to the runtime check honestly --
+   it does not overclaim compile-time coverage.
+2. A ``Carried``/``ExcludeFromOutput`` marker on a NESTED (depth > 0) model
+   field -- ``project_output_model`` only strips depth 0; a nested marker
+   would strip from the rendered text while staying demanded by the
+   validating schema with no splice to fill it, one level down.
+3. A ``Carried`` marker on an agent/act node's output model -- that seam
+   strips text (``_agent_output_schema_preamble.py``) with no splice
+   mechanism at all.
+4. A ``Carried`` root whose producer is Each/Loop-modified -- the producer's
+   actual runtime value shape (``dict[str, X]`` / an append-list) is not what
+   a flat splice expects; read via ``effective_producer_type`` (this
+   project's single source of truth for modifier-aware type effects), never a
+   second hand-rolled modifier check.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from neograph._ir_branch import iter_with_arms
+from neograph._normalize import _declared_output
+from neograph._output_classify import output_markers
+from neograph._validation_types import effective_producer_type
+from neograph.errors import ConstructError
+from neograph.naming import field_name_for
+from neograph.node import Node
+
+if TYPE_CHECKING:
+    from neograph._ir_protocols import ConstructLike
+
+
+def _output_model_of(item: Any) -> type[Any] | None:
+    output = _declared_output(item)
+    if isinstance(output, dict):
+        return None  # dict-form outputs: each key's type is checked independently below
+    if isinstance(output, type) and hasattr(output, "model_fields"):
+        return output
+    return None
+
+
+def _iter_output_models(item: Any) -> list[type[Any]]:
+    output = _declared_output(item)
+    if isinstance(output, dict):
+        return [t for t in output.values() if isinstance(t, type) and hasattr(t, "model_fields")]
+    model = _output_model_of(item)
+    return [model] if model is not None else []
+
+
+def _check_carried_paths(construct: ConstructLike) -> None:
+    """The ONE walker for output-marker assembly checks. See module docstring."""
+    name_to_item: dict[str, Any] = {}
+    for item in iter_with_arms(construct):
+        name = getattr(item, "name", None)
+        if name is not None:
+            name_to_item[field_name_for(name)] = item
+
+    for item in iter_with_arms(construct):
+        for model in _iter_output_models(item):
+            _check_model_markers(construct, item, model, name_to_item)
+
+
+def _find_nested_marker(model: type[Any], _seen: set[type[Any]] | None = None) -> str | None:
+    """Depth>0 scan: True if ANY field reachable through a nested BaseModel
+    (never the top level itself) carries an output marker. Cycle-safe via
+    ``_seen`` (self-referential models are legal Pydantic)."""
+    seen = _seen if _seen is not None else set()
+    if model in seen:
+        return None
+    seen.add(model)
+    for field_name, field_info in model.model_fields.items():
+        strip, _carried = output_markers(field_info)
+        if strip:
+            return f"{model.__name__}.{field_name}"
+        annotation = field_info.annotation
+        if isinstance(annotation, type) and hasattr(annotation, "model_fields"):
+            found = _find_nested_marker(annotation, seen)
+            if found is not None:
+                return found
+    return None
+
+
+def _check_model_markers(
+    construct: ConstructLike,
+    item: Any,
+    model: type[Any],
+    name_to_item: dict[str, Any],
+) -> None:
+    is_agent_act = isinstance(item, Node) and item.mode in ("agent", "act")
+    declared_inputs = getattr(item, "inputs", None)
+    declared_input_names = set(declared_inputs) if isinstance(declared_inputs, dict) else set()
+    param_res = getattr(item, "_param_res", None) or {}
+    di_names = set(param_res)
+
+    for field_name, field_info in model.model_fields.items():
+        annotation = field_info.annotation
+        if isinstance(annotation, type) and hasattr(annotation, "model_fields"):
+            nested = _find_nested_marker(annotation)
+            if nested is not None:
+                raise ConstructError.build(
+                    f"node {item.name!r}: output field {field_name!r} ({model.__name__}.{field_name}) "
+                    f"is a nested model carrying an output marker at {nested!r}, which is not supported",
+                    found=f"marker on {nested}, reachable through {model.__name__}.{field_name}",
+                    hint="output markers (ExcludeFromOutput / Carried) are top-level-only -- move the "
+                    "marked field to the top-level output model",
+                    node=item.name,
+                    construct=getattr(construct, "name", None),
+                    location=None,
+                )
+
+        strip, carried = output_markers(field_info)
+        if not strip:
+            continue
+
+        if carried is None:
+            # ExcludeFromOutput (never spliced): a default is its ONLY value
+            # source. Carried (always spliced) deliberately has NO such
+            # requirement -- a default there would only manufacture the
+            # missed-splice-masking surface this ticket eliminates.
+            if field_info.is_required():
+                raise ConstructError.build(
+                    f"node {item.name!r}: output field {field_name!r} carries ExcludeFromOutput "
+                    "but has no default value",
+                    hint="an ExcludeFromOutput field is never produced by the LLM -- give it a "
+                    "Pydantic default, or use Carried if the framework should supply the value",
+                    node=item.name,
+                    construct=getattr(construct, "name", None),
+                    location=None,
+                )
+            continue
+
+        if is_agent_act:
+            raise ConstructError.build(
+                f"node {item.name!r}: Carried is not supported on agent/act nodes yet",
+                found=f"Carried({carried.path!r}) on an agent/act-mode node's output model",
+                hint="the agent/act preamble strips text with no splice mechanism -- use "
+                "ExcludeFromOutput, or move this field off the output model, until Carried "
+                "gains agent/act support",
+                node=item.name,
+                construct=getattr(construct, "name", None),
+                location=None,
+            )
+
+        root = carried.segments[0]
+        if root not in declared_input_names and root not in di_names:
+            raise ConstructError.build(
+                f"node {item.name!r}: Carried({carried.path!r}) root {root!r} is not a name this "
+                "node declares",
+                expected="a node.inputs key or a FromInput/FromConfig DI param name",
+                found=f"declared inputs: {sorted(declared_input_names)}; DI params: {sorted(di_names)}",
+                hint="Carried may only root at a name the node itself declares -- referencing "
+                "another node's output by an undeclared path would add a validator-invisible "
+                "dataflow edge",
+                node=item.name,
+                construct=getattr(construct, "name", None),
+                location=None,
+            )
+
+        producer = name_to_item.get(root)
+        if producer is not None and isinstance(producer, Node):
+            ms = producer.modifier_set
+            if ms.each is not None or ms.loop is not None:
+                raise ConstructError.build(
+                    f"node {item.name!r}: Carried({carried.path!r}) roots at {root!r}, whose "
+                    "producer is Each/Loop-modified",
+                    found=f"producer {root!r} effective type: "
+                    f"{effective_producer_type(producer)!r}",
+                    hint="an Each producer's value is dict[str, X]; a Loop producer's is an "
+                    "append-list -- neither is what a flat Carried splice expects",
+                    node=item.name,
+                    construct=getattr(construct, "name", None),
+                    location=None,
+                )

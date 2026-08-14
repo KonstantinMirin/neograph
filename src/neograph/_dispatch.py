@@ -23,7 +23,7 @@ from typing import Any, Protocol, cast
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
-from neograph import _llm
+from neograph import _llm, _output_classify
 from neograph._config_carrier import _with_configurable
 from neograph._llm_render import _is_inline_prompt
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
@@ -278,6 +278,15 @@ class ThinkDispatch:
             llm_config=node.llm_config,
             context=context_data,
         )
+        if result is not None:
+            # invoke_structured projected output_model internally (neograph-ftnxl.4)
+            # and returned an instance of the PROJECTED class -- reconstruct the
+            # DECLARED class here, against the RAW input_data (never the rendered
+            # one _llm.py sees), before this result reaches NodeOutput / the state
+            # bus / compute_node_fingerprints.
+            result = _output_classify.splice_carried(
+                node, cast(type[BaseModel], output_model), result, input_data, config
+            )
 
         if primary_key is not None and result is not None:
             return NodeOutput(multi={primary_key: result})
@@ -309,6 +318,11 @@ class ThinkDispatch:
             llm_config=node.llm_config,
             context=context_data,
         )
+        if result is not None:
+            # See execute()'s identical splice -- against RAW input_data.
+            result = _output_classify.splice_carried(
+                node, cast(type[BaseModel], output_model), result, input_data, config
+            )
 
         if primary_key is not None and result is not None:
             return NodeOutput(multi={primary_key: result})

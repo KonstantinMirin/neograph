@@ -45,6 +45,185 @@ class TestOutputStrategyStructured:
         assert result["extract"].items == ["via-structured"]
 
 
+class TestExcludeFromOutputProjection:
+    """`ExcludeFromOutput` must project the OUTPUT MODEL, not just the prompt text.
+
+    neograph-ftnxl.4 (headline regression). `ExcludeFromOutput` documents itself as
+    "the LLM won't try to produce it", but today the strip happens only inside
+    `describe_type()`, which under the DEFAULT `output_strategy="structured"` is
+    never called: `_llm.invoke_structured` hands the UNPROJECTED declared model
+    straight to `with_structured_output(...)`. The provider's constrained decoder
+    is therefore still asked for a field the prompt never mentions.
+
+    The invariant this pins: the schema the model is constrained by and the
+    instance written to the state bus can never disagree.
+    """
+
+    def test_excluded_field_absent_from_structured_output_schema(self):
+        """The model class handed to with_structured_output carries no excluded field."""
+        from typing import Annotated
+
+        from pydantic import BaseModel
+
+        from neograph import ExcludeFromOutput
+
+        class Verdict(BaseModel):
+            label: str
+            source_url: Annotated[str, ExcludeFromOutput] = ""
+
+        handed_to_provider: list[type[BaseModel]] = []
+
+        def respond(model: type[BaseModel]) -> BaseModel:
+            # Records the exact class `with_structured_output` received, then
+            # fills whatever fields that class declares — so the fake keeps
+            # working once the projected sibling loses `source_url`.
+            handed_to_provider.append(model)
+            return model(**dict.fromkeys(model.model_fields, "from-llm"))
+
+        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(respond))
+
+        node = Node(name="judge", mode="think", outputs=Verdict, model="fast", prompt="test")
+        pipeline = Construct("test-exclude-projection", nodes=[node])
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "test"})
+
+        assert len(handed_to_provider) == 1
+        assert "source_url" not in handed_to_provider[0].model_fields, (
+            "ExcludeFromOutput field reached the constrained-decode schema: "
+            f"{sorted(handed_to_provider[0].model_fields)}"
+        )
+
+        # The declared type still lands on the state bus (the projected sibling
+        # must never leak), and the excluded field takes its default — never a
+        # value the LLM was coerced into inventing.
+        assert isinstance(result["judge"], Verdict)
+        assert result["judge"].label == "from-llm"
+        assert result["judge"].source_url == ""
+
+
+class TestCarriedOutputField:
+    """`Carried` -- a field the framework splices in from the node's own
+    declared input, never asked of the LLM (neograph-ftnxl.4)."""
+
+    def test_carried_field_spliced_from_upstream_input_not_asked_of_llm(self):
+        """A Carried field roots at a declared upstream name; the LLM never
+        sees it, and the splice fills it from the ACTUAL upstream value."""
+        from typing import Annotated
+
+        from pydantic import BaseModel
+
+        from neograph import Carried, construct_from_functions, node
+
+        class Claim(BaseModel, frozen=True):
+            topic: str
+
+        class Verdict(BaseModel):
+            label: str
+            source_topic: Annotated[str, Carried("claim.topic")] = ""
+
+        handed_to_provider: list[type[BaseModel]] = []
+
+        def respond(model: type[BaseModel]) -> BaseModel:
+            handed_to_provider.append(model)
+            return model(**dict.fromkeys(model.model_fields, "from-llm"))
+
+        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(respond))
+
+        @node(outputs=Claim)
+        def claim() -> Claim:
+            return Claim(topic="pricing")
+
+        @node(outputs=Verdict, mode="think", model="fast", prompt="judge ${claim.topic}")
+        def judge(claim: Claim) -> Verdict: ...
+
+        pipeline = construct_from_functions("test-carried-splice", [claim, judge])
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "test"})
+
+        assert "source_topic" not in handed_to_provider[0].model_fields
+        assert result["judge"].label == "from-llm"
+        assert result["judge"].source_topic == "pricing"
+
+    def test_carried_undeclared_root_rejected_at_assembly(self):
+        """A Carried path rooted at a name the node does NOT declare is a
+        ConstructError, not a runtime surprise -- the scope fence."""
+        from typing import Annotated
+
+        from pydantic import BaseModel
+
+        from neograph import Carried, ConstructError, Node
+
+        class Verdict(BaseModel):
+            label: str
+            leaked: Annotated[str, Carried("nonexistent.field")] = ""
+
+        with pytest.raises(ConstructError, match="not a name this node declares"):
+            Construct(
+                "test-carried-undeclared",
+                nodes=[Node(name="judge", mode="think", outputs=Verdict, model="fast", prompt="judge")],
+            )
+
+    def test_carried_on_nested_model_field_rejected_at_assembly(self):
+        """A marker on a NESTED model's field is rejected -- project_output_model
+        only strips depth 0."""
+        from typing import Annotated
+
+        from pydantic import BaseModel
+
+        from neograph import Carried, ConstructError, Node
+
+        class Inner(BaseModel):
+            value: Annotated[str, Carried("seed.text")] = ""
+
+        class Verdict(BaseModel):
+            label: str
+            inner: Inner
+
+        with pytest.raises(ConstructError, match="nested model carrying an output marker"):
+            Construct(
+                "test-carried-nested",
+                nodes=[
+                    Node(
+                        name="judge",
+                        mode="think",
+                        outputs=Verdict,
+                        model="fast",
+                        prompt="judge",
+                        inputs={"seed": Verdict},
+                    )
+                ],
+            )
+
+    def test_carried_on_agent_act_node_rejected_at_assembly(self):
+        """Carried is not yet supported on agent/act nodes -- fail loud at
+        assembly, never a silent strip-with-no-splice."""
+        from typing import Annotated
+
+        from pydantic import BaseModel
+
+        from neograph import Carried, ConstructError, Node, Tool
+
+        class Verdict(BaseModel):
+            label: str
+            leaked: Annotated[str, Carried("topic")] = ""
+
+        with pytest.raises(ConstructError, match="agent/act"):
+            Construct(
+                "test-carried-agent",
+                nodes=[
+                    Node(
+                        name="judge",
+                        mode="agent",
+                        outputs=Verdict,
+                        model="fast",
+                        prompt="judge ${topic}",
+                        inputs={"topic": str},
+                        tools=[Tool(name="t_read", budget=1)],
+                    )
+                ],
+            )
+
+
 class TestOutputStrategyJsonMode:
     """json_mode strategy: inject schema into prompt, parse response as JSON."""
 

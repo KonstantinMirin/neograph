@@ -22,6 +22,7 @@ VALIDATION_CLUSTER = frozenset(
         "_validation_modifiers.py",
         "_validation_portal.py",
         "_validation_arms.py",
+        "_validation_outputs.py",
     }
 )
 
@@ -1771,6 +1772,7 @@ def _seam_violations(src_dir: pathlib.Path) -> list[str]:
         "neograph._validation_modifiers",
         "neograph._validation_portal",
         "neograph._validation_arms",
+        "neograph._validation_outputs",
     }
     violations: list[str] = []
     for py_file in sorted(src_dir.glob("*.py")):
@@ -1816,6 +1818,8 @@ class TestValidationModuleBoundary:
       - _validation_portal.py  — Portal mesh assembly rules (design §5)
       - _validation_arms.py    — Branch-arm producer-visibility bookkeeping
         (ArmScopedProducers, neograph-ftnxl.2)
+      - _validation_outputs.py — Output-field marker assembly checks
+        (_check_carried_paths, neograph-ftnxl.4)
       - _construct_validation.py — orchestrator (_validate_node_chain) + the
         single public re-export seam.
 
@@ -1859,6 +1863,9 @@ class TestValidationModuleBoundary:
         },
         "_validation_arms.py": {
             "class ArmScopedProducers",
+        },
+        "_validation_outputs.py": {
+            "def _check_carried_paths",
         },
         "_construct_validation.py": {
             "def _validate_node_chain",

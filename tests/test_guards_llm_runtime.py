@@ -356,7 +356,13 @@ class TestLlmResponsibilityDiscipline:
         # try/except-retry (which double-counted cost on a body TypeError) to
         # single-invocation _accepted_params introspection; correctness fix, +12
         # lines. The load-bearing check is the name allowlist above.
-        "_llm.py": 410,  # 408 actual
+        # neograph-ftnxl.4: 410 -> 421. invoke_structured/ainvoke_structured each
+        # gained a one-line project_output_model(output_model) rebind (+ a short
+        # comment explaining why it must happen there, not inside
+        # _prepare_structured_call) so the constrained-decode schema and the
+        # rendered/prompt-compiler schema can never diverge again -- a real,
+        # reviewed correctness fix, not accretion.
+        "_llm.py": 421,  # 421 actual
         # neograph-ble3: tightened 130 -> 115. The 5-path include_raw try/except
         # ladder collapsed to a match on the StructuredResult variant; the
         # provider-quirk wiring moved to the compat shim. Locks the deletion.

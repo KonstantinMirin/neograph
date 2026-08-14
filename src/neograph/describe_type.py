@@ -12,7 +12,6 @@ import types
 from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel
-from pydantic.fields import FieldInfo
 
 # --- extracted cluster (neograph-3ffdg.17), re-exported so existing
 # --- `from neograph.describe_type import describe_value` keeps resolving.
@@ -26,6 +25,14 @@ from neograph._describe_value import (  # noqa: E402,F401
     _render_value,
     describe_value,
 )
+
+# ExcludeFromOutput moved to _output_classify.py (neograph-ftnxl.4), which is
+# now the single owner of the output-field marker family (ExcludeFromOutput +
+# Carried) and the shared output_markers() predicate both this renderer and
+# the structured-output schema projector (project_output_model) consume.
+# Re-exported here so `from neograph.describe_type import ExcludeFromOutput`
+# keeps resolving.
+from neograph._output_classify import Carried, ExcludeFromOutput, output_markers  # noqa: E402,F401
 
 if TYPE_CHECKING:
     from neograph.node import TypeSpecStatic
@@ -48,27 +55,6 @@ def type_display_name(t: TypeSpecStatic) -> str:
         parts = ", ".join(f"{k}: {getattr(v, '__name__', str(v))}" for k, v in t.items())
         return "{" + parts + "}"
     return getattr(t, "__name__", str(t))
-
-
-class ExcludeFromOutput:
-    """Marker: field is visible in input rendering but excluded from output schema.
-
-    Use with Annotated on a Pydantic field::
-
-        source_url: Annotated[str, ExcludeFromOutput] = ""
-
-    The field will:
-    - Be rendered when the model is shown as input (XmlRenderer, DelimitedRenderer)
-    - Be EXCLUDED from describe_type() output schema (LLM won't try to produce it)
-    - Must have a default value (since the LLM won't provide it)
-    """
-
-    pass
-
-
-def _is_output_excluded(field_info: FieldInfo) -> bool:
-    """True if the field carries an ExcludeFromOutput marker in Annotated metadata."""
-    return any(m is ExcludeFromOutput or isinstance(m, ExcludeFromOutput) for m in field_info.metadata)
 
 
 _PRIMITIVE_MAP: dict[type, str] = {
@@ -204,7 +190,7 @@ def _count_classes(
     path.add(model)
 
     for _name, field_info in model.model_fields.items():
-        if field_info.exclude or _is_output_excluded(field_info):
+        if field_info.exclude or output_markers(field_info)[0]:
             continue
         _count_annotation(field_info.annotation, counts, enum_classes, recursive, visited, path)
 
@@ -282,7 +268,7 @@ def _render_model_body(
     field_lines: list[str] = []
 
     for field_name, field_info in model.model_fields.items():
-        if field_info.exclude or _is_output_excluded(field_info):
+        if field_info.exclude or output_markers(field_info)[0]:
             continue
         type_str = _render_type(
             field_info.annotation,

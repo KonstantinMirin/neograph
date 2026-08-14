@@ -1121,6 +1121,14 @@
       "signature": "()"
     },
     {
+      "anchor": "carried",
+      "bases": [],
+      "doc": "Marker: field is spliced in by the framework from the node's own",
+      "kind": "class",
+      "name": "Carried",
+      "signature": "(path: 'str') -> 'None'"
+    },
+    {
       "anchor": "render_prompt",
       "doc": "Render the exact prompt a node would send to the LLM, without calling it.",
       "kind": "function",

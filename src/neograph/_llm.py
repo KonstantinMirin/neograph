@@ -35,6 +35,7 @@ from neograph._llm_runtime import (
     LlmRuntime,
     _accepted_params,  # noqa: F401 — re-exported
 )
+from neograph._output_classify import project_output_model
 from neograph.describe_type import describe_type
 from neograph.errors import ConfigurationError
 
@@ -272,6 +273,14 @@ def invoke_structured(
     elif runtime is None:
         runtime = EMPTY_RUNTIME
     cfg = _coerce_llm_config(llm_config)
+    # PROJECT ONCE, here, before either the rendered-schema preamble or the
+    # constrained-decode call -- rebinding the local `output_model` so BOTH
+    # `_prepare_structured_call` (describe_type/prompt-compiler kwarg) and
+    # `_call_structured` (with_structured_output) see the IDENTICAL projected
+    # class. Projecting inside `_prepare_structured_call` instead would fix
+    # neither call site (its 4-tuple return doesn't carry output_model, and
+    # both twins use their own local variable) -- neograph-ftnxl.4.
+    output_model = project_output_model(output_model)
     llm, messages, strategy, llm_log = _prepare_structured_call(
         runtime,
         model_tier,
@@ -391,6 +400,9 @@ async def ainvoke_structured(
     elif runtime is None:
         runtime = EMPTY_RUNTIME
     cfg = _coerce_llm_config(llm_config)
+    # See invoke_structured's identical rebind -- both twins must project
+    # before either call site (neograph-ftnxl.4).
+    output_model = project_output_model(output_model)
     llm, messages, strategy, llm_log = _prepare_structured_call(
         runtime,
         model_tier,

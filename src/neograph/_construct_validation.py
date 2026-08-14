@@ -44,6 +44,7 @@ from neograph._validation_modifiers import (
     validate_loop_construct,
     validate_loop_self_edge,
 )
+from neograph._validation_outputs import _check_carried_paths
 from neograph._validation_portal import _check_portal_dispatch_error_handler, _check_portal_mesh
 from neograph._validation_types import (
     _MISSING,
@@ -362,6 +363,10 @@ def _validate_node_chain(
     # sub-construct, so a nested mesh is checked at its own level.
     _check_portal_mesh(construct)
     _check_portal_dispatch_error_handler(construct)
+
+    # Output-field marker rules (neograph-ftnxl.4): Carried scope fence,
+    # depth-0-only, agent/act rejection, Each/Loop-modified-root rejection.
+    _check_carried_paths(construct)
 
     # Sub-construct output boundary contract: if construct.output is declared,
     # at least one internal node must produce a compatible type — either
