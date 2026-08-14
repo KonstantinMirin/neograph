@@ -124,12 +124,27 @@ def classify_load_failure(exc: Exception) -> str | None:
 
     ``None`` means: STOP -- this is a new finding, not a re-report of
     neograph-qtfof.6/.7/.8. Do not silently add it to EXEC_EXEMPT.
+
+    The bead id + meaning strings are read from
+    ``neograph._agent_spec_conformance.CONFORMANCE_PREDICATE_META`` (label-level
+    coupling with the static classifier, neograph-ftnxl.1) rather than hand-typed
+    here a second time -- this function still does its OWN, independent
+    substring-based classification of the runtime failure message (that
+    empirical judgment is this harness's whole reason to exist and must not be
+    replaced by the static classifier); only the bead id + human meaning text
+    are shared, never the verdict.
     """
+    from neograph._agent_spec_conformance import CONFORMANCE_PREDICATE_META
+
     msg = str(exc)
+    predicate = None
     if "api_provider" in msg:
-        return "neograph-qtfof.8: LlmConfig with api_provider=None is not supported by the loader"
-    if "iterated_item" in msg:
-        return "neograph-qtfof.7: MapNode's iterated_item has no DataFlowEdge"
-    if "branching_mapping_key" in msg:
-        return "neograph-qtfof.6: BranchingNode's branching_mapping_key has no DataFlowEdge"
-    return None
+        predicate = "llm_config_missing_api_provider"
+    elif "iterated_item" in msg:
+        predicate = "modifier_metadata_only_fanout"
+    elif "branching_mapping_key" in msg:
+        predicate = "modifier_metadata_only_branch"
+    if predicate is None:
+        return None
+    meta = CONFORMANCE_PREDICATE_META[predicate]
+    return f"{meta.bead}: {meta.meaning}"

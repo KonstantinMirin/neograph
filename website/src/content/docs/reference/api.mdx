@@ -115,6 +115,25 @@ compile_prompt(template: 'str', input_data: 'Any', *, output_model: 'type[BaseMo
 configure_image(*, max_size_bytes: 'int' = 20971520, allowed_dirs: 'list[str] | None' = None, validate_format: 'bool' = True) -> 'None'
 ```
 
+### ConformanceReport
+
+{/* test-skip: generated API signature (declaration, not runnable) */}
+```python
+ConformanceReport(verdict: 'ConformanceTier', findings: 'tuple[ConformanceFinding, ...]') -> None
+```
+
+| Field | Type | Required | Default |
+|-------|------|----------|---------|
+| <span id="conformancereport-verdict"></span>`verdict` | `ConformanceTier` | yes |  |
+| <span id="conformancereport-findings"></span>`findings` | `tuple[ConformanceFinding, ...]` | yes |  |
+
+### ConformanceTier
+
+{/* test-skip: generated API signature (declaration, not runnable) */}
+```python
+ConformanceTier(*values)
+```
+
 ### Construct
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
@@ -220,6 +239,13 @@ emit_progress(event: 'BaseModel') -> 'None'
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
 ExcludeFromOutput()
+```
+
+### export_conformance
+
+{/* test-skip: generated API signature (declaration, not runnable) */}
+```python
+export_conformance(construct: 'Construct', *, strict: 'bool' = True) -> 'ConformanceReport'
 ```
 
 ### ForwardConstruct

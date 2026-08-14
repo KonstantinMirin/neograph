@@ -36,9 +36,13 @@ Round-trip-marker items (doc s6a):
   3. A hand-edited Flow with a stale marker does NOT silently reconstruct --
      proven by corrupting an Oracle group's variant count and asserting
      fallback-to-primitive (with a warning), not a wrong reconstruction.
-  4. Exported markers live only in metadata; a foreign runtime ignoring them
-     still runs the primitives correctly -- implied by (2): stripping the
-     markers still yields a runnable, behaviorally-correct primitive import.
+  4. Exported markers live only in metadata; NEOGRAPH's OWN importer ignoring
+     them (i.e. re-reading the exported Flow as if the markers were absent)
+     still reconstructs a runnable primitive graph -- implied by (2). This is
+     a neograph-round-trip claim, not a foreign-runtime-portability one: a
+     genuinely third-party loader is exercised only by
+     tests/test_agent_spec_execute.py, and export_conformance() is the
+     per-construct portability verdict -- see neograph-ftnxl.1.
 
 Run with::
 

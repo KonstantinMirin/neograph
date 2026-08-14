@@ -104,6 +104,11 @@ MIGRATED: frozenset[str] = frozenset(
         # dispatch (RULE 1 in test_guards_modifier_composition_completeness.py
         # pins that shape independently).
         "decorators.py",
+        # neograph-ftnxl.1: the Agent Spec conformance classifier's structural
+        # walker reads classify_modifiers(item) -> modifier_names_for_combo(combo)
+        # to detect Each/Loop/Operator presence -- zero hand-written combo dispatch,
+        # joins MIGRATED directly (never PENDING).
+        "_agent_spec_conformance.py",
     }
 )
 

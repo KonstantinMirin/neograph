@@ -19,6 +19,8 @@ sub-constructs), see Node and Construct directly.
 """
 
 from neograph._agent_spec import to_agent_spec
+from neograph._agent_spec_conformance import ConformanceReport, ConformanceTier
+from neograph._agent_spec_conformance_report import export_conformance
 from neograph._hot_swap import aresume_from_agent_spec, resume_from_agent_spec
 from neograph._image import configure_image, resolve_image
 from neograph._llm import (
@@ -205,6 +207,10 @@ __all__ = [
     # Agent Spec interop (export + import)
     "to_agent_spec",
     "from_agent_spec",
+    # Agent Spec export conformance classifier
+    "export_conformance",
+    "ConformanceReport",
+    "ConformanceTier",
     # Durable Tier-2 hot-swap (emit -> validate -> recompile -> resume)
     "resume_from_agent_spec",
     "aresume_from_agent_spec",

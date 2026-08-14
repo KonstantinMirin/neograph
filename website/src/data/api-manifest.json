@@ -1377,6 +1377,43 @@
       "signature": "(flow: 'Any') -> 'Construct'"
     },
     {
+      "anchor": "export_conformance",
+      "doc": "Classify how portable ``construct``'s Agent Spec export is to a genuine",
+      "kind": "function",
+      "name": "export_conformance",
+      "signature": "(construct: 'Construct', *, strict: 'bool' = True) -> 'ConformanceReport'"
+    },
+    {
+      "anchor": "conformancereport",
+      "bases": [],
+      "doc": "The full conformance verdict for one construct: the worst tier across",
+      "fields": [
+        {
+          "annotation": "ConformanceTier",
+          "default": null,
+          "name": "verdict",
+          "required": true
+        },
+        {
+          "annotation": "tuple[ConformanceFinding, ...]",
+          "default": null,
+          "name": "findings",
+          "required": true
+        }
+      ],
+      "kind": "dataclass",
+      "name": "ConformanceReport",
+      "signature": "(verdict: 'ConformanceTier', findings: 'tuple[ConformanceFinding, ...]') -> None"
+    },
+    {
+      "anchor": "conformancetier",
+      "bases": [],
+      "doc": "Three-tier verdict for how portable a Construct's Agent Spec export is.",
+      "kind": "class",
+      "name": "ConformanceTier",
+      "signature": "(*values)"
+    },
+    {
       "anchor": "resume_from_agent_spec",
       "doc": "Recompile an Agent Spec ``Flow`` and resume it durably on the same thread.",
       "kind": "function",

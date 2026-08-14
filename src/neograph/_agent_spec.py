@@ -346,9 +346,9 @@ def to_agent_spec(construct: Construct) -> Flow:
 
     LOWERS every modifier to flat Agent Spec primitives — the same lowering
     neograph performs when compiling to LangGraph, expressed in Agent Spec
-    vocabulary. Fails loud (``ConfigurationError``) on any construct it
-    cannot represent, rather than silently downgrading. See module
-    docstring for the Core Invariant.
+    vocabulary. Fails loud (``ConfigurationError``) on the ENUMERATED fields
+    it cannot represent (module docstring) — not raising does NOT mean the
+    result is portable; call ``export_conformance(construct)`` for that.
     """
     _nodes_mod, flow_mod, edges_mod, _property_mod, tools_mod = _import_agent_spec_flow_classes()
 

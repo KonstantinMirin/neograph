@@ -685,8 +685,11 @@ class TestAgentSpecMatrixExhaustiveness:
 
 
 class TestAgentSpecExportMatrix:
-    """Every derived cell either exports to a valid Flow (GREEN), is a known
-    export gap (RED_EXPORT -> xfail), or is unrepresentable in neograph."""
+    """Every derived cell either constructs a pyagentspec Flow object cleanly
+    and round-trips through neograph's own importer (GREEN -- a neograph-side
+    claim, NOT a third-party-portability one; see export_conformance() /
+    neograph-ftnxl.1 for that verdict), is a known export gap (RED_EXPORT ->
+    xfail), or is unrepresentable in neograph."""
 
     @pytest.mark.parametrize("cell_id", sorted(CELLS))
     def test_export(self, cell_id: str, request: pytest.FixtureRequest) -> None:
