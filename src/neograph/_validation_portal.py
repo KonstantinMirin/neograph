@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, cast, get_args, get_origin
 
+from neograph._ir_branch import iter_with_arm_ids
 from neograph._ir_protocols import ConstructLike
 from neograph._normalize import _declared_output, normalize_outputs
 from neograph._portal_member import PortalMemberClass, portal_member_class
@@ -41,6 +42,38 @@ def _member_portal(node: Node) -> Portal:
     return km
 
 
+def _check_no_portal_in_branch_arm(construct: ConstructLike) -> None:
+    """Reject a Portal-shaped item (Node or Construct, incl. DISPATCH) placed
+    directly inside a branch arm (neograph-ftnxl.12).
+
+    ``_add_arm_nodes``/``_wire_arm_edges`` never dispatch on ``primary_shape``
+    for an arm item -- every arm member (peer or dispatch) is wired via plain
+    ``make_node_fn``/``make_subgraph_fn`` + static ``add_edge``, never
+    ``make_portal_fn``/``Command(goto=...)`` (the sole construction site,
+    guard G1). So a Portal on an arm item compiles cleanly today and is
+    completely INERT -- no dynamic routing at all, not merely mis-costed by
+    ``_recursion_budget.py``. ANTI-BAND-AID: reject at assembly (north star:
+    unrepresentable > fail-loud > silent) rather than re-cost a mesh that
+    would never route. Every downstream Portal-aware consumer walks
+    ``construct.nodes`` directly, never arm content, so they're all safe by
+    construction once this guard exists. Reuses :func:`iter_with_arm_ids`
+    (neograph-ftnxl.2) -- no second arm-tagging primitive.
+    """
+    for item, arm_key in iter_with_arm_ids(construct):
+        if arm_key is None:
+            continue
+        if portal_member_class(item) is not None:
+            name = getattr(item, "name", "?")
+            raise ConstructError.build(
+                f"Portal-modified item '{name}' found inside a branch arm",
+                expected="Portal modifiers only on top-level mesh members",
+                found="a Portal-shaped item inside a _BranchNode arm (inert: no Command-based routing is wired for arm items)",
+                node=name,
+                construct=construct.name,
+                location=_source_location(),
+            )
+
+
 def _check_portal_mesh(construct: ConstructLike) -> None:
     """Validate every Portal mesh at ONE construct level (design §5, extended
     by neograph-fefar to >1 NAMED mesh per level).
@@ -58,6 +91,7 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
     Called once per construct level from ``_validate_node_chain`` (which recurses
     into sub-constructs), so a mesh at any depth is checked.
     """
+    _check_no_portal_in_branch_arm(construct)
     nodes = list(construct.nodes)
     # PEER-mode members only. A dispatch-mode Portal (route="decide") is NOT a
     # mesh member (review M1): it is a standalone linear node whose payload is the

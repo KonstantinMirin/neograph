@@ -33,6 +33,7 @@ from neograph import (
     run,
 )
 from neograph._construct_validation import effective_producer_type
+from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
 from tests.fakes import build_test_compile_kwargs, register_scripted
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -375,3 +376,138 @@ class TestReservedHandoffKey:
         with pytest.raises(ConstructError) as exc:
             Construct("swarm", nodes=[entry, billing])
         assert "handoff" in str(exc.value).lower() or "billing" in str(exc.value)
+
+
+class TestPortalInsideBranchArmRejected:
+    """neograph-ftnxl.12 — a Portal modifier on a node/construct living inside a
+    ``_BranchNode`` arm is INERT at compile time, not merely mis-costed.
+
+    ``_add_arm_nodes``/``_wire_arm_edges`` (``_wiring_branch.py``) never check
+    ``primary_shape(item) is PrimaryShape.PORTAL`` for an arm item -- every arm
+    member (Node OR Construct) goes through the plain ``make_node_fn`` /
+    ``make_subgraph_fn`` + static ``add_edge`` path, never
+    ``make_portal_fn``/``_add_portal_mesh``/``Command(goto=...)``. So a Portal
+    modifier placed directly on an arm item compiles cleanly today and silently
+    produces a graph with NO dynamic routing at all -- worse than a mis-sized
+    recursion-limit floor (the originally filed symptom in ``_recursion_budget.py``
+    ``_mesh_hop_cost``): the mesh literally never routes.
+
+    This is a silent seam (AGENTS.md: "'safer than LangGraph' is falsified by a
+    single silent seam") -- the fix is to make this state unrepresentable at
+    assembly time, not to correctly re-cost a mesh that will never actually run
+    as one. Once construction is rejected, ``_mesh_hop_cost``/
+    ``_portal_mesh_member_ids`` can never observe an arm-crossing Portal run in
+    the first place, so the originally-filed budget-arithmetic angle becomes
+    unreachable dead code for THIS scenario.
+    """
+
+    def test_portal_modified_node_inside_branch_arm_raises_construct_error(self):
+        """A bare Portal-modified Node living in a branch arm's flat node list
+        must be rejected at ``Construct(...)`` assembly -- it is not wired as a
+        mesh member by the compiler (no ``Command``-based routing), so silently
+        accepting it produces a construct whose declared dynamic-handoff
+        semantics never actually apply at runtime.
+        """
+        register_scripted("branch_arm_trigger", lambda _in, _cfg: Handoff(goto="x"))
+        trigger = Node.scripted("trigger", fn="branch_arm_trigger", outputs=Handoff)
+
+        true_end = Node.scripted("true-end", fn="f", outputs=Handoff) | Portal(to=["__end__"])
+
+        cond = _ConditionSpec(
+            source_node=trigger,
+            attr_chain=["goto"],
+            op_fn=lambda value, _t: bool(value),
+            op_str="route",
+            threshold=None,
+        )
+        meta = _BranchMeta(condition_spec=cond, true_arm_nodes=[true_end], false_arm_nodes=[])
+
+        with pytest.raises(ConstructError) as exc:
+            Construct("branch-portal", nodes=[trigger, _BranchNode(meta, 0)])
+        assert "portal" in str(exc.value).lower() and "arm" in str(exc.value).lower()
+
+    def test_portal_carrying_construct_inside_branch_arm_raises_construct_error(self):
+        """Same defect, Construct-member form (do0d9 §3.1 site 6 admits a
+        Portal-carrying Construct as a mesh member at the top level -- but
+        ``_add_arm_nodes`` recompiles an arm Construct via plain ``_compile()``
+        + ``make_subgraph_fn``, never through the mesh-aware wiring path
+        either, so the same inertness applies to a Construct member.
+        """
+        register_scripted("branch_arm_trigger2", lambda _in, _cfg: Handoff(goto="x"))
+        trigger = Node.scripted("trigger2", fn="branch_arm_trigger2", outputs=Handoff)
+
+        inner = Node.scripted("inner", fn="f", outputs=Handoff)
+        arm_construct = Construct("arm-mesh", nodes=[inner], output=Handoff) | Portal(to=["__end__"])
+
+        cond = _ConditionSpec(
+            source_node=trigger,
+            attr_chain=["goto"],
+            op_fn=lambda value, _t: bool(value),
+            op_str="route",
+            threshold=None,
+        )
+        meta = _BranchMeta(condition_spec=cond, true_arm_nodes=[arm_construct], false_arm_nodes=[])
+
+        with pytest.raises(ConstructError) as exc:
+            Construct("branch-portal-construct", nodes=[trigger, _BranchNode(meta, 0)])
+        assert "portal" in str(exc.value).lower() and "arm" in str(exc.value).lower()
+
+    def test_dispatch_mode_portal_inside_branch_arm_raises_construct_error(self):
+        """A dispatch-mode Portal (``route="decide"``) is EQUALLY inert in a
+        branch arm, not just a peer-routing mesh member. ``make_portal_fn`` --
+        the sole ``Command``-construction site for BOTH Portal modes -- is
+        never invoked for an arm item; ``_add_arm_nodes`` always uses the
+        mode-blind ``make_node_fn``. A guard that only rejected peer-mode
+        members would leave dispatch mode as a second, un-caught silent seam.
+        """
+        register_scripted("branch_arm_trigger3", lambda _in, _cfg: Handoff(goto="x"))
+        trigger = Node.scripted("trigger3", fn="branch_arm_trigger3", outputs=Handoff)
+
+        class Emitted(BaseModel, frozen=True):
+            spec: dict
+            dispatch_input: dict
+
+        class Summary(BaseModel, frozen=True):
+            text: str
+
+        register_scripted("branch_arm_dispatch_planner", lambda _in, _cfg: Emitted(spec={}, dispatch_input={}))
+        dispatch_node = Node.scripted("planner", fn="branch_arm_dispatch_planner", outputs=Emitted) | Portal(
+            route="decide", spec_field="spec", input_field="dispatch_input", output=Summary, max_depth=3
+        )
+
+        cond = _ConditionSpec(
+            source_node=trigger,
+            attr_chain=["goto"],
+            op_fn=lambda value, _t: bool(value),
+            op_str="route",
+            threshold=None,
+        )
+        meta = _BranchMeta(condition_spec=cond, true_arm_nodes=[dispatch_node], false_arm_nodes=[])
+
+        with pytest.raises(ConstructError) as exc:
+            Construct("branch-dispatch-portal", nodes=[trigger, _BranchNode(meta, 0)])
+        assert "portal" in str(exc.value).lower() and "arm" in str(exc.value).lower()
+
+    def test_non_portal_branch_arm_still_compiles_cleanly(self):
+        """Should-pass companion (architect review advisory): a legitimate
+        branch arm with NO Portal modifier must still assemble and compile
+        fine post-fix -- ``_check_no_portal_in_branch_arm`` must not become an
+        overly broad guard that rejects ordinary arm items.
+        """
+        register_scripted("branch_arm_trigger4", lambda _in, _cfg: Handoff(goto="x"))
+        trigger = Node.scripted("trigger4", fn="branch_arm_trigger4", outputs=Handoff)
+
+        register_scripted("branch_arm_plain", lambda _in, _cfg: Handoff())
+        plain_end = Node.scripted("plain-end", fn="branch_arm_plain", outputs=Handoff)
+
+        cond = _ConditionSpec(
+            source_node=trigger,
+            attr_chain=["goto"],
+            op_fn=lambda value, _t: bool(value),
+            op_str="route",
+            threshold=None,
+        )
+        meta = _BranchMeta(condition_spec=cond, true_arm_nodes=[plain_end], false_arm_nodes=[])
+
+        # Must not raise.
+        Construct("branch-no-portal", nodes=[trigger, _BranchNode(meta, 0)])
