@@ -628,7 +628,7 @@ def make_agent_cycle_bodies(
         ``transfer_to_<peer>`` handoff call is planned (never gathered — it runs
         no coroutine) and the FIRST one wins the routing target in Phase 3."""
         # Phase 1 (sequential, in tool_call order): precheck + repeat-guard + PRE-RESERVE budget.
-        plan: list[tuple[str, Any]] = []  # ("handoff", (tc, peer)) | ("msg", ToolMessage) | ("run", tc)
+        plan: list[tuple[str, Any]] = []  # ("handoff", (tc, peer)) | ("msg", ToolMessage) | ("run", (tc, ordinal))
         coros = []
         for tc in tool_calls:
             kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances, handoff_targets)
@@ -643,8 +643,8 @@ def make_agent_cycle_bodies(
                 # Idempotent repeat (8ko.34): serve the prior render — no invoke, no budget.
                 plan.append(("msg", ToolMessage(content=repeat_cache[repeat_key], tool_call_id=tc["id"])))
                 continue
-            tracker.record_call(tc["name"])  # pre-reserve so parallel calls honor budget
-            plan.append(("run", tc))
+            ordinal = tracker.record_call(tc["name"])  # pre-reserve so parallel calls honor budget
+            plan.append(("run", (tc, ordinal)))
             coros.append(_ainvoke_tool_timed(payload, tc, config))
 
         # Phase 2 (concurrent): await all runnable tool calls together.
@@ -668,9 +668,9 @@ def make_agent_cycle_bodies(
             if kind == "msg":
                 new_msgs.append(payload)
                 continue
-            tc = payload
+            tc, ordinal = payload
             result, elapsed_ms = next(result_iter)
-            interaction, msg = _build_tool_interaction(tc, result, elapsed_ms, tp.effective_renderer)
+            interaction, msg = _build_tool_interaction(tc, result, elapsed_ms, tp.effective_renderer, ordinal=ordinal)
             repeat_key = _idempotent_repeat_key(tc, idempotent_by_tool)
             if repeat_key is not None:
                 repeat_cache[repeat_key] = interaction.result

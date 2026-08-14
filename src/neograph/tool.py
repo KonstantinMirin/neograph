@@ -162,6 +162,19 @@ class ToolInteraction(BaseModel, frozen=True):
     result: str = ""
     typed_result: Any = None
     duration_ms: int = 0
+    ordinal: int = 0
+    """1-based, per tool_name, per node. 0 means "not a budgeted invocation"
+    (handoff ack, synthetic record, or a pre-0.8 checkpointed record)."""
+
+    @property
+    def key(self) -> str | None:
+        """Canonical address ``f"{tool_name}#{ordinal}"``, or ``None`` when
+        ``ordinal == 0`` -- those records are UNADDRESSABLE (shared by handoff
+        acks and every pre-change checkpointed record, so returning a key would
+        let multiple distinct records collide on one address)."""
+        if self.ordinal == 0:
+            return None
+        return f"{self.tool_name}#{self.ordinal}"
 
 
 class ProducingCall(BaseModel, frozen=True):
@@ -228,9 +241,10 @@ class ToolBudgetTracker:
             return True  # unlimited
         return self._counts.get(tool_name, 0) < budget
 
-    def record_call(self, tool_name: str) -> None:
-        """Record a tool call."""
+    def record_call(self, tool_name: str) -> int:
+        """Record a tool call and return its 1-based per-tool-name ordinal."""
         self._counts[tool_name] = self._counts.get(tool_name, 0) + 1
+        return self._counts[tool_name]
 
     def exhausted_tools(self) -> set[str]:
         """Return names of tools that have hit their budget."""

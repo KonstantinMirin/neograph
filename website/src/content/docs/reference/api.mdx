@@ -659,7 +659,7 @@ Tool(name: str, budget: int = 0, config: dict[str, Any] = <factory:dict>, idempo
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-ToolInteraction(tool_name: str, args: dict[str, Any] = <factory:dict>, result: str = '', typed_result: Any = None, duration_ms: int = 0)
+ToolInteraction(tool_name: str, args: dict[str, Any] = <factory:dict>, result: str = '', typed_result: Any = None, duration_ms: int = 0, ordinal: int = 0)
 ```
 
 | Field | Type | Required | Default |
@@ -669,6 +669,14 @@ ToolInteraction(tool_name: str, args: dict[str, Any] = <factory:dict>, result: s
 | <span id="toolinteraction-result"></span>`result` | `str` | no | `''` |
 | <span id="toolinteraction-typed_result"></span>`typed_result` | `Any` | no | `None` |
 | <span id="toolinteraction-duration_ms"></span>`duration_ms` | `int` | no | `0` |
+| <span id="toolinteraction-ordinal"></span>`ordinal` | `int` | no | `0` |
+
+### ToolLedger
+
+{/* test-skip: generated API signature (declaration, not runnable) */}
+```python
+ToolLedger(interactions: 'Iterable[ToolInteraction]') -> 'None'
+```
 
 ### type_display_name
 

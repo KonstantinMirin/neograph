@@ -2560,3 +2560,94 @@ class TestConfigCarrierIsTheOnlySite:
         """Slip meta-test: the pre-s65y2 shape of _evict_run_cache IS detected."""
         src = "def f(config):\n    return (config or {}).get('configurable', {}).get(StateKeys.RUN_ID)\n"
         assert self._inline_identity_reads(ast.parse(src)) == ["StateKeys.RUN_ID @ line 2"]
+
+
+class TestToolInteractionOrdinalSingleWriter:
+    """``ToolInteraction.ordinal`` must never acquire a second source
+    (neograph-ftnxl.5). Two checks:
+
+    1. Every ``ToolInteraction(...)`` construction site either passes
+       ``ordinal=`` explicitly (the one site that relies on it,
+       ``_build_tool_interaction``) or is the one documented exception that
+       relies on the ``0`` default (``_handoff_ack`` — a routing signal never
+       spends budget, so it must NOT touch the tracker).
+    2. No module OTHER than ``tool.py`` maintains a per-tool-name COUNT DICT
+       — scoped narrowly (``dict[str, int]``-shaped, keyed by something
+       named like a tool) so it does not trip on unrelated counters like
+       ``describe_type.py``'s ``class_counts``.
+    """
+
+    CONSTRUCTION_SITE_MODULE = "_agent_tool_calls.py"
+    EXPECTED_ORDINAL_SITE = "_build_tool_interaction"
+    EXPECTED_DEFAULT_SITE = "_handoff_ack"
+
+    @staticmethod
+    def _tool_interaction_call_sites(tree: ast.AST) -> list[tuple[str, bool]]:
+        """Return (enclosing_function_name, passes_ordinal_kwarg) for every
+        ``ToolInteraction(...)`` call in the module."""
+        sites: list[tuple[str, bool]] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for call in ast.walk(node):
+                if (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == "ToolInteraction"
+                ):
+                    has_ordinal = any(kw.arg == "ordinal" for kw in call.keywords)
+                    sites.append((node.name, has_ordinal))
+        return sites
+
+    def test_ordinal_kwarg_passed_at_exactly_the_relied_on_site(self):
+        src = (SRC_DIR / self.CONSTRUCTION_SITE_MODULE).read_text()
+        sites = self._tool_interaction_call_sites(ast.parse(src))
+        with_ordinal = [fn for fn, has_ordinal in sites if has_ordinal]
+        without_ordinal = [fn for fn, has_ordinal in sites if not has_ordinal]
+        assert with_ordinal == [self.EXPECTED_ORDINAL_SITE], (
+            f"expected exactly one ToolInteraction(...) site passing ordinal= "
+            f"({self.EXPECTED_ORDINAL_SITE!r}), found: {with_ordinal!r}"
+        )
+        assert without_ordinal == [self.EXPECTED_DEFAULT_SITE], (
+            f"expected exactly one ToolInteraction(...) site relying on the ordinal=0 "
+            f"default ({self.EXPECTED_DEFAULT_SITE!r} — a routing signal that must not "
+            f"touch the tracker), found: {without_ordinal!r}"
+        )
+
+    def test_detector_flags_a_missing_ordinal_kwarg(self):
+        """Slip meta-test: a construction site that DROPS ordinal= is caught."""
+        src = "def _build_tool_interaction(tc):\n    return ToolInteraction(tool_name=tc['name'])\n"
+        sites = self._tool_interaction_call_sites(ast.parse(src))
+        assert sites == [("_build_tool_interaction", False)]
+
+    NAME_HINTS = ("tool", "name")
+
+    @staticmethod
+    def _looks_like_per_tool_count_dict(node: ast.AnnAssign | ast.Assign, var_name: str) -> bool:
+        lowered = var_name.lower()
+        return "count" in lowered and any(hint in lowered for hint in TestToolInteractionOrdinalSingleWriter.NAME_HINTS)
+
+    def test_no_other_module_maintains_a_per_tool_name_count_dict(self):
+        offenders: list[str] = []
+        for py in sorted(SRC_DIR.rglob("*.py")):
+            if py.name in ("tool.py", "_tool_ledger.py"):
+                continue
+            tree = ast.parse(py.read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name) and self._looks_like_per_tool_count_dict(node, target.id):
+                            offenders.append(f"{py.name}:{node.lineno} {target.id}")
+                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                    if self._looks_like_per_tool_count_dict(node, node.target.id):
+                        offenders.append(f"{py.name}:{node.lineno} {node.target.id}")
+        assert offenders == [], (
+            "a second per-tool-name count dict was found outside tool.py — the ordinal "
+            "must derive from ToolBudgetTracker._counts, never a drift-prone second "
+            "counter:\n" + "\n".join(f"  {o}" for o in offenders)
+        )
+
+    def test_detector_ignores_an_unrelated_counter(self):
+        """Non-vacuity: describe_type.py's class_counts (a different concern —
+        hoisting frequency, not per-tool-name budget) must not trip this guard."""
+        assert not self._looks_like_per_tool_count_dict(ast.AnnAssign(), "class_counts")

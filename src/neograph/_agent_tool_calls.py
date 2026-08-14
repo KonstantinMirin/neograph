@@ -120,12 +120,16 @@ def _build_tool_interaction(
     result: Any,
     elapsed_ms: int,
     renderer: Any,
+    ordinal: int = 0,
 ) -> tuple[ToolInteraction, ToolMessage]:
     """Pure result rendering: render the tool result, build the ToolInteraction +
     ToolMessage. Does NOT touch the tracker — budget accounting is caller-owned.
     The sync twin advances the tracker THEN builds (via _record_tool_result); the
     async twin PRE-RESERVES the budget in tool_call order before gathering, then
-    builds here (so it never double-counts). See neograph-dyy7."""
+    builds here (so it never double-counts). See neograph-dyy7.
+
+    ``ordinal`` is threaded in, not recomputed here — the caller is the one that
+    called ``tracker.record_call(...)`` and knows the ordinal it got back."""
     name = tc["name"]
     rendered = _render_tool_result_for_llm(result, renderer)
     interaction = ToolInteraction(
@@ -134,6 +138,7 @@ def _build_tool_interaction(
         result=rendered,
         typed_result=result,
         duration_ms=elapsed_ms,
+        ordinal=ordinal,
     )
     return interaction, ToolMessage(content=rendered, tool_call_id=tc["id"])
 
@@ -166,8 +171,8 @@ def _record_tool_result(
     """Pure post-invoke recording for one tool call: advance the tracker, then
     render + build the ToolInteraction + ToolMessage. The sync twin's single-turn
     call path — advance-then-build."""
-    tracker.record_call(tc["name"])
-    return _build_tool_interaction(tc, result, elapsed_ms, renderer)
+    ordinal = tracker.record_call(tc["name"])
+    return _build_tool_interaction(tc, result, elapsed_ms, renderer, ordinal=ordinal)
 
 
 async def _ainvoke_tool_timed(tool_fn: Any, tc: dict, config: RunnableConfig) -> tuple[Any, int]:
