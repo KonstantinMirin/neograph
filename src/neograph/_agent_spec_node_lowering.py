@@ -87,6 +87,7 @@ def _lower_generation_step(
     metadata: dict[str, Any],
     model_tier: str | None = None,
     tool_description: str | None = None,
+    api_provider: str | None = None,
 ) -> SpecNode:
     """The SINGLE per-node.mode generation dispatch (think / agent-act / scripted-raw).
 
@@ -111,7 +112,7 @@ def _lower_generation_step(
             name=name,
             inputs=ref_props or None,
             outputs=outputs or None,
-            llm_config=_make_llm_config(Node(name=node.name, model=model_tier or node.model)),
+            llm_config=_make_llm_config(Node(name=node.name, model=model_tier or node.model), api_provider=api_provider),
             prompt_template=rewritten,
             metadata={**metadata, _MARK_PROMPT_SPEC: _prompt_spec_marker(node, flat_to_original)},
         )
@@ -132,7 +133,7 @@ def _lower_generation_step(
         # base_node | Oracle(models=...).
         rewritten, ref_props, flat_to_original = _translate_placeholders(node.prompt or "", inputs, name)
         agent_source = node.model_copy(update={"name": name, "model": model_tier or node.model})
-        agent = _make_agent(agent_source, tools_mod, ref_props, outputs, rewritten)
+        agent = _make_agent(agent_source, tools_mod, ref_props, outputs, rewritten, api_provider=api_provider)
         return nodes_mod.AgentNode(
             name=name,
             inputs=ref_props or None,
@@ -229,7 +230,7 @@ def _reconstruct_remote_agent(node: Node, *, inputs: list[Property], outputs: li
     return agent_cls(**attrs, inputs=inputs or None, outputs=outputs or None)
 
 
-def _lower_node(node: Node) -> SpecNode:
+def _lower_node(node: Node, api_provider: str | None = None) -> SpecNode:
     """Dispatch a single neograph Node to its Agent Spec primitive by mode.
 
     Thin wrapper over the shared ``_lower_generation_step`` neograph-2s2o6: the
@@ -238,10 +239,14 @@ def _lower_node(node: Node) -> SpecNode:
     omits, and passes the node's own name + empty base metadata.
     """
     _reject_unrepresentable_fields(node)
-    return _lower_generation_step(node, name=node.name, outputs=_properties_for(node.outputs), metadata={})
+    return _lower_generation_step(
+        node, name=node.name, outputs=_properties_for(node.outputs), metadata={}, api_provider=api_provider
+    )
 
 
-def _make_agent(node: Node, tools_mod: Any, inputs: list[Property], outputs: list[Property], system_prompt: str) -> Any:
+def _make_agent(
+    node: Node, tools_mod: Any, inputs: list[Property], outputs: list[Property], system_prompt: str, api_provider: str | None = None
+) -> Any:
     """Build the pyagentspec ``Agent`` for an agent/act node. ``inputs`` are the
     Option-F-translated referenced flat Properties and ``system_prompt`` is the
     ``{{ flat }}``-rewritten text (both computed once in ``_lower_node``); the
@@ -254,7 +259,7 @@ def _make_agent(node: Node, tools_mod: Any, inputs: list[Property], outputs: lis
     tools = cast("list[Tool]", node.tools)
     return Agent(
         name=f"{node.name}-agent",
-        llm_config=_make_llm_config(node),
+        llm_config=_make_llm_config(node, api_provider=api_provider),
         system_prompt=system_prompt,
         tools=[_tool_to_server_tool(tool, tools_mod) for tool in tools],
         inputs=inputs or None,
@@ -325,11 +330,17 @@ def _agent_spec_marker(node: Node) -> dict[str, Any]:
     }
 
 
-def _make_llm_config(node: Node) -> Any:
+def _make_llm_config(node: Node, api_provider: str | None = None) -> Any:
+    """neograph-qtfof.8: api_provider is opt-in (maintainer decision: fail-loud,
+    never guessed -- neograph deliberately keeps the real LLM provider out of the
+    graph layer, Node.model is an opaque tier string resolved via llm_factory at
+    RUNTIME). None (the default) keeps today's honest NEOGRAPH_ROUND_TRIP_ONLY
+    behavior; a caller-supplied provider makes the export loadable+convertible by
+    a metadata-blind third-party Agent Spec runtime."""
     _nodes_mod, _flow_mod, _edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
     from pyagentspec.llms.llmconfig import LlmConfig as SpecLlmConfig
 
-    return SpecLlmConfig(name=f"{node.name}-llm", model_id=node.model or "default")
+    return SpecLlmConfig(name=f"{node.name}-llm", model_id=node.model or "default", api_provider=api_provider)
 
 
 def _make_server_tool(

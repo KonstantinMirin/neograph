@@ -70,8 +70,13 @@ MIN_EXPECTED_FILES = 60
 # per-entry reason strings (all 21 would say the same thing).
 ALLOWLIST: dict[str, int] = {
     "_agent_cycle.py": 776,
-    "_agent_spec.py": 650,
-    "_agent_spec_modifier_lowering.py": 646,
+    # neograph-qtfof.8: 650 -> 662. to_agent_spec(api_provider=) opt-in param,
+    # threaded through _lower_construct_item's dispatch arms via a bound
+    # flow_export partial (no new IR/state-bus change).
+    "_agent_spec.py": 662,
+    # neograph-qtfof.8: 646 -> 649. _lower_oracle/_lower_each thread api_provider
+    # to their _make_llm_config/_lower_generation_step call sites.
+    "_agent_spec_modifier_lowering.py": 649,
     "_oracle.py": 517,
     "_tool_loop.py": 548,
     "_wiring.py": 773,

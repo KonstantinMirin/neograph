@@ -43,7 +43,15 @@ do not re-file them and do not treat hitting them as a new finding:
     Each-subflow-carries-zero-data-edges case too, not a fourth gap.
   * neograph-qtfof.8 -- ``LlmConfig`` with ``api_provider=None`` is unsupported
     by the loader, so every think/agent/act cell (and every scripted Oracle
-    ``merge_prompt`` cell, whose merge lowers to an ``LlmNode``) fails to load.
+    ``merge_prompt`` cell, whose merge lowers to an ``LlmNode``) fails to load
+    BY DEFAULT. FIXED as a fail-loud OPT-IN (maintainer decision): neograph
+    cannot know the real provider at export time (``Node.model`` is an opaque
+    tier string, resolved via ``llm_factory`` at runtime), so
+    ``to_agent_spec(construct)`` keeps this honest default unchanged --
+    ``to_agent_spec(construct, api_provider="openai")`` is what becomes
+    convertible. This tier's cells all call the zero-arg form, so qtfof.8
+    landing does NOT widen ``COMPARE_CELLS`` here; see
+    ``tests/test_agent_spec_llm_config_api_provider.py`` for the opt-in path.
 
 ``EXEC_EXEMPT`` is computed, not hand-typed: every GREEN cell is attempted once
 at collection time, and a failure is classified into one of the three tracked
@@ -51,7 +59,9 @@ gaps above by ``agent_spec_loader_harness.classify_load_failure``. An
 UNCLASSIFIED failure is a hard collection error -- a new finding must be
 investigated and filed before it can be exempted, never silently swept in.
 ``COMPARE_CELLS`` is ``GREEN - EXEC_EXEMPT.keys()`` -- it widens automatically as
-neograph-qtfof.6/.7/.8 land, with no ratchet literal to remember to update.
+neograph-qtfof.6/.7 land (real DataFlowEdge fixes, no opt-in needed); qtfof.8's
+opt-in shape means its cells stay in EXEC_EXEMPT for the zero-arg export this
+tier exercises, by design.
 
 Run with::
 
@@ -337,6 +347,74 @@ class TestTheThirdPartyRuntimeAgreesWithNeographsOwnRuntime:
 
         assert third_party.get("outputs") == expected, (
             f"{cell_id}: the two independently-authored runtimes disagree on the result.\n"
+            f"  third-party (AgentSpecLoader): {third_party.get('outputs')!r}\n"
+            f"  neograph (run(compile(...)))  : {expected!r}  [terminal node {terminal!r}]"
+        )
+
+
+# -- neograph-qtfof.9 reproduction -------------------------------------------
+#
+# Both failure modes bypass COMPARE_EXEMPT deliberately -- the exemption exists
+# so the ambient GREEN-cell matrix stays honest about a KNOWN gap; these two
+# tests are the gap itself, asserted directly, and must FAIL until the
+# outermost Construct's EndNode gets real declared outputs wired by a real
+# DataFlowEdge from its terminal producer node(s).
+
+
+class TestOutermostConstructEndNodeHasNoOutputs:
+    """neograph-qtfof.9 failure mode (a): construct.output is None (the default,
+    universal case for every top-level Construct passed to compile()/run()
+    directly) -- so end_props is empty and the third party's invoke() always
+    returns {}, regardless of what the graph actually computed."""
+
+    def test_third_party_invoke_returns_empty_outputs_for_a_simple_outermost_construct(self) -> None:
+        cell_id = "scripted-oracle-merge_fn-single"
+        flow = to_agent_spec(build_cell(*CELLS[cell_id]))
+        bodies = _CELL_BODIES[cell_id]
+
+        third_party = run_via_agent_spec_loader(flow, cell_id, _compare_registry(flow, bodies))
+        neograph_side = run_via_neograph(build_cell(*CELLS[cell_id]), bodies)
+        terminal = max(neograph_side, key=lambda name: list(neograph_side).index(name))
+        expected = neograph_side[terminal].model_dump()
+
+        assert third_party.get("outputs") == expected, (
+            f"{cell_id}: a third-party Agent Spec runtime must surface what the graph computed, "
+            f"not an empty dict regardless of it.\n"
+            f"  third-party (AgentSpecLoader): {third_party.get('outputs')!r}\n"
+            f"  neograph (run(compile(...)))  : {expected!r}  [terminal node {terminal!r}]"
+        )
+
+
+class TestOutermostConstructEndNodeWithDeclaredOutputRaises:
+    """neograph-qtfof.9 failure mode (b) (merged from the duplicate ticket
+    neograph-qtfof.10): even when construct.output IS explicitly set on an
+    outermost Construct, the EndNode's declared outputs have zero DataFlowEdge
+    feeding them -- there is no parent to wire the peer edge a sub-flow item's
+    parent would provide -- so the loader raises instead of returning a value."""
+
+    def test_third_party_invoke_raises_when_outermost_output_is_declared_but_unwired(self) -> None:
+        from neograph import node
+        from neograph.decorators import construct_from_functions
+        from tests.test_agent_spec_matrix import Alpha, Out
+
+        @node(outputs=Alpha)
+        def prod() -> Alpha: ...
+
+        @node(outputs=Out)
+        def target(prod: Alpha) -> Out: ...
+
+        construct = construct_from_functions("qtfof9-mode-b", [prod, target], output=Out)
+        flow = to_agent_spec(construct)
+        bodies = {"prod": Alpha(a="p"), "target": Out(ok="done")}
+
+        third_party = run_via_agent_spec_loader(flow, "qtfof9-mode-b", _compare_registry(flow, bodies))
+        neograph_side = run_via_neograph(construct, bodies)
+        terminal = max(neograph_side, key=lambda name: list(neograph_side).index(name))
+        expected = neograph_side[terminal].model_dump()
+
+        assert third_party.get("outputs") == expected, (
+            f"qtfof9-mode-b: declaring construct.output on an outermost Construct must make the "
+            f"third party's invoke() return the computed value, not raise or return an empty dict.\n"
             f"  third-party (AgentSpecLoader): {third_party.get('outputs')!r}\n"
             f"  neograph (run(compile(...)))  : {expected!r}  [terminal node {terminal!r}]"
         )

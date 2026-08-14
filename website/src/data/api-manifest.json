@@ -1375,7 +1375,7 @@
       "doc": "Export a neograph ``Construct`` (IR) to an Open Agent Spec ``Flow``",
       "kind": "function",
       "name": "to_agent_spec",
-      "signature": "(construct: 'Construct') -> 'Flow'"
+      "signature": "(construct: 'Construct', api_provider: 'str | None' = None) -> 'Flow'"
     },
     {
       "anchor": "from_agent_spec",

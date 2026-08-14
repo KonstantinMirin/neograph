@@ -66,7 +66,7 @@ _ExportFlow: TypeAlias = "Callable[[Construct], Any]"
 """``to_agent_spec``, injected. See the module docstring for why."""
 
 
-def _lower_item_body(item: Node | Construct, export_flow: _ExportFlow) -> SpecNode:
+def _lower_item_body(item: Node | Construct, export_flow: _ExportFlow, api_provider: str | None = None) -> SpecNode:
     """Lower one construct item to the SpecNode a modifier wraps.
 
     A ``Node`` lowers via ``_lower_node`` (per-mode think/agent/scripted
@@ -80,11 +80,11 @@ def _lower_item_body(item: Node | Construct, export_flow: _ExportFlow) -> SpecNo
     if isinstance(item, Construct):
         nodes_mod, _flow_mod, _edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
         return nodes_mod.FlowNode(name=item.name, subflow=export_flow(item))
-    return _lower_node(item)
+    return _lower_node(item, api_provider=api_provider)
 
 
 def _lower_oracle(
-    node: Node | Construct, oracle: Oracle, export_flow: _ExportFlow
+    node: Node | Construct, oracle: Oracle, export_flow: _ExportFlow, api_provider: str | None = None
 ) -> tuple[list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge]]:
     """Lower an Oracle-modified item: N variant bodies + merge node.
 
@@ -137,7 +137,7 @@ def _lower_oracle(
             # neograph-15rpw: built through the shared body seam instead of a second
             # inline FlowNode, and called INSIDE the loop -- model_copy is shallow, so
             # a hoisted body would alias ONE sub-Flow across all N variants.
-            body = _lower_item_body(node, export_flow)
+            body = _lower_item_body(node, export_flow, api_provider=api_provider)
             variant_nodes.append(body.model_copy(update={"name": variant_name, "metadata": variant_metadata}))
             continue
 
@@ -157,6 +157,7 @@ def _lower_oracle(
                 metadata=variant_metadata,
                 model_tier=model_tier,
                 tool_description=f"Oracle variant {i} for {node.name!r}",
+                api_provider=api_provider,
             )
         )
 
@@ -179,7 +180,7 @@ def _lower_oracle(
             name=f"{node.name}",
             inputs=merge_ref_props or None,
             outputs=outputs or None,
-            llm_config=_make_llm_config(Node(name=node.name, model=oracle.merge_model)),
+            llm_config=_make_llm_config(Node(name=node.name, model=oracle.merge_model), api_provider=api_provider),
             prompt_template=merge_rewritten,
             metadata={
                 _MARK_MODIFIER: "oracle",
@@ -261,7 +262,9 @@ def _lower_oracle(
     return [*variant_nodes, merge_node], control_edges, data_edges
 
 
-def _lower_each(node: Node | Construct, each: Each, export_flow: _ExportFlow, oracle: Oracle | None = None) -> SpecNode:
+def _lower_each(
+    node: Node | Construct, each: Each, export_flow: _ExportFlow, oracle: Oracle | None = None, api_provider: str | None = None
+) -> SpecNode:
     """Lower an Each-modified item: MapNode wrapping a single-body sub-Flow.
 
     The wrapped body is a Node's lowered primitive OR a Construct-item's
@@ -303,7 +306,7 @@ def _lower_each(node: Node | Construct, each: Each, export_flow: _ExportFlow, or
     end_node = nodes_mod.EndNode(name=f"{node.name}__each_end")
 
     if oracle is None:
-        inner = _lower_item_body(node, export_flow)
+        inner = _lower_item_body(node, export_flow, api_provider=api_provider)
         body_nodes: list[SpecNode] = [inner]
         body_control = [
             edges_mod.ControlFlowEdge(name=f"{node.name}__each_start_edge", from_node=start_node, to_node=inner),
@@ -320,7 +323,7 @@ def _lower_each(node: Node | Construct, each: Each, export_flow: _ExportFlow, or
         # item — and the chain's tail, the merge, exits to the EndNode. Aiming it
         # at the merge instead (the pre-fix shape) orphaned every variant. The
         # inner merge keeps the MapNode's own name, which validates and round-trips.
-        body_nodes, body_control, body_data = _lower_oracle(node, oracle, export_flow)
+        body_nodes, body_control, body_data = _lower_oracle(node, oracle, export_flow, api_provider=api_provider)
         merge = body_nodes[-1]  # _lower_oracle returns [*variants, merge]
         body_control = [
             edges_mod.ControlFlowEdge(

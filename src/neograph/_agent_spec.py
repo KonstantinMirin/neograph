@@ -41,6 +41,7 @@ so ``src/neograph`` core stays Agent-Spec-free by default — only calling
 
 from __future__ import annotations
 
+import functools
 from typing import TYPE_CHECKING, Any, TypeAlias, assert_never, cast
 
 from neograph._ir_branch import iter_with_arms
@@ -135,7 +136,7 @@ per-shape arms of ``_lower_construct_item`` can BIND this shape and let the
 shared Operator postlude rewrite it, instead of each arm returning its own."""
 
 
-def _lower_construct_item(item: Any) -> _LoweredItem:
+def _lower_construct_item(item: Any, api_provider: str | None = None) -> _LoweredItem:
     """Lower one top-level construct item (Node/Construct/_BranchNode) to
     (all_spec_nodes, extra_control_edges, extra_data_edges, entry_node, exits,
     data_node, input_targets).
@@ -170,6 +171,10 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
       * ORACLE → EVERY variant node (each variant independently consumes the
         external input); the merge node consumes only the variant fan-in.
     """
+    # neograph-qtfof.8: bind api_provider into export_flow so a Construct-item's
+    # own recursive sub-export gets it too, without widening every _lower_*'s
+    # callable param to also carry a scalar.
+    flow_export = functools.partial(to_agent_spec, api_provider=api_provider)
     if not isinstance(item, (Node, Construct)):
         raise ConfigurationError.build(
             f"unrecognized construct item {item!r} — no Agent Spec lowering",
@@ -227,12 +232,12 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
         # variant-fan-out + merge that _lower_oracle already produces. Composed,
         # not re-implemented — _lower_each grows an optional caller-lowered body
         # group exactly the way _lower_loop(node, loop, body) already takes one.
-        map_node = _lower_each(item, mods["each"], to_agent_spec, oracle=mods["oracle"])
+        map_node = _lower_each(item, mods["each"], flow_export, oracle=mods["oracle"], api_provider=api_provider)
         arm: _LoweredItem = ([map_node], [], [], map_node, [(map_node, None)], map_node, [(map_node, True)])
     else:
         match decomp.primary:
             case PrimaryShape.ORACLE:
-                variant_and_merge, control_edges, data_edges = _lower_oracle(item, mods["oracle"], to_agent_spec)
+                variant_and_merge, control_edges, data_edges = _lower_oracle(item, mods["oracle"], flow_export, api_provider=api_provider)
                 variants = variant_and_merge[:-1]
                 merge = variant_and_merge[-1]
                 # ENTRY is the head of the variant chain, not the merge: the merge is
@@ -249,11 +254,11 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
                 )
 
             case PrimaryShape.EACH:
-                map_node = _lower_each(item, mods["each"], to_agent_spec)
+                map_node = _lower_each(item, mods["each"], flow_export, api_provider=api_provider)
                 arm = ([map_node], [], [], map_node, [(map_node, None)], map_node, [(map_node, True)])
 
             case PrimaryShape.LOOP:
-                body = _lower_item_body(item, to_agent_spec)
+                body = _lower_item_body(item, flow_export, api_provider=api_provider)
                 branch, extra_control, extra_data = _lower_loop(item, mods["loop"], body)
                 # neograph's Loop is a DO-while (_wiring._add_subgraph_loop wires
                 # ``prev -> body`` and only THEN the conditional back-edge), so the
@@ -267,7 +272,7 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
                 # BARE and OPERATOR are the SAME primary shape; has_operator is what
                 # distinguishes them, and that difference now lives entirely in the
                 # shared postlude below.
-                primary = _lower_item_body(item, to_agent_spec)
+                primary = _lower_item_body(item, flow_export, api_provider=api_provider)
                 arm = ([primary], [], [], primary, [(primary, None)], primary, [(primary, False)])
 
             case PrimaryShape.PORTAL:
@@ -340,7 +345,7 @@ def _lower_construct_item(item: Any) -> _LoweredItem:
     )
 
 
-def to_agent_spec(construct: Construct) -> Flow:
+def to_agent_spec(construct: Construct, api_provider: str | None = None) -> Flow:
     """Export a neograph ``Construct`` (IR) to an Open Agent Spec ``Flow``
     (or, for a Portal mode-(a) peer mesh, a top-level ``Swarm``).
 
@@ -349,6 +354,13 @@ def to_agent_spec(construct: Construct) -> Flow:
     vocabulary. Fails loud (``ConfigurationError``) on the ENUMERATED fields
     it cannot represent (module docstring) — not raising does NOT mean the
     result is portable; call ``export_conformance(construct)`` for that.
+
+    ``api_provider`` (neograph-qtfof.8, fail-loud opt-in): the real provider is
+    unknowable at export time (``Node.model`` is an opaque tier string resolved
+    via ``llm_factory`` at runtime). ``None`` (default) keeps every exported
+    ``LlmConfig.api_provider`` unset -- honest, ``NEOGRAPH_ROUND_TRIP_ONLY``.
+    Pass e.g. ``"openai"`` to make LLM-bearing nodes convertible, at the
+    caller's own risk of asserting a provider the pipeline may not run on.
     """
     _nodes_mod, flow_mod, edges_mod, _property_mod, tools_mod = _import_agent_spec_flow_classes()
 
@@ -371,7 +383,7 @@ def to_agent_spec(construct: Construct) -> Flow:
             construct,
             cast("list[Node | Construct]", mesh_members),
             tools_mod,
-            to_agent_spec,
+            functools.partial(to_agent_spec, api_provider=api_provider),
         )
 
     all_nodes: list[SpecNode] = []
@@ -390,7 +402,7 @@ def to_agent_spec(construct: Construct) -> Flow:
     # iter_with_arms(construct) and needs membership-only visibility into
     # arm-internal nodes -- can still resolve them by name exactly as pre-fix.
     for item in construct.nodes:
-        lowered = _lower_top_level_item(item, _lower_construct_item)
+        lowered = _lower_top_level_item(item, functools.partial(_lower_construct_item, api_provider=api_provider))
         lowered_nodes, extra_control, extra_data, entry, item_exits, names, targets, data_nodes = lowered
         item_by_name.update(names)
         input_targets_by_item_name.update(targets)
