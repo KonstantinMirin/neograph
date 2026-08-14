@@ -12,7 +12,7 @@ from typing import Annotated, Any
 import structlog
 from pydantic import BaseModel, create_model
 
-from neograph._ir_branch import _BranchNode
+from neograph._ir_branch import _BranchNode, iter_with_arms
 from neograph._ir_protocols import ConstructItem
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph.construct import Construct
@@ -76,9 +76,11 @@ def compile_state_model(
 
     # Detect field-name collisions from hyphen/underscore normalization.
     # Two nodes "my-node" and "my_node" both map to state field "my_node",
-    # which would silently share loop counters, reducers, etc.
+    # which would silently share loop counters, reducers, etc. iter_with_arms
+    # subsumes nodes_only + sub_constructs and also covers branch-arm items
+    # (neograph-ftnxl.13) -- a same-/cross-arm collision is equally silent.
     seen_fields: dict[str, str] = {}  # field_name → original node name
-    for item in nodes_only + sub_constructs:
+    for item in iter_with_arms(construct):
         field_name = field_name_for(item.name)
         if field_name in seen_fields:
             raise CompileError.build(
