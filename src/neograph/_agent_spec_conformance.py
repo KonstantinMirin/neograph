@@ -207,19 +207,29 @@ def _check_outermost_end_node(flow: Any, findings: list[ConformanceFinding]) -> 
 
 
 def _walk_flow_for_llm_configs(flow: Any, findings: list[ConformanceFinding]) -> None:
+    """Checks BOTH LlmConfig manifestations (neograph-qtfof.8/.9 calibration
+    fix): a bare ``LlmNode.llm_config`` (think mode, Oracle merge) AND an
+    ``AgentNode.agent.llm_config`` (agent/act mode) -- the latter was
+    unchecked, which stayed invisible while qtfof.9's EndNode gap made every
+    agent/act cell fail before reaching this walker's comparison; qtfof.9
+    landing exposed it."""
+    from pyagentspec.flows.nodes.agentnode import AgentNode
     from pyagentspec.flows.nodes.llmnode import LlmNode
 
     for n in getattr(flow, "nodes", None) or []:
+        llm_config = None
         if isinstance(n, LlmNode):
-            api_provider = getattr(getattr(n, "llm_config", None), "api_provider", None)
-            if api_provider is None:
-                findings.append(
-                    ConformanceFinding(
-                        "llm_config_missing_api_provider",
-                        getattr(n, "name", None),
-                        "LlmConfig.api_provider is None",
-                    )
+            llm_config = getattr(n, "llm_config", None)
+        elif isinstance(n, AgentNode):
+            llm_config = getattr(getattr(n, "agent", None), "llm_config", None)
+        if llm_config is not None and getattr(llm_config, "api_provider", None) is None:
+            findings.append(
+                ConformanceFinding(
+                    "llm_config_missing_api_provider",
+                    getattr(n, "name", None),
+                    "LlmConfig.api_provider is None",
                 )
+            )
         subflow = getattr(n, "subflow", None)
         if subflow is not None:
             _walk_flow_for_llm_configs(subflow, findings)

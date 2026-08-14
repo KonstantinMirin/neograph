@@ -448,11 +448,16 @@ class TestDictFormFanInRoundTrip:
             f"the dict-form upstream key must be carried in the SERIALIZED title, got {titles}"
         )
 
+        # Scoped to edges INTO consumer specifically (neograph-qtfof.9: the
+        # export now also wires a DataFlowEdge into the synthetic EndNode,
+        # whose own destination_input is unrelated to consumer's inputs).
         dest_inputs = {
-            e["destination_input"] for e in (exported.get("data_flow_connections") or [])
+            e["destination_input"]
+            for e in (exported.get("data_flow_connections") or [])
+            if e["destination_node"].get("$component_ref") == consumer_spec["id"]
         }
         assert dest_inputs <= titles, (
-            f"every DataFlowEdge destination_input must name a real input Property; "
+            f"every DataFlowEdge destination_input INTO consumer must name a real input Property; "
             f"edges target {dest_inputs}, node declares {titles}"
         )
 

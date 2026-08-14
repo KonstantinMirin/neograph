@@ -109,6 +109,12 @@ MIGRATED: frozenset[str] = frozenset(
         # to detect Each/Loop/Operator presence -- zero hand-written combo dispatch,
         # joins MIGRATED directly (never PENDING).
         "_agent_spec_conformance.py",
+        # neograph-qtfof.9: the EndNode boundary-wiring helper reads
+        # primary_shape(item) to scope terminal-producer wiring to BARE/ORACLE
+        # shapes (Each/Loop/Portal fall back, per its own documented scope
+        # boundary) -- reads the canonical classifier directly, zero
+        # hand-written member dispatch, joins MIGRATED directly (never PENDING).
+        "_agent_spec_boundary.py",
     }
 )
 

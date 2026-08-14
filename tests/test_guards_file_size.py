@@ -73,7 +73,10 @@ ALLOWLIST: dict[str, int] = {
     # neograph-qtfof.8: 650 -> 662. to_agent_spec(api_provider=) opt-in param,
     # threaded through _lower_construct_item's dispatch arms via a bound
     # flow_export partial (no new IR/state-bus change).
-    "_agent_spec.py": 662,
+    # neograph-qtfof.9: 662 -> 667. EndNode outputs/sources now resolved via
+    # _agent_spec_boundary.resolve_end_node_sources (new peer module -- the
+    # bulk of the fix lives there, this is call-site glue only).
+    "_agent_spec.py": 667,
     # neograph-qtfof.8: 646 -> 649. _lower_oracle/_lower_each thread api_provider
     # to their _make_llm_config/_lower_generation_step call sites.
     "_agent_spec_modifier_lowering.py": 649,

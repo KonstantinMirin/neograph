@@ -127,6 +127,27 @@ the modification could not silently widen. Line churn is large
 ``_canonicalize`` inlines each edge's ``from_node``/``to_node`` in full, so
 re-pointing one edge rewrites a whole nested node blob.
 
+## The FOURTH sanctioned value modification (neograph-qtfof.9, 2026-08-14)
+
+Same category: the golden had captured the qtfof.9 bug too -- a synthetic
+EndNode was never fed a real DataFlowEdge, so a third-party runtime's
+invoke() always returned {} regardless of what the graph computed. The fix
+wires the terminal producer (construct.nodes[-1], when BARE or ORACLE) into
+the EndNode with real declared outputs+inputs and one new DataFlowEdge.
+
+Extent, measured by a full recursive golden-vs-actual diff across all 34
+REPRESENTATIVE_CELLS BEFORE patching: 27 cells changed (every BARE/ORACLE
+cell, plus the 3 OPERATOR cells whose guarded body is BARE-shaped), 7
+unchanged (all EACH/LOOP cells -- qtfof.9's own documented scope boundary,
+see _agent_spec_boundary.py). In every changed cell the diff was confined to
+exactly: the Flow's own `.outputs` (+1), the EndNode's `.outputs`/`.inputs`
+(+1 each, pyagentspec infers EndNode.inputs from its declared outputs), and
+`.data_flow_connections` (+1 edge) -- verified per-cell before patching, not
+assumed. Large line churn (`git diff --numstat`: 8942 insertions, 5939
+deletions) is `_canonicalize`'s full-inlining artifact, not evidence of a
+wider change -- confirmed by an exact `old[k] == new[k]` check on all 7
+unchanged keys plus `set(old) == set(new)`.
+
 Run with::
 
     uv run --extra agent-spec pytest tests/test_agent_spec_refactor_snapshot.py

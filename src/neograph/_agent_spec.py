@@ -114,6 +114,7 @@ from neograph._agent_spec_placeholders import (  # noqa: E402,F401
     property_title_to_prompt_path,
     split_property_title,
 )
+from neograph._agent_spec_boundary import resolve_end_node_sources  # noqa: E402
 from neograph._agent_spec_portal import (  # noqa: E402,F401
     _is_peer_mesh_member,
     _lower_portal_mesh_to_swarm,
@@ -628,9 +629,13 @@ def to_agent_spec(construct: Construct, api_provider: str | None = None) -> Flow
     # no extra internal wiring: an unconsumed StartNode input / unfed EndNode
     # output is legal (the payload flows through the item's own peer edges).
     start_props = _properties_for(construct.input)
-    end_props = _properties_for(construct.output)
     start_node = _nodes_mod.StartNode(name=f"{construct.name}__start", inputs=start_props or None)
+    # neograph-qtfof.9: outputs + real DataFlowEdge(s) from the terminal producer.
+    end_props, end_sources = resolve_end_node_sources(construct, data_node_by_item_name)
     end_node = _nodes_mod.EndNode(name=f"{construct.name}__end", outputs=end_props or None)
+    input_targets_by_item_name[end_node.name] = [(end_node, False)]
+    for source_node, prop_title in end_sources:
+        _emit_input_edges(end_node.name, "", source_node, prop_title)
     all_nodes = [start_node, *all_nodes, end_node]
     # The last item's every exit terminates at the EndNode, for the same reason
     # the inter-item edges above fan from every exit: a branch-qualified exit that

@@ -876,20 +876,22 @@ class TestToAgentSpecLowersModifiers:
         class Confidence(BaseModel, frozen=True):
             score: float
 
-        class HighResult(BaseModel, frozen=True):
-            label: str
-
-        class LowResult(BaseModel, frozen=True):
+        # Both arms share ArmResult (neograph-qtfof.9 R2: the Agent Spec EndNode
+        # requires the two arms' terminal producers to converge on a compatible
+        # output type; distinct types here would be an incidental fixture choice
+        # colliding with that unrelated, deliberate invariant -- this test's own
+        # claim is about CONTROL FLOW shape, not output types).
+        class ArmResult(BaseModel, frozen=True):
             label: str
 
         register_scripted("s7zt3_17_check", lambda input_data, config: Confidence(score=0.9))
-        register_scripted("s7zt3_17_high", lambda input_data, config: HighResult(label="high"))
-        register_scripted("s7zt3_17_low", lambda input_data, config: LowResult(label="low"))
+        register_scripted("s7zt3_17_high", lambda input_data, config: ArmResult(label="high"))
+        register_scripted("s7zt3_17_low", lambda input_data, config: ArmResult(label="low"))
 
         class BranchPipeline(ForwardConstruct):
             check = Node.scripted("s7zt3-17-check", fn="s7zt3_17_check", outputs=Confidence)
-            high_path = Node.scripted("s7zt3-17-high", fn="s7zt3_17_high", outputs=HighResult)
-            low_path = Node.scripted("s7zt3-17-low", fn="s7zt3_17_low", outputs=LowResult)
+            high_path = Node.scripted("s7zt3-17-high", fn="s7zt3_17_high", outputs=ArmResult)
+            low_path = Node.scripted("s7zt3-17-low", fn="s7zt3_17_low", outputs=ArmResult)
 
             def forward(self, topic):
                 result = self.check(topic)

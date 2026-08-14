@@ -181,11 +181,24 @@ class TestTheStaticConformanceVerdictIsCalibratedAgainstEmpiricalExecution:
             "in the style of _compute_exec_exempt -- never as silent slack added here."
         )
 
-        assert grading.passed == frozenset(), (
-            "VACUITY RATCHET: the empirical PASS set is no longer empty -- "
-            f"{sorted(grading.passed)} now load AND compare equal under a third-party runtime. "
-            "Until now the biconditional above only proved 'the classifier calls nobody PORTABLE' "
-            "(every export hits neograph-qtfof.9), so it could pass without ever exercising the "
-            "PORTABLE branch. A tracked export gap has landed: re-read the whole biconditional, "
-            "confirm export_conformance now genuinely certifies these cells, then update this literal."
+        # neograph-qtfof.9 landed: a BARE/ORACLE terminal producer's EndNode is now
+        # correctly wired (real DataFlowEdge, real declared outputs), and none of
+        # these 4 cells carry an LLM node, so no qtfof.8 api_provider gap applies
+        # either -- the first cells ever to be genuinely PORTABLE, both statically
+        # and empirically. Each/Loop/Portal terminal producers are NOT in this set
+        # (qtfof.9's own scope boundary -- see _agent_spec_boundary.py), and any
+        # LLM-bearing cell needs api_provider= (qtfof.8) before it can join.
+        assert grading.passed == frozenset(
+            {
+                "scripted-bare-single",
+                "scripted-bare-dict",
+                "scripted-oracle-merge_fn-single",
+                "scripted-oracle-merge_fn-dict",
+            }
+        ), (
+            "VACUITY RATCHET: the empirical PASS set changed shape -- "
+            f"{sorted(grading.passed)} now load AND compare equal under a third-party runtime, "
+            "which no longer matches the qtfof.9-landing set this literal pins. Re-read the whole "
+            "biconditional, confirm export_conformance genuinely certifies exactly this new set, "
+            "then update this literal."
         )
