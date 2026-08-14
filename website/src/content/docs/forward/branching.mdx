@@ -164,7 +164,7 @@ For a single node that refines its own output, use `loop_when=` on `@node` inste
 def refine(draft: Draft) -> Draft: ...
 ```
 
-See the [Loop with loop_when](/node-api/modifier-kwargs/#loop-with-loop_when-and-max_iterations) section for the full pattern.
+See the [Loop with loop_when](/node-api/modifier-kwargs/#loop-with-loop_when-and-max_iterations) section for the full pattern. That section also documents `all_in_scope` and `from_enclosing(n)` -- reading a Loop's full per-iteration history (or a single past iteration) is a free read-time projection over the existing append-list state, not a separate mechanism.
 
 ## self.each() compiles to Each fan-out with a custom key
 

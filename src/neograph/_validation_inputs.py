@@ -23,6 +23,7 @@ from neograph._validation_types import (
     ProducerMap,
     _extract_list_element,
     _fmt_type,
+    _loop_aware_compatible,
     _resolve_field_annotation,
     _source_location,
     _types_compatible,
@@ -97,7 +98,7 @@ def _check_item_input(
 
     # Plain input: any producer whose output is assignable to input_type wins.
     for p in producers.values():
-        if _types_compatible(p.effective_type, input_type):
+        if _loop_aware_compatible(p, input_type):
             return
 
     error = _build_no_producer_error(construct, item, input_type, producers)
@@ -180,14 +181,14 @@ def _check_fan_in_inputs(
                 construct=construct.name,
                 location=_source_location(),
             )
-        producer_type = producers[upstream_name].effective_type
-        if not _types_compatible(producer_type, expected_type):
+        producer = producers[upstream_name]
+        if not _loop_aware_compatible(producer, expected_type):
             raise ConstructError.build(
                 f"declares inputs['{upstream_name}']={_fmt_type(expected_type)} "
                 f"but upstream '{upstream_name}' produces "
-                f"{_fmt_type(producer_type)}",
+                f"{_fmt_type(producer.effective_type)}",
                 expected=_fmt_type(expected_type),
-                found=_fmt_type(producer_type),
+                found=_fmt_type(producer.effective_type),
                 node=item.name,
                 construct=construct.name,
                 location=_source_location(),

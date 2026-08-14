@@ -426,6 +426,36 @@ class Writer(ForwardConstruct):
 
 Python `for`/`while` loops in `forward()` don't compile to graph cycles -- they trace the body once (same limitation as `torch.jit.trace`). `self.loop()` is the explicit cycle primitive.
 
+### Scope projections: all_in_scope and from_enclosing(n)
+
+A Loop's state field is already a full per-iteration history -- `_append_loop_result` appends on every iteration, never overwrites. Because `Loop` is sequential (not parallel like `Each`), list position *is* iteration order: element `i` (0-indexed) is always iteration `i + 1`'s output. Two named read-time projections fall out of that for free -- no extra storage, no schema change:
+
+- **`all_in_scope`** -- declare the downstream parameter as `list[T]` instead of `T`. The full history passes through unchanged, in order.
+- **`from_enclosing(n)`** -- `history[-n]`: the value from `n` iterations back. A plain negative index into the same list `all_in_scope` sees; no separate mechanism.
+
+```python
+@node(outputs=Draft)
+def seed() -> Draft:
+    return Draft(content="initial", score=0.0)
+
+@node(outputs=Draft, loop_when=lambda d: d is None or d.score < 0.8, max_iterations=5)
+def refine(draft: Draft) -> Draft:
+    return Draft(content=f"v{draft.iteration + 1}", iteration=draft.iteration + 1,
+                 score=draft.score + 0.3)
+
+class Summary(BaseModel, frozen=True):
+    iterations_seen: list[int]
+
+@node(outputs=Summary)
+def summarize(refine: list[Draft]) -> Summary:
+    # all_in_scope: refine is the FULL per-iteration history, not just the latest.
+    return Summary(iterations_seen=[d.iteration for d in refine])
+```
+
+Without `all_in_scope` (i.e. a downstream parameter declared as the bare element type `Draft`), a consumer sees only the *latest* iteration's output -- the same unwrap a self-looping node sees on re-entry. Declaring `list[T]` switches to the full-history view. `from_enclosing(n)` is just `history[-n]` on top of that same list -- there's no dedicated helper function; it's documented shorthand for the slice, not new API surface.
+
+This is a projection over the *default* Loop history — it does not attach per-iteration metadata (timestamp, condition-eval result). It also covers only a single, non-nested Loop: nested loops and cross-sub-construct scoping are separate, not-yet-solved problems, not something `all_in_scope`/`from_enclosing` extend to.
+
 ### Restrictions
 
 - `loop_when=` and `map_over=` cannot be combined on the same node. Use a sub-construct with internal loop inside an `Each` fan-out instead.

@@ -41,11 +41,24 @@ class Producer:
     effective_type is user-declared and therefore opaque from neograph's
     perspective — see docs/design/architecture-decisions.md §5 for the
     boundary rationale. label is rendered verbatim in error messages.
+
+    is_loop marks a Loop-modified producer (see neograph-ftnxl.6): unlike
+    Each, Loop does NOT change the declared/effective type (state.py keeps
+    the append-list reducer opaque to the type system — the state field is
+    Annotated[list[output_type], _append_loop_result], but ``effective_type``
+    here intentionally stays the bare ``output_type`` because a plain-T
+    consumer sees the unwrapped latest value, not the list). A list[T]
+    consumer wants the FULL history instead (di.py's ``_unwrap_loop_value``
+    already passes it through unchanged at runtime) — a producer-shape fact
+    ``effective_type`` alone can't express since the SAME producer satisfies
+    two different consumer shapes. ``_loop_aware_compatible`` is the read
+    side of this flag.
     """
 
     field_name: str
     effective_type: TypeSpecStatic
     label: str
+    is_loop: bool = False
 
 
 # Items that appear in Construct.nodes — Node, Construct, or the _BranchNode
@@ -208,6 +221,27 @@ def _types_compatible(producer: TypeSpecStatic, target: TypeSpecStatic) -> bool:
         return issubclass(producer, target)
     except TypeError:
         return False
+
+
+def _loop_aware_compatible(producer: Producer, target: TypeSpecStatic) -> bool:
+    """``_types_compatible`` plus Loop's dual consumer shapes (neograph-ftnxl.6).
+
+    A Loop-modified producer's ``effective_type`` is the bare element type
+    (see ``Producer.is_loop`` docstring), so a bare-T consumer is already
+    covered by ``_types_compatible``. A ``list[T]`` consumer additionally
+    wants the full per-iteration history — a shape only the CONSUMER's
+    declared type reveals, not the producer's — so this is checked here at
+    the call sites that hold both the ``Producer`` (with modifier context)
+    and the consumer's target type, rather than inside ``_types_compatible``
+    (which stays a pure type-shape function, mirroring how the dict[str,X]
+    -> list[X] Each rule is shape-only and needs no modifier context).
+    """
+    if _types_compatible(producer.effective_type, target):
+        return True
+    if not producer.is_loop:
+        return False
+    element = _extract_list_element(target)
+    return element is not None and _types_compatible(producer.effective_type, element)
 
 
 def _extract_list_element(tp: TypeSpecStatic) -> TypeSpecStatic:

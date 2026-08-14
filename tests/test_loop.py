@@ -1911,3 +1911,151 @@ class TestLoopHistoryRemoved:
         assert [d.iteration for d in main] == [1, 2, 3], main
         # And no history state field exists without the flag either.
         assert "neo_loop_history_refine" not in graph.get_state(cfg).values
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 8: Free scope projections (neograph-ftnxl.6) — all_in_scope / from_enclosing
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Loop's state field is already a full per-iteration history with an
+# append-only reducer (_append_loop_result does [*existing, new] — state.py's
+# PrimaryShape.LOOP case). Because Loop is sequential (not parallel), list
+# position IS iteration order already — no new storage is needed. These are
+# pinning tests for that load-bearing invariant plus the two named
+# projections it enables: "all_in_scope" (declare the downstream param as
+# list[T] to receive the full history) and "from_enclosing(n)" (list[-n], a
+# trivial read-side index into that same history). Neither name introduces
+# new mechanism — see AGENTS.md "The free Loop scope projections".
+
+
+class TestLoopScopeProjections:
+    """Pinning tests: list-position == iteration-index for a non-nested Loop,
+    and the two projections built on top of that invariant."""
+
+    def test_list_position_equals_iteration_index_for_non_nested_loop(self):
+        """CORE INVARIANT: for a sequential (non-nested) self-loop, the Nth
+        element of the append-list state field is exactly the Nth iteration's
+        output, in order. Both all_in_scope and from_enclosing(n) are only
+        sound projections because this holds."""
+
+        @node(outputs=Draft)
+        def seed() -> Draft:
+            return Draft(content="v0", iteration=0, score=0.0)
+
+        @node(
+            outputs=Draft,
+            loop_when=lambda d: d is None or d.score < 0.9,
+            max_iterations=6,
+        )
+        def refine(seed: Draft) -> Draft:
+            return Draft(
+                content=f"v{seed.iteration + 1}",
+                iteration=seed.iteration + 1,
+                score=seed.score + 0.3,
+            )
+
+        pipeline = construct_from_functions("scope-proj-invariant", [seed, refine])
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "scope-proj-invariant-run"})
+
+        history = result["refine"]
+        # List position i (0-indexed) holds iteration i+1's output, in order —
+        # the invariant every projection below relies on.
+        assert [d.iteration for d in history] == list(range(1, len(history) + 1))
+
+    def test_all_in_scope_downstream_consumer_sees_full_history_in_order(self):
+        """all_in_scope: a downstream node declares its input as list[T]
+        (instead of T) and receives every iteration's output, in iteration
+        order — the existing _unwrap_loop_value list[T] passthrough, named."""
+
+        @node(outputs=Draft)
+        def seed() -> Draft:
+            return Draft(content="v0", iteration=0, score=0.0)
+
+        @node(
+            outputs=Draft,
+            loop_when=lambda d: d is None or d.score < 0.9,
+            max_iterations=5,
+        )
+        def refine(seed: Draft) -> Draft:
+            return Draft(
+                content=f"v{seed.iteration + 1}",
+                iteration=seed.iteration + 1,
+                score=seed.score + 0.4,
+            )
+
+        class Summary(BaseModel, frozen=True):
+            iterations_seen: list[int]
+
+        @node(outputs=Summary)
+        def summarize(refine: list[Draft]) -> Summary:
+            # all_in_scope: refine is the FULL history, not just the latest.
+            return Summary(iterations_seen=[d.iteration for d in refine])
+
+        pipeline = construct_from_functions(
+            "scope-proj-all-in-scope", [seed, refine, summarize]
+        )
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "scope-proj-all-in-scope-run"})
+
+        assert result["summarize"].iterations_seen == [1, 2, 3]
+
+    def test_all_in_scope_wrong_element_type_still_rejected(self):
+        """The list[T]-against-Loop-producer relaxation is element-type-checked,
+        not a blanket 'any list is fine' bypass — list[WrongType] must still
+        raise ConstructError."""
+
+        class Unrelated(BaseModel, frozen=True):
+            note: str
+
+        @node(outputs=Draft)
+        def seed() -> Draft:
+            return Draft(content="v0", iteration=0, score=0.0)
+
+        @node(outputs=Draft, loop_when=lambda d: d is None or d.score < 0.9, max_iterations=5)
+        def refine(seed: Draft) -> Draft:
+            return Draft(content="v1", iteration=seed.iteration + 1, score=seed.score + 0.4)
+
+        @node(outputs=Unrelated)
+        def summarize(refine: list[Unrelated]) -> Unrelated:
+            return Unrelated(note="n/a")
+
+        with pytest.raises(ConstructError, match="refine"):
+            construct_from_functions("scope-proj-wrong-element", [seed, refine, summarize])
+
+    def test_from_enclosing_is_a_negative_index_into_the_same_history(self):
+        """from_enclosing(n): a trivial read helper over the SAME all_in_scope
+        history — history[-n] is the nth-from-latest iteration's output. No
+        separate storage; it's a slice of the list all_in_scope already sees."""
+
+        @node(outputs=Draft)
+        def seed() -> Draft:
+            return Draft(content="v0", iteration=0, score=0.0)
+
+        @node(
+            outputs=Draft,
+            loop_when=lambda d: d is None or d.score < 0.9,
+            max_iterations=6,
+        )
+        def refine(seed: Draft) -> Draft:
+            return Draft(
+                content=f"v{seed.iteration + 1}",
+                iteration=seed.iteration + 1,
+                score=seed.score + 0.3,
+            )
+
+        pipeline = construct_from_functions("scope-proj-from-enclosing", [seed, refine])
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "scope-proj-from-enclosing-run"})
+
+        history = result["refine"]
+        assert len(history) >= 2, "test needs at least 2 iterations to exercise from_enclosing(2)"
+
+        def from_enclosing(history: list[Draft], n: int) -> Draft:
+            return history[-n]
+
+        latest = from_enclosing(history, 1)
+        second_to_last = from_enclosing(history, 2)
+        assert latest == history[-1]
+        assert second_to_last == history[-2]
+        assert latest.iteration == second_to_last.iteration + 1

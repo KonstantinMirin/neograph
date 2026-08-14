@@ -122,6 +122,27 @@ The validator (`_types_compatible`) accepts `list[X]` against a `dict[str, X]` p
 
 **Ordering caveat**: `dict.values()` preserves insertion order, but Each's barrier collects `Send()` results in arrival order, not `each.over` collection order. Use `list[X]` for order-independent reductions (counts, aggregates, summaries). If you need deterministic ordering, consume as `dict[str, X]` and sort explicitly on the key.
 
+### The free Loop scope projections: `all_in_scope` and `from_enclosing(n)`
+
+Mirrors the Each `list[X]` rule above, but for `Loop`. A `Loop`-modified node's state field is *already* a full per-iteration history — `state.py`'s `PrimaryShape.LOOP` case is `Annotated[list[output_type], _append_loop_result]`, and `_append_loop_result` (`_state_reducers.py`) is a pure append (`[*existing, new]`). Loop is sequential (not parallel like Each), so list position **is** iteration order for a non-nested Loop — no new storage, no per-iteration metadata, just a read-time view over what already exists:
+
+- **`all_in_scope`** — a downstream node declares its input as `list[T]` instead of `T`; it receives the FULL history, in order, instead of the latest-only unwrap. `di.py`'s `_unwrap_loop_value` (the single source of truth for Loop unwrap, shared by `_extract_input`/`_resolve_merge_args`/`loop_router`) already passes `list[T]` through unchanged at runtime — this name documents that existing passthrough, it isn't new mechanism.
+- **`from_enclosing(n)`** — `history[-n]`, a plain negative index into the same `list[T]` `all_in_scope` sees. No dedicated helper exists or is needed; it's documented shorthand for the slice.
+
+```python
+@node(outputs=Draft, loop_when=lambda d: d is None or d.score < 0.9, max_iterations=5)
+def refine(seed: Draft) -> Draft: ...
+
+@node(outputs=Summary)
+def summarize(refine: list[Draft]) -> Summary:
+    # all_in_scope: refine is the FULL per-iteration history, latest last.
+    ...
+```
+
+**Validator note**: unlike Each (whose producer type is `dict[str, X]` at the type-annotation level, so the existing shape-only `_types_compatible` dict→list rule covers it for free), a Loop-modified producer's declared/effective type stays the bare element type `T` — Loop doesn't change `Node.outputs`/`effective_producer_type` the way Each does. A `list[T]`-declaring consumer therefore needs a *modifier-aware* compatibility check, not a shape-only one: `Producer.is_loop` (`_validation_types.py`) plus `_loop_aware_compatible` (checked at the `_validation_inputs.py` call sites, not inlined into `_types_compatible`) accept `list[T]` against a Loop producer of `T` — element-type-checked, not a blanket bypass.
+
+**Scope**: covers only a single, non-nested Loop. Each indexing (`iteration_index`) and nested/cross-sub-construct scope addressing are separate, unresolved gaps — do not conflate them with this projection.
+
 ### `Node.inputs` (plural) vs `Construct.input` (singular)
 
 These are different fields with different roles — the naming is intentional, not a typo:

@@ -229,14 +229,17 @@ def _validate_node_chain(
                         field_name=key_field,
                         effective_type=producer_type,
                         label=key_label,
+                        is_loop=item.modifier_set.loop is not None,
                     )
             else:
                 label = f"node '{name}'" if isinstance(item, Node) else f"sub-construct '{name}'"
+                item_modifier_set = getattr(item, "modifier_set", None)
                 # Shared helper decides the modifier-adjusted state-bus type.
                 producers[field_name] = Producer(
                     field_name=field_name,
                     effective_type=effective_producer_type(item),
                     label=label,
+                    is_loop=item_modifier_set is not None and item_modifier_set.loop is not None,
                 )
 
             # Portal DISPATCH (route="decide", design §4.2): besides its own
