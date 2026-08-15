@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 
+from neograph.errors import ExecutionError
 from neograph.tool import ToolInteraction
 
 
@@ -63,7 +64,11 @@ class ToolLedger:
         (ordinal-0) record's ``.key`` is itself ``None``, and a caller that
         passes that straight through has a bug, not an empty lookup."""
         if not key:
-            raise ValueError("ToolLedger.by_key() requires a non-empty key (an unaddressable record has key=None)")
+            raise ExecutionError.build(
+                "ToolLedger.by_key() requires a non-empty key",
+                found=repr(key),
+                hint="an unaddressable (ordinal-0) record's .key is None -- check for None before calling by_key",
+            )
         return self._by_key.get(key)
 
     def __iter__(self) -> Iterator[ToolInteraction]:

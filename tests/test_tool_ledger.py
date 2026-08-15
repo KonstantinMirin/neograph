@@ -54,7 +54,7 @@ from neograph import (
     run,
 )
 from neograph._state_keys import StateKeys
-from neograph.errors import CheckpointSchemaError
+from neograph.errors import CheckpointSchemaError, ExecutionError
 from tests.fakes import (
     ReActFake,
     build_fake_llm_kwargs,
@@ -617,9 +617,9 @@ def test_by_key_refuses_unaddressable_records_when_ordinal_is_zero():
     assert ledger.by_key("search#0") is None, "an ordinal-0 record is never reachable by key"
     assert ledger.by_key("transfer_to_peer#0") is None
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ExecutionError):
         ledger.by_key(None)
-    with pytest.raises(ValueError):
+    with pytest.raises(ExecutionError):
         ledger.by_key("")
 
     # The unaddressable records are still VISIBLE through the ordinary selectors.
