@@ -471,7 +471,7 @@
     },
     "PortalSpec": {
       "additionalProperties": false,
-      "description": "Portal (dynamic handoff) modifier in a node or sub-construct spec.\n\nTwo modes, mirroring ``neograph._portal.Portal`` field-for-field (identical\nnames, identical defaults where one exists) so ``_spec_loader``'s forward-\nevery-explicitly-written-field pass-through gives YAML parity with the\nprogrammatic form BY CONSTRUCTION: peer routing (``to=``) and dynamic\nflow dispatch (``route=\"decide\"``). ``scripted``/``conditions`` (callable\nregistries, ``dict[str, Callable]``) are Python-only and deliberately\nomitted -- not YAML-expressible -- see the spec-format docs for the exact\nnarrowing this omission means for a dispatch-mode Portal's emitted flow.",
+      "description": "Portal (dynamic handoff) modifier in a node or sub-construct spec.\n\nTwo modes, mirroring ``neograph._portal.Portal`` field-for-field (identical\nnames, identical defaults where one exists) so ``_spec_loader``'s forward-\nevery-explicitly-written-field pass-through gives YAML parity with the\nprogrammatic form BY CONSTRUCTION: peer routing (``to=``) and dynamic\nflow dispatch (``route=\"decide\"``). ``scripted``/``conditions`` are\nPython-only CALLABLE registries (``dict[str, Callable]``) and deliberately\nomitted -- not YAML-expressible. See the spec-format docs for the exact\nnarrowing this omission means for a dispatch-mode Portal's emitted flow:\nfor a spec-emitted flow, the condition half is reachable only through\n``operator.when`` (``loop.when`` is expression-parsed at LOAD time, so it\nnever consults the emitted flow's condition registry).",
       "properties": {
         "to": {
           "anyOf": [

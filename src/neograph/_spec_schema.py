@@ -70,10 +70,13 @@ class PortalSpec(BaseModel):
     names, identical defaults where one exists) so ``_spec_loader``'s forward-
     every-explicitly-written-field pass-through gives YAML parity with the
     programmatic form BY CONSTRUCTION: peer routing (``to=``) and dynamic
-    flow dispatch (``route="decide"``). ``scripted``/``conditions`` (callable
-    registries, ``dict[str, Callable]``) are Python-only and deliberately
-    omitted -- not YAML-expressible -- see the spec-format docs for the exact
-    narrowing this omission means for a dispatch-mode Portal's emitted flow.
+    flow dispatch (``route="decide"``). ``scripted``/``conditions`` are
+    Python-only CALLABLE registries (``dict[str, Callable]``) and deliberately
+    omitted -- not YAML-expressible. See the spec-format docs for the exact
+    narrowing this omission means for a dispatch-mode Portal's emitted flow:
+    for a spec-emitted flow, the condition half is reachable only through
+    ``operator.when`` (``loop.when`` is expression-parsed at LOAD time, so it
+    never consults the emitted flow's condition registry).
     """
 
     model_config = ConfigDict(extra="forbid")
