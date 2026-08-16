@@ -60,6 +60,7 @@ pytest.importorskip("pyagentspec")
 
 from neograph import Construct, ConstructError, Tool, node  # noqa: E402
 from neograph._agent_spec import to_agent_spec  # noqa: E402
+from neograph.conditions import parse_condition  # noqa: E402
 from neograph.decorators import construct_from_functions  # noqa: E402
 from neograph.loader import from_agent_spec  # noqa: E402
 from neograph.modifiers import (  # noqa: E402
@@ -70,7 +71,7 @@ from neograph.modifiers import (  # noqa: E402
 )
 from neograph.node import Node  # noqa: E402
 from tests.agent_spec_capabilities import assert_registry_complete  # noqa: E402
-from tests.fakes import register_scripted  # noqa: E402
+from tests.fakes import register_condition, register_scripted  # noqa: E402
 
 # -- Shared models -----------------------------------------------------------
 
@@ -334,7 +335,11 @@ def build_cell(mode: str, combo: ModifierCombo, config: str | None, shape: str) 
     if wants_loop:
         # Expression condition (the documented serialization target and the shape
         # the passing round-trip cells use); condition references field ``a`` so
-        # the loop node output stays Alpha.
+        # the loop node output stays Alpha. Registered here (not just exported) so
+        # a caller that actually compile()s+run()s this construct -- the COMPARE
+        # tier, tests.agent_spec_loader_harness.run_via_neograph -- resolves it
+        # too; matrix tests themselves only export, never compile.
+        register_condition('a == "x"', parse_condition('a == "x"'))
         loop_kw: dict[str, object] = {"loop_when": 'a == "x"', "max_iterations": 3, **_gate("a")}
 
         if shape == "single":

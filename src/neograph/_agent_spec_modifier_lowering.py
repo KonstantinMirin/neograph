@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeAlias
 
+from neograph._agent_spec_loop_predicate import synthesize_loop_predicate
 from neograph._agent_spec_markers import (
     _MARK_BRANCH,
     _MARK_EACH_SPEC,
@@ -263,7 +264,11 @@ def _lower_oracle(
 
 
 def _lower_each(
-    node: Node | Construct, each: Each, export_flow: _ExportFlow, oracle: Oracle | None = None, api_provider: str | None = None
+    node: Node | Construct,
+    each: Each,
+    export_flow: _ExportFlow,
+    oracle: Oracle | None = None,
+    api_provider: str | None = None,
 ) -> SpecNode:
     """Lower an Each-modified item: MapNode wrapping a single-body sub-Flow.
 
@@ -352,19 +357,13 @@ def _lower_each(
 
 def _lower_loop(
     node: Node | Construct, loop: Loop, body: SpecNode
-) -> tuple[SpecNode, list[ControlFlowEdge], list[DataFlowEdge]]:
+) -> tuple[SpecNode, list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge]]:
     """Lower a Loop-modified item: BranchingNode({continue: back-edge, done: next}).
-
-    ``body`` is the caller-lowered primitive (a Node's lowered node or a
-    Construct-item's ``FlowNode``), so ``Construct(...) | Loop(...)`` loops its
-    sub-flow the same way ``node | Loop(...)`` loops its body node.
-
-    A bare BranchingNode+back-edge is ambiguous (loop vs branch) without the
-    ``neograph/modifier=loop`` marker (per the Core Invariant's marker
-    requirement) — always stamped.
+    ``body`` is the caller-lowered primitive. Returns ``(branch, extra_nodes,
+    control_edges, data_edges)`` -- see ``_agent_spec_loop_predicate`` for what
+    ``extra_nodes`` holds; caller folds it between ``body``/``branch``.
     """
-    nodes_mod, _flow_mod, edges_mod, property_mod, _tools_mod = _import_agent_spec_flow_classes()
-
+    nodes_mod, _flow_mod, edges_mod, property_mod, tools_mod = _import_agent_spec_flow_classes()
     if callable(loop.when):
         raise ConfigurationError.build(
             f"node {node.name!r}'s Loop.when is a callable — no Agent Spec representation",
@@ -372,21 +371,22 @@ def _lower_loop(
             found="Loop.when is a callable",
             hint="only registered-string conditions serialize (callable-valued field, doc s6)",
         )
-
     branch = nodes_mod.BranchingNode(
         name=f"{node.name}__loop_check",
         mapping={Branch.CONTINUE: Branch.CONTINUE, Branch.DONE: Branch.DONE},
         metadata={
             _MARK_MODIFIER: "loop",
-            _MARK_LOOP_SPEC: {
-                "when": loop.when,
-                "max_iterations": loop.max_iterations,
-                "on_exhaust": loop.on_exhaust,
-            },
+            _MARK_LOOP_SPEC: {"when": loop.when, "max_iterations": loop.max_iterations, "on_exhaust": loop.on_exhaust},
         },
     )
+    # neograph-qtfof.6: see _agent_spec_loop_predicate's module docstring.
+    extra_nodes, predicate_control, predicate_data, check_entry = synthesize_loop_predicate(
+        node, loop, body, branch, (nodes_mod, edges_mod, property_mod, tools_mod)
+    )
+    check_tag = "predicate" if extra_nodes else "loop_body"
     control_edges = [
-        edges_mod.ControlFlowEdge(name=f"{node.name}__loop_body_to_check", from_node=body, to_node=branch),
+        *predicate_control,
+        edges_mod.ControlFlowEdge(name=f"{node.name}__{check_tag}_to_check", from_node=check_entry, to_node=branch),
         edges_mod.ControlFlowEdge(
             name=f"{node.name}__loop_back", from_node=branch, from_branch=Branch.CONTINUE, to_node=body
         ),
@@ -430,7 +430,7 @@ def _lower_loop(
     # pyagentspec's OWN property_is_castable_to, never by suppressing it -- neograph-rh5fb.
     body_inputs = {p.title: p for p in (body.inputs or [])}
     body_outputs = {p.title: p for p in (body.outputs or [])}
-    data_edges: list[DataFlowEdge] = []
+    data_edges: list[DataFlowEdge] = list(predicate_data)
     for prop in _properties_for(_item_outputs(node)):
         if _is_translation_eligible(node):
             dest_input = body_orig_to_flat.get(f"{dest_key}.{prop.title}" if dest_key else prop.title)
@@ -452,7 +452,7 @@ def _lower_loop(
                 destination_input=dest_input,
             )
         )
-    return branch, control_edges, data_edges
+    return branch, extra_nodes, control_edges, data_edges
 
 
 def _lower_branch(

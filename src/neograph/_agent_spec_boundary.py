@@ -51,14 +51,14 @@ not implemented here.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from neograph._agent_spec_placeholders import _item_outputs, _properties_for
 from neograph._ir_branch import _BranchNode
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
 from neograph.modifiers import PrimaryShape, primary_shape
-
+from neograph.node import Node
 
 #: Modifier shapes whose exported SpecNode declares outputs=
 #: _properties_for(_item_outputs(item)) -- IDENTICAL to the bare case, so the
@@ -87,7 +87,7 @@ def resolve_end_node_sources(
     today's pre-fix shape -- when the terminal producer is modifier-wrapped
     (see module docstring's scope boundary).
     """
-    fallback = (_properties_for(construct.output), [])
+    fallback: tuple[list[Any], list[tuple[Any, str]]] = (_properties_for(construct.output), [])
     last = construct.nodes[-1]
 
     if isinstance(last, _BranchNode):
@@ -131,7 +131,13 @@ def resolve_end_node_sources(
     if not _is_wirable(last):
         return fallback
 
-    props = _properties_for(_item_outputs(last))
-    source_node = data_node_by_item_name.get(getattr(last, "name", None))
+    # _is_wirable's BARE/ORACLE shapes only ever apply to a Node/Construct item
+    # (the _BranchNode case already returned above) -- primary_shape/_is_wirable
+    # take Any (they must, to classify a raw ConstructItem before narrowing), so
+    # this cast documents the narrowing mypy cannot derive from that.
+    wirable_last = cast("Node | Construct", last)
+    props = _properties_for(_item_outputs(wirable_last))
+    name = getattr(wirable_last, "name", None)
+    source_node = data_node_by_item_name.get(name) if isinstance(name, str) else None
     sources = [(source_node, prop.title) for prop in props] if source_node is not None else []
     return props, sources

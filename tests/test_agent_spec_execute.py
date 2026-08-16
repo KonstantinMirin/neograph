@@ -131,6 +131,15 @@ _CELL_BODIES: dict[str, dict[str, object]] = {
     "scripted-bare-dict": {"pa": Alpha(a="p"), "pb": Beta(b="q"), "target": Out(ok="done")},
     "scripted-oracle-merge_fn-single": {"prod": Alpha(a="p"), "gen": Out(ok="done")},
     "scripted-oracle-merge_fn-dict": {"pa": Alpha(a="p"), "pb": Beta(b="q"), "gen": Out(ok="done")},
+    # neograph-qtfof.6 widened COMPARE_CELLS to include these two. `a="not-x"`
+    # makes the loop's `a == "x"` condition false on iteration 1 (DONE) on
+    # BOTH sides -- the third-party side's synthesized predicate tool has no
+    # declared body (compare_registry's pass-through echoes its kwargs, not a
+    # real evaluation), so it lands on DEFAULT, which this ticket routes to the
+    # SAME exit as DONE. Both still land empty (qtfof.9's Loop-terminal EndNode
+    # gap, explicitly out of that ticket's scope) -- see EXEC_EXEMPT below.
+    "scripted-loop-single": {"prod": Alpha(a="p"), "refine": Alpha(a="not-x")},
+    "scripted-loop-dict": {"pa": Alpha(a="p"), "pb": Beta(b="q"), "refine": Alpha(a="not-x")},
 }
 
 
@@ -246,12 +255,18 @@ class TestExecExemptProjectionCoverage:
         for cell_id in sorted(GREEN):
             mode, combo, config, _shape = CELLS[cell_id]
             names = modifier_names_for_combo(combo)
-            key = (mode, "each" in names, bool({"loop", "operator"} & set(names)), config == "merge_prompt")
+            # neograph-qtfof.6: "loop" alone no longer determines exemption --
+            # a Loop's predicate is statically determinable and now gets a real
+            # DataFlowEdge, closing that gap. "operator" still does: its `when`
+            # reads the whole state bus, genuinely undeterminable (out of this
+            # ticket's scope), so its check node's input stays permanently
+            # unfed regardless of whether Loop is also present.
+            key = (mode, "each" in names, "operator" in names, config == "merge_prompt")
             projection_status.setdefault(key, set()).add(cell_id in EXEC_EXEMPT)
 
         inconsistent = {k: v for k, v in projection_status.items() if len(v) > 1}
         assert not inconsistent, (
-            "EXEC_EXEMPT membership is not determined by (mode, each, loop/operator, merge_prompt) "
+            "EXEC_EXEMPT membership is not determined by (mode, each, operator, merge_prompt) "
             f"alone -- these projections contain BOTH exempt and non-exempt cells: {sorted(inconsistent)}. "
             "That means the exemption is tracking something other than the three known export "
             "gaps (which are pure mode/modifier-shape defects), or a genuinely new export gap "

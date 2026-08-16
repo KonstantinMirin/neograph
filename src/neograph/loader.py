@@ -192,15 +192,29 @@ def _group_flow_items(flow: Any) -> list[tuple[frozenset[str], dict[str, Any]]]:
             j = i + 1
             nxt = nodes[i + 1] if i + 1 < n else None
             if nxt is not None and (nxt.metadata or {}).get(_MARK_MODIFIER) == "loop":
-                edge_to_nxt = _has_control_edge(flow, node.name, nxt.name)
-                back_edge = _has_control_edge(flow, nxt.name, node.name, branch=Branch.CONTINUE)
-                if edge_to_nxt and back_edge:
-                    names.add("loop")
-                    payload.pop("primary")
-                    payload["body"] = node
-                    payload["check"] = nxt
-                    primary_spec = nxt
-                    j = i + 2
+                # neograph-qtfof.6: nxt may be the synthesized predicate ToolNode
+                # (body -> predicate -> check) rather than the check itself -- it
+                # also carries the loop marker. It is pure export scaffolding
+                # (the marker's `when` already carries the real condition), so it
+                # is verified structurally then DISCARDED, never stored: only
+                # body/check matter to reconstruction.
+                check_candidate, span = nxt, 2
+                if type(nxt).__name__ == "ToolNode":
+                    check_candidate = nodes[i + 2] if i + 2 < n else None
+                    span = 3
+                if check_candidate is not None:
+                    edge_to_next_hop = _has_control_edge(flow, node.name, nxt.name)
+                    edge_to_check = check_candidate is nxt or _has_control_edge(
+                        flow, nxt.name, check_candidate.name
+                    )
+                    back_edge = _has_control_edge(flow, check_candidate.name, node.name, branch=Branch.CONTINUE)
+                    if edge_to_next_hop and edge_to_check and back_edge:
+                        names.add("loop")
+                        payload.pop("primary")
+                        payload["body"] = node
+                        payload["check"] = check_candidate
+                        primary_spec = check_candidate
+                        j = i + span
 
         # ONE shared trailing-Operator lookahead for every primary group above.
         check = _trailing_operator(nodes, j, primary_spec, flow)

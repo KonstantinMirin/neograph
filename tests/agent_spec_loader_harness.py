@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from neograph import compile, run
 from tests.agent_spec_flow_walk import all_flows
+from tests.fakes import build_test_compile_kwargs
 
 
 def server_tools(flow: Any) -> dict[str, Any]:
@@ -114,7 +115,14 @@ def run_via_neograph(construct: Any, bodies: dict[str, BaseModel]) -> dict[str, 
     def _body(model: BaseModel) -> Any:
         return lambda _input_data, _config: model
 
-    graph = compile(construct, scripted={name: _body(model) for name, model in bodies.items()})
+    # neograph-qtfof.6: a LOOP cell's `when` may be a test-registered EXPRESSION
+    # condition (tests.fakes.register_condition), which lives in a test-local
+    # registry `compile()` never consults by default -- build_test_compile_kwargs()
+    # is the one bridge. The per-cell bodies win over any OTHER scripted
+    # registration (e.g. an Oracle merge_fn) for the same reason COMPARE exists:
+    # this comparison must run on exactly these bodies, nothing incidental.
+    kwargs = build_test_compile_kwargs(scripted={name: _body(model) for name, model in bodies.items()})
+    graph = compile(construct, **kwargs)
     return run(graph, input={})
 
 

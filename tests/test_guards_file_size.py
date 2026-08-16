@@ -76,7 +76,11 @@ ALLOWLIST: dict[str, int] = {
     # neograph-qtfof.9: 662 -> 667. EndNode outputs/sources now resolved via
     # _agent_spec_boundary.resolve_end_node_sources (new peer module -- the
     # bulk of the fix lives there, this is call-site glue only).
-    "_agent_spec.py": 667,
+    # neograph-qtfof.6: 667 -> 681. LOOP arm's extra_nodes threading (the
+    # synthesized predicate node) + DEFAULT_BRANCH exit wiring, call-site glue
+    # only -- the predicate-synthesis logic itself lives in the new peer module
+    # _agent_spec_loop_predicate.py.
+    "_agent_spec.py": 681,
     # neograph-qtfof.8: 646 -> 649. _lower_oracle/_lower_each thread api_provider
     # to their _make_llm_config/_lower_generation_step call sites.
     "_agent_spec_modifier_lowering.py": 649,

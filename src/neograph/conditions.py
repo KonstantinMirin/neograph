@@ -128,3 +128,19 @@ def parse_condition(expr: str) -> Callable[[Any], bool]:
         return op_fn(resolved, literal)
 
     return _evaluate
+
+
+def condition_field(expr: str) -> str | None:
+    """The dotted field name an expression-form condition reads, or ``None``
+    if ``expr`` does not match the ``field op literal`` grammar (e.g. it is a
+    registered condition NAME, the other legal form ``Loop.when``/``Operator.
+    when`` accept -- see ``_agent_spec_group_import.py``'s discrimination
+    precedent, which this mirrors with a non-raising return instead of a
+    try/except ValueError so callers that only need the field (not a working
+    evaluator) don't have to construct one just to discard it.
+
+    Reuses :data:`_EXPR_RE`, never a second regex, so the grammar has one
+    definition.
+    """
+    m = _EXPR_RE.match(expr.strip())
+    return m.group("field") if m is not None else None

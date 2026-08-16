@@ -148,6 +148,28 @@ deletions) is `_canonicalize`'s full-inlining artifact, not evidence of a
 wider change -- confirmed by an exact `old[k] == new[k]` check on all 7
 unchanged keys plus `set(old) == set(new)`.
 
+## The FIFTH sanctioned value modification (neograph-qtfof.6, 2026-08-14)
+
+Same category: the golden had captured the qtfof.6 bug too -- a Loop's exported
+``BranchingNode`` decision lived only in ``neograph/loop_spec`` metadata, with no
+real ``DataFlowEdge`` feeding it, so a metadata-blind runtime silently fell to
+``DEFAULT_BRANCH`` and never followed the back-edge. The fix synthesizes a
+predicate ``ToolNode`` (body -> predicate -> check, real edges both hops) when
+``Loop.when`` is a statically-determinable expression, and wires
+``DEFAULT_BRANCH`` to the same exit as ``done`` (previously a dead end).
+
+Extent, measured by a full recursive golden-vs-actual diff across all 34
+REPRESENTATIVE_CELLS BEFORE patching: exactly 3 cells changed (scripted-loop-
+single, scripted-loop-dict, think-loop-single -- every LOOP cell in the
+representative set; a registered-condition-NAME ``when`` synthesizes no
+predicate and is unaffected, out of scope per the ticket), 31 unchanged
+(verified `old[k] == new[k]` for all 31 plus `set(old) == set(new)`, zero
+added/removed keys). In each changed cell the diff is confined to: the renamed
+control edge (``..._loop_body_to_check`` -> ``..._loop_body_to_predicate``),
+the new predicate ``ToolNode`` + its ``ServerTool``, two new
+``DataFlowEdge``s (body->predicate, predicate->check), and one new
+``ControlFlowEdge`` for ``DEFAULT_BRANCH``'s exit.
+
 Run with::
 
     uv run --extra agent-spec pytest tests/test_agent_spec_refactor_snapshot.py

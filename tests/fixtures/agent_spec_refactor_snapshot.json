@@ -25675,7 +25675,96 @@
           }
         },
         "metadata": {},
-        "name": "refine__loop_body_to_check",
+        "name": "refine__loop_body_to_predicate",
+        "to_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+            "inputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine_loop_predicate",
+            "outputs": [
+              {
+                "title": "branching_mapping_key",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "component_type": "ControlFlowEdge",
+        "description": null,
+        "from_branch": null,
+        "from_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+            "inputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine_loop_predicate",
+            "outputs": [
+              {
+                "title": "branching_mapping_key",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "metadata": {},
+        "name": "refine__predicate_to_check",
         "to_node": {
           "branches": [
             "continue",
@@ -25985,9 +26074,231 @@
           "name": "scripted-loop-dict__end",
           "outputs": []
         }
+      },
+      {
+        "component_type": "ControlFlowEdge",
+        "description": null,
+        "from_branch": "default",
+        "from_node": {
+          "branches": [
+            "continue",
+            "default",
+            "done"
+          ],
+          "component_type": "BranchingNode",
+          "description": null,
+          "inputs": [
+            {
+              "description": "Next branch name in the flow",
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "mapping": {
+            "continue": "continue",
+            "done": "done"
+          },
+          "metadata": {
+            "neograph/loop_spec": {
+              "max_iterations": 3,
+              "on_exhaust": "error",
+              "when": "a == \"x\""
+            },
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_check",
+          "outputs": []
+        },
+        "metadata": {},
+        "name": "scripted-loop-dict__end_edge_default",
+        "to_node": {
+          "branch_name": "next",
+          "branches": [],
+          "component_type": "EndNode",
+          "description": null,
+          "inputs": [],
+          "metadata": {},
+          "name": "scripted-loop-dict__end",
+          "outputs": []
+        }
       }
     ],
     "data_flow_connections": [
+      {
+        "component_type": "DataFlowEdge",
+        "description": null,
+        "destination_input": "a",
+        "destination_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+            "inputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine_loop_predicate",
+            "outputs": [
+              {
+                "title": "branching_mapping_key",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "metadata": {},
+        "name": "refine__loop_predicate_source",
+        "source_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "pa:a",
+              "type": "string"
+            },
+            {
+              "title": "pb:b",
+              "type": "string"
+            }
+          ],
+          "metadata": {},
+          "name": "refine",
+          "outputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "neograph node 'refine' (mode=scripted)",
+            "inputs": [
+              {
+                "title": "pa:a",
+                "type": "string"
+              },
+              {
+                "title": "pb:b",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine",
+            "outputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "source_output": "a"
+      },
+      {
+        "component_type": "DataFlowEdge",
+        "description": null,
+        "destination_input": "branching_mapping_key",
+        "destination_node": {
+          "branches": [
+            "continue",
+            "default",
+            "done"
+          ],
+          "component_type": "BranchingNode",
+          "description": null,
+          "inputs": [
+            {
+              "description": "Next branch name in the flow",
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "mapping": {
+            "continue": "continue",
+            "done": "done"
+          },
+          "metadata": {
+            "neograph/loop_spec": {
+              "max_iterations": 3,
+              "on_exhaust": "error",
+              "when": "a == \"x\""
+            },
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_check",
+          "outputs": []
+        },
+        "metadata": {},
+        "name": "refine__loop_predicate_result",
+        "source_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+            "inputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine_loop_predicate",
+            "outputs": [
+              {
+                "title": "branching_mapping_key",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "source_output": "branching_mapping_key"
+      },
       {
         "component_type": "DataFlowEdge",
         "description": null,
@@ -26382,6 +26693,47 @@
       },
       {
         "branches": [
+          "next"
+        ],
+        "component_type": "ToolNode",
+        "description": null,
+        "inputs": [
+          {
+            "title": "a",
+            "type": "string"
+          }
+        ],
+        "metadata": {
+          "neograph/modifier": "loop"
+        },
+        "name": "refine__loop_predicate",
+        "outputs": [
+          {
+            "title": "branching_mapping_key",
+            "type": "string"
+          }
+        ],
+        "tool": {
+          "component_type": "ServerTool",
+          "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {},
+          "name": "refine_loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      {
+        "branches": [
           "continue",
           "default",
           "done"
@@ -26529,7 +26881,96 @@
           }
         },
         "metadata": {},
-        "name": "refine__loop_body_to_check",
+        "name": "refine__loop_body_to_predicate",
+        "to_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+            "inputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine_loop_predicate",
+            "outputs": [
+              {
+                "title": "branching_mapping_key",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "component_type": "ControlFlowEdge",
+        "description": null,
+        "from_branch": null,
+        "from_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+            "inputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine_loop_predicate",
+            "outputs": [
+              {
+                "title": "branching_mapping_key",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "metadata": {},
+        "name": "refine__predicate_to_check",
         "to_node": {
           "branches": [
             "continue",
@@ -26758,9 +27199,223 @@
           "name": "scripted-loop-single__end",
           "outputs": []
         }
+      },
+      {
+        "component_type": "ControlFlowEdge",
+        "description": null,
+        "from_branch": "default",
+        "from_node": {
+          "branches": [
+            "continue",
+            "default",
+            "done"
+          ],
+          "component_type": "BranchingNode",
+          "description": null,
+          "inputs": [
+            {
+              "description": "Next branch name in the flow",
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "mapping": {
+            "continue": "continue",
+            "done": "done"
+          },
+          "metadata": {
+            "neograph/loop_spec": {
+              "max_iterations": 3,
+              "on_exhaust": "error",
+              "when": "a == \"x\""
+            },
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_check",
+          "outputs": []
+        },
+        "metadata": {},
+        "name": "scripted-loop-single__end_edge_default",
+        "to_node": {
+          "branch_name": "next",
+          "branches": [],
+          "component_type": "EndNode",
+          "description": null,
+          "inputs": [],
+          "metadata": {},
+          "name": "scripted-loop-single__end",
+          "outputs": []
+        }
       }
     ],
     "data_flow_connections": [
+      {
+        "component_type": "DataFlowEdge",
+        "description": null,
+        "destination_input": "a",
+        "destination_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+            "inputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine_loop_predicate",
+            "outputs": [
+              {
+                "title": "branching_mapping_key",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "metadata": {},
+        "name": "refine__loop_predicate_source",
+        "source_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "prod:a",
+              "type": "string"
+            }
+          ],
+          "metadata": {},
+          "name": "refine",
+          "outputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "neograph node 'refine' (mode=scripted)",
+            "inputs": [
+              {
+                "title": "prod:a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine",
+            "outputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "source_output": "a"
+      },
+      {
+        "component_type": "DataFlowEdge",
+        "description": null,
+        "destination_input": "branching_mapping_key",
+        "destination_node": {
+          "branches": [
+            "continue",
+            "default",
+            "done"
+          ],
+          "component_type": "BranchingNode",
+          "description": null,
+          "inputs": [
+            {
+              "description": "Next branch name in the flow",
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "mapping": {
+            "continue": "continue",
+            "done": "done"
+          },
+          "metadata": {
+            "neograph/loop_spec": {
+              "max_iterations": 3,
+              "on_exhaust": "error",
+              "when": "a == \"x\""
+            },
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_check",
+          "outputs": []
+        },
+        "metadata": {},
+        "name": "refine__loop_predicate_result",
+        "source_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+            "inputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine_loop_predicate",
+            "outputs": [
+              {
+                "title": "branching_mapping_key",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "source_output": "branching_mapping_key"
+      },
       {
         "component_type": "DataFlowEdge",
         "description": null,
@@ -27003,6 +27658,47 @@
           "outputs": [
             {
               "title": "a",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      {
+        "branches": [
+          "next"
+        ],
+        "component_type": "ToolNode",
+        "description": null,
+        "inputs": [
+          {
+            "title": "a",
+            "type": "string"
+          }
+        ],
+        "metadata": {
+          "neograph/modifier": "loop"
+        },
+        "name": "refine__loop_predicate",
+        "outputs": [
+          {
+            "title": "branching_mapping_key",
+            "type": "string"
+          }
+        ],
+        "tool": {
+          "component_type": "ServerTool",
+          "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {},
+          "name": "refine_loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
               "type": "string"
             }
           ]
@@ -36082,7 +36778,98 @@
           "prompt_template": "process {{ prod_a }}"
         },
         "metadata": {},
-        "name": "refine__loop_body_to_check",
+        "name": "refine__loop_body_to_predicate",
+        "to_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+            "inputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine_loop_predicate",
+            "outputs": [
+              {
+                "title": "branching_mapping_key",
+                "type": "string"
+              }
+            ],
+            "requires_confirmation": false
+          }
+        }
+      },
+      {
+        "component_type": "ControlFlowEdge",
+        "description": null,
+        "from_branch": null,
+        "from_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+            "inputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine_loop_predicate",
+            "outputs": [
+              {
+                "title": "branching_mapping_key",
+                "type": "string"
+              }
+            ],
+            "requires_confirmation": false
+          }
+        },
+        "metadata": {},
+        "name": "refine__predicate_to_check",
         "to_node": {
           "branches": [
             "continue",
@@ -36338,9 +37125,238 @@
           "name": "think-loop-single__end",
           "outputs": []
         }
+      },
+      {
+        "component_type": "ControlFlowEdge",
+        "description": null,
+        "from_branch": "default",
+        "from_node": {
+          "branches": [
+            "continue",
+            "default",
+            "done"
+          ],
+          "component_type": "BranchingNode",
+          "description": null,
+          "inputs": [
+            {
+              "description": "Next branch name in the flow",
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "mapping": {
+            "continue": "continue",
+            "done": "done"
+          },
+          "metadata": {
+            "neograph/loop_spec": {
+              "max_iterations": 3,
+              "on_exhaust": "error",
+              "when": "a == \"x\""
+            },
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_check",
+          "outputs": []
+        },
+        "metadata": {},
+        "name": "think-loop-single__end_edge_default",
+        "to_node": {
+          "branch_name": "next",
+          "branches": [],
+          "component_type": "EndNode",
+          "description": null,
+          "inputs": [],
+          "metadata": {},
+          "name": "think-loop-single__end",
+          "outputs": []
+        }
       }
     ],
     "data_flow_connections": [
+      {
+        "component_type": "DataFlowEdge",
+        "description": null,
+        "destination_input": "a",
+        "destination_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+            "inputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine_loop_predicate",
+            "outputs": [
+              {
+                "title": "branching_mapping_key",
+                "type": "string"
+              }
+            ],
+            "requires_confirmation": false
+          }
+        },
+        "metadata": {},
+        "name": "refine__loop_predicate_source",
+        "source_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "LlmNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "prod_a",
+              "type": "string"
+            }
+          ],
+          "llm_config": {
+            "api_key": null,
+            "api_provider": null,
+            "api_type": null,
+            "component_type": "LlmConfig",
+            "default_generation_parameters": null,
+            "description": null,
+            "metadata": {},
+            "model_id": "fast",
+            "name": "refine-llm",
+            "provider": null,
+            "retry_policy": null,
+            "url": null
+          },
+          "metadata": {
+            "neograph/prompt_spec": {
+              "original_inputs": [
+                {
+                  "json_schema": {
+                    "title": "prod:a",
+                    "type": "string"
+                  },
+                  "title": "prod:a"
+                }
+              ],
+              "original_text": "process ${prod.a}",
+              "placeholder_map": {
+                "prod_a": "prod.a"
+              }
+            }
+          },
+          "name": "refine",
+          "outputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "prompt_template": "process {{ prod_a }}"
+        },
+        "source_output": "a"
+      },
+      {
+        "component_type": "DataFlowEdge",
+        "description": null,
+        "destination_input": "branching_mapping_key",
+        "destination_node": {
+          "branches": [
+            "continue",
+            "default",
+            "done"
+          ],
+          "component_type": "BranchingNode",
+          "description": null,
+          "inputs": [
+            {
+              "description": "Next branch name in the flow",
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "mapping": {
+            "continue": "continue",
+            "done": "done"
+          },
+          "metadata": {
+            "neograph/loop_spec": {
+              "max_iterations": 3,
+              "on_exhaust": "error",
+              "when": "a == \"x\""
+            },
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_check",
+          "outputs": []
+        },
+        "metadata": {},
+        "name": "refine__loop_predicate_result",
+        "source_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {
+            "neograph/modifier": "loop"
+          },
+          "name": "refine__loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+            "inputs": [
+              {
+                "title": "a",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "refine_loop_predicate",
+            "outputs": [
+              {
+                "title": "branching_mapping_key",
+                "type": "string"
+              }
+            ],
+            "requires_confirmation": false
+          }
+        },
+        "source_output": "branching_mapping_key"
+      },
       {
         "component_type": "DataFlowEdge",
         "description": null,
@@ -36641,6 +37657,48 @@
           }
         ],
         "prompt_template": "process {{ prod_a }}"
+      },
+      {
+        "branches": [
+          "next"
+        ],
+        "component_type": "ToolNode",
+        "description": null,
+        "inputs": [
+          {
+            "title": "a",
+            "type": "string"
+          }
+        ],
+        "metadata": {
+          "neograph/modifier": "loop"
+        },
+        "name": "refine__loop_predicate",
+        "outputs": [
+          {
+            "title": "branching_mapping_key",
+            "type": "string"
+          }
+        ],
+        "tool": {
+          "component_type": "ServerTool",
+          "description": "Evaluate Loop condition 'a == \"x\"' for 'refine'",
+          "inputs": [
+            {
+              "title": "a",
+              "type": "string"
+            }
+          ],
+          "metadata": {},
+          "name": "refine_loop_predicate",
+          "outputs": [
+            {
+              "title": "branching_mapping_key",
+              "type": "string"
+            }
+          ],
+          "requires_confirmation": false
+        }
       },
       {
         "branches": [

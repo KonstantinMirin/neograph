@@ -65,6 +65,7 @@ if TYPE_CHECKING:
 __all__ = ["to_agent_spec"]
 
 # --- extracted clusters (neograph-3ffdg.3), re-exported so this module's public import surface is unchanged.
+from neograph._agent_spec_boundary import resolve_end_node_sources  # noqa: E402
 from neograph._agent_spec_markers import (  # noqa: E402,F401
     _MARK_AGENT_SPEC,
     _MARK_BRANCH,
@@ -114,7 +115,6 @@ from neograph._agent_spec_placeholders import (  # noqa: E402,F401
     property_title_to_prompt_path,
     split_property_title,
 )
-from neograph._agent_spec_boundary import resolve_end_node_sources  # noqa: E402
 from neograph._agent_spec_portal import (  # noqa: E402,F401
     _is_peer_mesh_member,
     _lower_portal_mesh_to_swarm,
@@ -238,7 +238,9 @@ def _lower_construct_item(item: Any, api_provider: str | None = None) -> _Lowere
     else:
         match decomp.primary:
             case PrimaryShape.ORACLE:
-                variant_and_merge, control_edges, data_edges = _lower_oracle(item, mods["oracle"], flow_export, api_provider=api_provider)
+                variant_and_merge, control_edges, data_edges = _lower_oracle(
+                    item, mods["oracle"], flow_export, api_provider=api_provider
+                )
                 variants = variant_and_merge[:-1]
                 merge = variant_and_merge[-1]
                 # ENTRY is the head of the variant chain, not the merge: the merge is
@@ -260,14 +262,26 @@ def _lower_construct_item(item: Any, api_provider: str | None = None) -> _Lowere
 
             case PrimaryShape.LOOP:
                 body = _lower_item_body(item, flow_export, api_provider=api_provider)
-                branch, extra_control, extra_data = _lower_loop(item, mods["loop"], body)
+                branch, extra_nodes, extra_control, extra_data = _lower_loop(item, mods["loop"], body)
                 # neograph's Loop is a DO-while (_wiring._add_subgraph_loop wires
                 # ``prev -> body`` and only THEN the conditional back-edge), so the
                 # group is ENTERED at the body and LEFT through the check's ``done``
                 # branch. Entering at the check evaluates ``when`` against state the
                 # body has never written -- a different program, not a different
                 # spelling of the same one.
-                arm = ([body, branch], extra_control, extra_data, body, [(branch, Branch.DONE)], body, [(body, False)])
+                # neograph-qtfof.6: DEFAULT_BRANCH is runtime-reachable too (any
+                # unmapped predicate output lands there) -- not a dead end. Routed
+                # to DONE's target: no max_iterations cap travels to a foreign
+                # runtime, so falling to CONTINUE risks an unbounded loop.
+                arm = (
+                    [body, *extra_nodes, branch],
+                    extra_control,
+                    extra_data,
+                    body,
+                    [(branch, Branch.DONE), (branch, Branch.DEFAULT)],
+                    body,
+                    [(body, False)],
+                )
 
             case PrimaryShape.BARE:
                 # BARE and OPERATOR are the SAME primary shape; has_operator is what

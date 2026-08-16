@@ -134,10 +134,13 @@ class TestLoopEntersTheBodyBeforeTheCheck:
             for e in flow.control_flow_connections
             if e.from_node.name == "refine__loop_check" and type(e.to_node).__name__ == "EndNode"
         ]
-        assert len(exits) == 1
-        assert exits[0].from_branch == Branch.DONE, (
-            "the loop's exit edge must name the 'done' branch -- an unlabelled edge out of a "
-            "BranchingNode is ambiguous to a literal executor"
+        # neograph-qtfof.6: DEFAULT_BRANCH now ALSO exits here (a real edge, not a
+        # dead end, for a metadata-blind runtime landing there on an unmapped
+        # predicate output) -- both labelled, neither ambiguous.
+        by_branch = {e.from_branch for e in exits}
+        assert by_branch == {Branch.DONE, Branch.DEFAULT}, (
+            "the loop's exit edges must be exactly {done, default}, each labelled -- an "
+            f"unlabelled edge out of a BranchingNode is ambiguous to a literal executor (got {by_branch})"
         )
 
 
@@ -190,7 +193,12 @@ def _branch_label_defects(flow: Any) -> list[str]:
             mapping = getattr(node, "mapping", None)
             if not mapping:
                 continue
-            declared = set(mapping.values())
+            # Branch.DEFAULT is ALWAYS a structurally-valid arm on a BranchingNode
+            # (pyagentspec's fallback for an unmapped key) independent of what
+            # `mapping` declares -- an outgoing edge on it is never "invented"
+            # (neograph-qtfof.6 wires one so a metadata-blind runtime landing
+            # there, e.g. from a malfunctioning predicate tool, isn't a dead end).
+            declared = {*mapping.values(), Branch.DEFAULT}
             emitted = [branch for frm, branch, _to in adjacency if frm == node.name]
             labels = [b for b in emitted if b is not None]
             where = f"{sub.name}: {node.name}"

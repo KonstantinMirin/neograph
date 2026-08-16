@@ -41,23 +41,8 @@ from pydantic import BaseModel  # noqa: E402
 from neograph import HANDOFF_END, Construct, Node, Portal  # noqa: E402
 from neograph.errors import ConfigurationError  # noqa: E402
 from neograph.modifiers import Oracle  # noqa: E402
+from tests.agent_spec_flow_walk import wired_edges  # noqa: E402
 from tests.fakes import register_scripted  # noqa: E402
-
-
-def _wired_edges(flow: object) -> list[tuple[str, str, str, str]]:
-    """Every DataFlowEdge as ``(source_node, source_output, dest_node, dest_input)``.
-
-    ``data_flow_connections`` is None-able -- the exporter writes ``<edges> or None``,
-    so a control-only shape genuinely exports None and a raw dereference raises
-    TypeError instead of failing an assertion (neograph-p0dn8). The ``or []`` here is
-    the single guarded read for this file, pinned by
-    tests/test_guards_agent_spec_data_flow_reads.py.
-    """
-    return [
-        (e.source_node.name, e.source_output, e.destination_node.name, e.destination_input)
-        for e in (flow.data_flow_connections or [])
-    ]
-
 
 
 class _Payload(BaseModel, frozen=True):
@@ -187,7 +172,7 @@ class TestB4DictFormOutputEdges:
         cons = Node.scripted("cons", fn="g", inputs={"prod_result": _Claims}, outputs=_Claims)
         flow = to_agent_spec(Construct("b4-dictin", nodes=[prod, cons]))
 
-        wired = _wired_edges(flow)
+        wired = wired_edges(flow)
         assert ("prod", "result:text", "cons", "prod_result:text") in wired, wired
 
     def test_single_type_consumer_of_dict_form_producer_wires_edge(self):
@@ -197,7 +182,7 @@ class TestB4DictFormOutputEdges:
         cons = Node.scripted("cons", fn="g", inputs=_Claims, outputs=_Log)
         flow = to_agent_spec(Construct("b4-singlein", nodes=[prod, cons]))
 
-        wired = _wired_edges(flow)
+        wired = wired_edges(flow)
         assert ("prod", "result:text", "cons", "text") in wired, wired
 
 

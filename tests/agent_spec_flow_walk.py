@@ -37,9 +37,17 @@ convert when it adds labelled assertions.
 This module does NOT widen coverage on its own -- the five migrated ``pairs``
 sites still assert on unlabelled tuples, so a branch-relabel mutation stays as
 invisible as it was. It ENABLES ``dgbqv.10`` to fix that; it does not do it here.
-Control flow and subflow holders only: ``data_flow_connections`` is deliberately
-out of scope (``tests/test_guards_agent_spec_data_flow_reads.py`` already governs
-those reads under its own rule; see ``neograph-dgbqv.11``).
+
+Data flow (``wired_edges``) joined later, under a DIFFERENT rule and for a
+different reason (``neograph-qtfof.6``). It is NOT governed by the control-flow
+monopoly guard: ``tests/test_guards_agent_spec_data_flow_reads.py`` owns every
+``data_flow_connections`` read (the read must be the left operand of a
+``BoolOp(Or)``, because the exporter writes ``<edges> or None``), and its
+``TestWiredEdgeProjectionIsNotDuplicated`` caps the 4-tuple projection at ONE
+inline site tree-wide. That cap is why the projection lives here rather than as a
+second local copy: its own comment names "a copy in a THIRD file" as the signal to
+promote. Two guards over two attributes under two rules -- not one attribute under
+two rules, which is the shape AGENTS.md's Portal lesson bans.
 """
 
 from __future__ import annotations
@@ -85,10 +93,7 @@ def inner_nodes(holder: Any) -> list[Any]:
     Takes the HOLDER NODE (not a Flow); a node holding no sub-flow yields [].
     """
     return [
-        node
-        for sub in holder_flows(holder)
-        for node in sub.nodes
-        if type(node).__name__ not in _BOUNDARY_TYPE_NAMES
+        node for sub in holder_flows(holder) for node in sub.nodes if type(node).__name__ not in _BOUNDARY_TYPE_NAMES
     ]
 
 
@@ -186,6 +191,52 @@ def walk(flow: Any) -> tuple[set[str], set[str]]:
 
     ends = {n.name for n in flow.nodes if type(n).__name__ == "EndNode"}
     return closure({flow.start_node.name}, successors), closure(ends, predecessors)
+
+
+def wired_edges(flow: Any) -> list[tuple[str, str, str, str]]:
+    """THE single data-edge read: ``(source, source_output, dest, dest_input)`` per edge.
+
+    ``data_flow_connections`` is None-able -- the exporter writes ``<edges> or None``
+    at both construction sites, so a control-only shape genuinely exports ``None``
+    and a raw dereference raises ``TypeError`` instead of failing an assertion
+    (``neograph-p0dn8``). The ``or []`` here is the guarded form
+    ``tests/test_guards_agent_spec_data_flow_reads.py`` requires.
+
+    LIST-valued for the same reason ``branch_adjacency`` is: callers assert on
+    multiplicity ("exactly one edge feeds this input"), which a set would silently
+    collapse to "at least one".
+    """
+    return [
+        (e.source_node.name, e.source_output, e.destination_node.name, e.destination_input)
+        for e in (flow.data_flow_connections or [])
+    ]
+
+
+def fed_inputs(flow: Any, name: str) -> set[str]:
+    """The ``destination_input`` titles on ``name`` that a real DataFlowEdge feeds.
+
+    A pure projection of ``wired_edges``. The question it exists to answer is the
+    one a metadata-blind Agent Spec runtime asks: does this node's declared input
+    arrive over a declared data path, or does it silently resolve to nothing?
+    """
+    return {dest_input for _src, _out, dst, dest_input in wired_edges(flow) if dst == name}
+
+
+def data_flow_predecessors(flow: Any, name: str) -> set[str]:
+    """Source node names of every DataFlowEdge terminating on ``name``."""
+    return {src for src, _out, dst, _dest_input in wired_edges(flow) if dst == name}
+
+
+def declared_input_titles(node: Any) -> list[str]:
+    """A node's declared input Property titles, duck-typed and None-safe.
+
+    ``inputs`` is None-able on pyagentspec nodes exactly as
+    ``data_flow_connections`` is on the Flow, and an inferred-input node (a
+    ``BranchingNode``, whose ``branching_mapping_key`` is derived rather than
+    authored) still reports it here -- which is the point: an INFERRED input is
+    still an input a runtime must be handed a value for.
+    """
+    return [p.title for p in (getattr(node, "inputs", None) or [])]
 
 
 def holder_flows(node: Any) -> list[Any]:
