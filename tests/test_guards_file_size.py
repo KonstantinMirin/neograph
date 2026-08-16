@@ -80,10 +80,10 @@ ALLOWLIST: dict[str, int] = {
     # synthesized predicate node) + DEFAULT_BRANCH exit wiring, call-site glue
     # only -- the predicate-synthesis logic itself lives in the new peer module
     # _agent_spec_loop_predicate.py.
-    "_agent_spec.py": 681,
+    "_agent_spec.py": 694,
     # neograph-qtfof.8: 646 -> 649. _lower_oracle/_lower_each thread api_provider
     # to their _make_llm_config/_lower_generation_step call sites.
-    "_agent_spec_modifier_lowering.py": 649,
+    "_agent_spec_modifier_lowering.py": 650,
     "_oracle.py": 517,
     "_tool_loop.py": 548,
     "_wiring.py": 773,

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
+from neograph._agent_spec_each_fanout import each_receiver_properties
 from neograph._agent_spec_markers import (
     _MARK_AGENT_SPEC,
     _MARK_MODE,
@@ -21,6 +22,7 @@ from neograph._agent_spec_markers import (
     import_pyagentspec,
 )
 from neograph._agent_spec_placeholders import (
+    _is_translation_eligible,
     _prompt_spec_marker,
     _properties_for,
     _translate_placeholders,
@@ -101,7 +103,19 @@ def _lower_generation_step(
     """
     nodes_mod, _flow_mod, _edges_mod, _property_mod, tools_mod = _import_agent_spec_flow_classes()
 
-    inputs = _properties_for(node.inputs)
+    # neograph-qtfof.7: an Each body's OWN declared inputs must match the
+    # StartNode's reshaped fan-out receiver (_lower_each), or pyagentspec's
+    # title-based auto-wiring between them silently fails to connect (the
+    # StartNode declares one "item" Property, the body would otherwise still
+    # declare flattened "item:v"). Skipped for a translation-eligible
+    # (think/agent/act) body -- _lower_each carves those out of the reshape
+    # too (Option F's flat ${var}->{{ flat }} translation is a different,
+    # pre-existing mechanism for that case), so this stays consistent with it.
+    inputs = (
+        each_receiver_properties(node.inputs, node.fan_out_param, _properties_for)
+        if node.fan_out_param and not _is_translation_eligible(node)
+        else _properties_for(node.inputs)
+    )
 
     if node.mode == "think":
         # Option F neograph-cbpyx: translate ${path} -> {{ flat }}; the LlmNode

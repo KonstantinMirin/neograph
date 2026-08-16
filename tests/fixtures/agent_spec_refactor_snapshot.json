@@ -21312,6 +21312,34 @@
             {
               "anyOf": [
                 {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "iterated_item"
+            },
+            {
+              "anyOf": [
+                {
                   "title": "source:c",
                   "type": "string"
                 },
@@ -21324,22 +21352,6 @@
                 }
               ],
               "title": "iterated_source:c"
-            },
-            {
-              "anyOf": [
-                {
-                  "title": "item:v",
-                  "type": "string"
-                },
-                {
-                  "items": {
-                    "title": "item:v",
-                    "type": "string"
-                  },
-                  "type": "array"
-                }
-              ],
-              "title": "iterated_item:v"
             }
           ],
           "metadata": {
@@ -21368,11 +21380,17 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -21380,11 +21398,17 @@
                   "name": "target__each_start",
                   "outputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ]
@@ -21399,11 +21423,17 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -21420,11 +21450,17 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "source:c",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       },
                       {
-                        "title": "item:v",
+                        "title": "source:c",
                         "type": "string"
                       }
                     ],
@@ -21451,11 +21487,17 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -21472,11 +21514,17 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "source:c",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       },
                       {
-                        "title": "item:v",
+                        "title": "source:c",
                         "type": "string"
                       }
                     ],
@@ -21508,11 +21556,17 @@
             "description": null,
             "inputs": [
               {
-                "title": "source:c",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               },
               {
-                "title": "item:v",
+                "title": "source:c",
                 "type": "string"
               }
             ],
@@ -21527,11 +21581,17 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ],
@@ -21539,11 +21599,17 @@
                 "name": "target__each_start",
                 "outputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ]
@@ -21556,11 +21622,17 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ],
@@ -21577,11 +21649,17 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -21615,11 +21693,17 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "source:c",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
-                  "title": "item:v",
+                  "title": "source:c",
                   "type": "string"
                 }
               ],
@@ -21627,11 +21711,17 @@
               "name": "target__each_start",
               "outputs": [
                 {
-                  "title": "source:c",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
-                  "title": "item:v",
+                  "title": "source:c",
                   "type": "string"
                 }
               ]
@@ -21653,6 +21743,34 @@
             {
               "anyOf": [
                 {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "iterated_item"
+            },
+            {
+              "anyOf": [
+                {
                   "title": "source:c",
                   "type": "string"
                 },
@@ -21665,22 +21783,6 @@
                 }
               ],
               "title": "iterated_source:c"
-            },
-            {
-              "anyOf": [
-                {
-                  "title": "item:v",
-                  "type": "string"
-                },
-                {
-                  "items": {
-                    "title": "item:v",
-                    "type": "string"
-                  },
-                  "type": "array"
-                }
-              ],
-              "title": "iterated_item:v"
             }
           ],
           "metadata": {
@@ -21709,11 +21811,17 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -21721,11 +21829,17 @@
                   "name": "target__each_start",
                   "outputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ]
@@ -21740,11 +21854,17 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -21761,11 +21881,17 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "source:c",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       },
                       {
-                        "title": "item:v",
+                        "title": "source:c",
                         "type": "string"
                       }
                     ],
@@ -21792,11 +21918,17 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -21813,11 +21945,17 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "source:c",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       },
                       {
-                        "title": "item:v",
+                        "title": "source:c",
                         "type": "string"
                       }
                     ],
@@ -21849,11 +21987,17 @@
             "description": null,
             "inputs": [
               {
-                "title": "source:c",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               },
               {
-                "title": "item:v",
+                "title": "source:c",
                 "type": "string"
               }
             ],
@@ -21868,11 +22012,17 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ],
@@ -21880,11 +22030,17 @@
                 "name": "target__each_start",
                 "outputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ]
@@ -21897,11 +22053,17 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ],
@@ -21918,11 +22080,17 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -21956,11 +22124,17 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "source:c",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
-                  "title": "item:v",
+                  "title": "source:c",
                   "type": "string"
                 }
               ],
@@ -21968,11 +22142,17 @@
               "name": "target__each_start",
               "outputs": [
                 {
-                  "title": "source:c",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
-                  "title": "item:v",
+                  "title": "source:c",
                   "type": "string"
                 }
               ]
@@ -22008,6 +22188,34 @@
             {
               "anyOf": [
                 {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "iterated_item"
+            },
+            {
+              "anyOf": [
+                {
                   "title": "source:c",
                   "type": "string"
                 },
@@ -22020,22 +22228,6 @@
                 }
               ],
               "title": "iterated_source:c"
-            },
-            {
-              "anyOf": [
-                {
-                  "title": "item:v",
-                  "type": "string"
-                },
-                {
-                  "items": {
-                    "title": "item:v",
-                    "type": "string"
-                  },
-                  "type": "array"
-                }
-              ],
-              "title": "iterated_item:v"
             }
           ],
           "metadata": {
@@ -22064,11 +22256,17 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -22076,11 +22274,17 @@
                   "name": "target__each_start",
                   "outputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ]
@@ -22095,11 +22299,17 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -22116,11 +22326,17 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "source:c",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       },
                       {
-                        "title": "item:v",
+                        "title": "source:c",
                         "type": "string"
                       }
                     ],
@@ -22147,11 +22363,17 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -22168,11 +22390,17 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "source:c",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       },
                       {
-                        "title": "item:v",
+                        "title": "source:c",
                         "type": "string"
                       }
                     ],
@@ -22204,11 +22432,17 @@
             "description": null,
             "inputs": [
               {
-                "title": "source:c",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               },
               {
-                "title": "item:v",
+                "title": "source:c",
                 "type": "string"
               }
             ],
@@ -22223,11 +22457,17 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ],
@@ -22235,11 +22475,17 @@
                 "name": "target__each_start",
                 "outputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ]
@@ -22252,11 +22498,17 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ],
@@ -22273,11 +22525,17 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -22311,11 +22569,17 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "source:c",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
-                  "title": "item:v",
+                  "title": "source:c",
                   "type": "string"
                 }
               ],
@@ -22323,11 +22587,17 @@
               "name": "target__each_start",
               "outputs": [
                 {
-                  "title": "source:c",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
-                  "title": "item:v",
+                  "title": "source:c",
                   "type": "string"
                 }
               ]
@@ -22366,6 +22636,489 @@
           }
         },
         "source_output": "c"
+      },
+      {
+        "component_type": "DataFlowEdge",
+        "description": null,
+        "destination_input": "iterated_item",
+        "destination_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "MapNode",
+          "description": null,
+          "inputs": [
+            {
+              "anyOf": [
+                {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "iterated_item"
+            },
+            {
+              "anyOf": [
+                {
+                  "title": "source:c",
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "title": "source:c",
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "iterated_source:c"
+            }
+          ],
+          "metadata": {
+            "neograph/each_spec": {
+              "key": "v",
+              "on_error": "raise",
+              "over": "prod.groups"
+            },
+            "neograph/modifier": "each"
+          },
+          "name": "target",
+          "outputs": [],
+          "reducers": {},
+          "subflow": {
+            "component_type": "Flow",
+            "control_flow_connections": [
+              {
+                "component_type": "ControlFlowEdge",
+                "description": null,
+                "from_branch": null,
+                "from_node": {
+                  "branches": [
+                    "next"
+                  ],
+                  "component_type": "StartNode",
+                  "description": null,
+                  "inputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    },
+                    {
+                      "title": "source:c",
+                      "type": "string"
+                    }
+                  ],
+                  "metadata": {},
+                  "name": "target__each_start",
+                  "outputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    },
+                    {
+                      "title": "source:c",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "metadata": {},
+                "name": "target__each_start_edge",
+                "to_node": {
+                  "branches": [
+                    "next"
+                  ],
+                  "component_type": "ToolNode",
+                  "description": null,
+                  "inputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    },
+                    {
+                      "title": "source:c",
+                      "type": "string"
+                    }
+                  ],
+                  "metadata": {},
+                  "name": "target",
+                  "outputs": [
+                    {
+                      "title": "ok",
+                      "type": "string"
+                    }
+                  ],
+                  "tool": {
+                    "component_type": "ServerTool",
+                    "description": "neograph node 'target' (mode=scripted)",
+                    "inputs": [
+                      {
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
+                      },
+                      {
+                        "title": "source:c",
+                        "type": "string"
+                      }
+                    ],
+                    "metadata": {},
+                    "name": "target",
+                    "outputs": [
+                      {
+                        "title": "ok",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "component_type": "ControlFlowEdge",
+                "description": null,
+                "from_branch": null,
+                "from_node": {
+                  "branches": [
+                    "next"
+                  ],
+                  "component_type": "ToolNode",
+                  "description": null,
+                  "inputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    },
+                    {
+                      "title": "source:c",
+                      "type": "string"
+                    }
+                  ],
+                  "metadata": {},
+                  "name": "target",
+                  "outputs": [
+                    {
+                      "title": "ok",
+                      "type": "string"
+                    }
+                  ],
+                  "tool": {
+                    "component_type": "ServerTool",
+                    "description": "neograph node 'target' (mode=scripted)",
+                    "inputs": [
+                      {
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
+                      },
+                      {
+                        "title": "source:c",
+                        "type": "string"
+                      }
+                    ],
+                    "metadata": {},
+                    "name": "target",
+                    "outputs": [
+                      {
+                        "title": "ok",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                },
+                "metadata": {},
+                "name": "target__each_end_edge",
+                "to_node": {
+                  "branch_name": "next",
+                  "branches": [],
+                  "component_type": "EndNode",
+                  "description": null,
+                  "inputs": [],
+                  "metadata": {},
+                  "name": "target__each_end",
+                  "outputs": []
+                }
+              }
+            ],
+            "data_flow_connections": null,
+            "description": null,
+            "inputs": [
+              {
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
+              },
+              {
+                "title": "source:c",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "target__each_body",
+            "nodes": [
+              {
+                "branches": [
+                  "next"
+                ],
+                "component_type": "StartNode",
+                "description": null,
+                "inputs": [
+                  {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  },
+                  {
+                    "title": "source:c",
+                    "type": "string"
+                  }
+                ],
+                "metadata": {},
+                "name": "target__each_start",
+                "outputs": [
+                  {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  },
+                  {
+                    "title": "source:c",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "branches": [
+                  "next"
+                ],
+                "component_type": "ToolNode",
+                "description": null,
+                "inputs": [
+                  {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  },
+                  {
+                    "title": "source:c",
+                    "type": "string"
+                  }
+                ],
+                "metadata": {},
+                "name": "target",
+                "outputs": [
+                  {
+                    "title": "ok",
+                    "type": "string"
+                  }
+                ],
+                "tool": {
+                  "component_type": "ServerTool",
+                  "description": "neograph node 'target' (mode=scripted)",
+                  "inputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    },
+                    {
+                      "title": "source:c",
+                      "type": "string"
+                    }
+                  ],
+                  "metadata": {},
+                  "name": "target",
+                  "outputs": [
+                    {
+                      "title": "ok",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              {
+                "branch_name": "next",
+                "branches": [],
+                "component_type": "EndNode",
+                "description": null,
+                "inputs": [],
+                "metadata": {},
+                "name": "target__each_end",
+                "outputs": []
+              }
+            ],
+            "outputs": [],
+            "start_node": {
+              "branches": [
+                "next"
+              ],
+              "component_type": "StartNode",
+              "description": null,
+              "inputs": [
+                {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                },
+                {
+                  "title": "source:c",
+                  "type": "string"
+                }
+              ],
+              "metadata": {},
+              "name": "target__each_start",
+              "outputs": [
+                {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                },
+                {
+                  "title": "source:c",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        "metadata": {},
+        "name": "prod_to_target_iterated_item",
+        "source_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [],
+          "metadata": {},
+          "name": "prod",
+          "outputs": [
+            {
+              "items": {
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "groups",
+                "type": "object"
+              },
+              "title": "groups",
+              "type": "array"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "neograph node 'prod' (mode=scripted)",
+            "inputs": [],
+            "metadata": {},
+            "name": "prod",
+            "outputs": [
+              {
+                "items": {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "groups",
+                  "type": "object"
+                },
+                "title": "groups",
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "source_output": "groups"
       }
     ],
     "description": null,
@@ -22472,6 +23225,34 @@
           {
             "anyOf": [
               {
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
+              },
+              {
+                "items": {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "iterated_item"
+          },
+          {
+            "anyOf": [
+              {
                 "title": "source:c",
                 "type": "string"
               },
@@ -22484,22 +23265,6 @@
               }
             ],
             "title": "iterated_source:c"
-          },
-          {
-            "anyOf": [
-              {
-                "title": "item:v",
-                "type": "string"
-              },
-              {
-                "items": {
-                  "title": "item:v",
-                  "type": "string"
-                },
-                "type": "array"
-              }
-            ],
-            "title": "iterated_item:v"
           }
         ],
         "metadata": {
@@ -22528,11 +23293,17 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ],
@@ -22540,11 +23311,17 @@
                 "name": "target__each_start",
                 "outputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ]
@@ -22559,11 +23336,17 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ],
@@ -22580,11 +23363,17 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -22611,11 +23400,17 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ],
@@ -22632,11 +23427,17 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "source:c",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
-                      "title": "item:v",
+                      "title": "source:c",
                       "type": "string"
                     }
                   ],
@@ -22668,11 +23469,17 @@
           "description": null,
           "inputs": [
             {
-              "title": "source:c",
-              "type": "string"
+              "properties": {
+                "v": {
+                  "title": "v",
+                  "type": "string"
+                }
+              },
+              "title": "item",
+              "type": "object"
             },
             {
-              "title": "item:v",
+              "title": "source:c",
               "type": "string"
             }
           ],
@@ -22687,11 +23494,17 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "source:c",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
-                  "title": "item:v",
+                  "title": "source:c",
                   "type": "string"
                 }
               ],
@@ -22699,11 +23512,17 @@
               "name": "target__each_start",
               "outputs": [
                 {
-                  "title": "source:c",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
-                  "title": "item:v",
+                  "title": "source:c",
                   "type": "string"
                 }
               ]
@@ -22716,11 +23535,17 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "source:c",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
-                  "title": "item:v",
+                  "title": "source:c",
                   "type": "string"
                 }
               ],
@@ -22737,11 +23562,17 @@
                 "description": "neograph node 'target' (mode=scripted)",
                 "inputs": [
                   {
-                    "title": "source:c",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
-                    "title": "item:v",
+                    "title": "source:c",
                     "type": "string"
                   }
                 ],
@@ -22775,11 +23606,17 @@
             "description": null,
             "inputs": [
               {
-                "title": "source:c",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               },
               {
-                "title": "item:v",
+                "title": "source:c",
                 "type": "string"
               }
             ],
@@ -22787,11 +23624,17 @@
             "name": "target__each_start",
             "outputs": [
               {
-                "title": "source:c",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               },
               {
-                "title": "item:v",
+                "title": "source:c",
                 "type": "string"
               }
             ]
@@ -23023,18 +23866,30 @@
             {
               "anyOf": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "items": {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   "type": "array"
                 }
               ],
-              "title": "iterated_item:v"
+              "title": "iterated_item"
             },
             {
               "anyOf": [
@@ -23079,8 +23934,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23091,8 +23952,14 @@
                   "name": "target__each_start",
                   "outputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23110,8 +23977,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23131,8 +24004,14 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "item:v",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       },
                       {
                         "title": "pb:b",
@@ -23162,8 +24041,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23183,8 +24068,14 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "item:v",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       },
                       {
                         "title": "pb:b",
@@ -23219,8 +24110,14 @@
             "description": null,
             "inputs": [
               {
-                "title": "item:v",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               },
               {
                 "title": "pb:b",
@@ -23238,8 +24135,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -23250,8 +24153,14 @@
                 "name": "target__each_start",
                 "outputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -23267,8 +24176,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -23288,8 +24203,14 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23326,8 +24247,14 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "title": "pb:b",
@@ -23338,8 +24265,14 @@
               "name": "target__each_start",
               "outputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "title": "pb:b",
@@ -23364,18 +24297,30 @@
             {
               "anyOf": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "items": {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   "type": "array"
                 }
               ],
-              "title": "iterated_item:v"
+              "title": "iterated_item"
             },
             {
               "anyOf": [
@@ -23420,8 +24365,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23432,8 +24383,14 @@
                   "name": "target__each_start",
                   "outputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23451,8 +24408,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23472,8 +24435,14 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "item:v",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       },
                       {
                         "title": "pb:b",
@@ -23503,8 +24472,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23524,8 +24499,14 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "item:v",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       },
                       {
                         "title": "pb:b",
@@ -23560,8 +24541,14 @@
             "description": null,
             "inputs": [
               {
-                "title": "item:v",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               },
               {
                 "title": "pb:b",
@@ -23579,8 +24566,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -23591,8 +24584,14 @@
                 "name": "target__each_start",
                 "outputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -23608,8 +24607,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -23629,8 +24634,14 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23667,8 +24678,14 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "title": "pb:b",
@@ -23679,8 +24696,14 @@
               "name": "target__each_start",
               "outputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "title": "pb:b",
@@ -23708,7 +24731,7 @@
       {
         "component_type": "DataFlowEdge",
         "description": null,
-        "destination_input": "iterated_pb:b",
+        "destination_input": "iterated_item",
         "destination_node": {
           "branches": [
             "next"
@@ -23719,18 +24742,30 @@
             {
               "anyOf": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "items": {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   "type": "array"
                 }
               ],
-              "title": "iterated_item:v"
+              "title": "iterated_item"
             },
             {
               "anyOf": [
@@ -23775,8 +24810,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23787,8 +24828,14 @@
                   "name": "target__each_start",
                   "outputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23806,8 +24853,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23827,8 +24880,14 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "item:v",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       },
                       {
                         "title": "pb:b",
@@ -23858,8 +24917,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -23879,8 +24944,14 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "item:v",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       },
                       {
                         "title": "pb:b",
@@ -23915,8 +24986,14 @@
             "description": null,
             "inputs": [
               {
-                "title": "item:v",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               },
               {
                 "title": "pb:b",
@@ -23934,8 +25011,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -23946,8 +25029,14 @@
                 "name": "target__each_start",
                 "outputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -23963,8 +25052,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -23984,8 +25079,14 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -24022,8 +25123,14 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "title": "pb:b",
@@ -24034,8 +25141,497 @@
               "name": "target__each_start",
               "outputs": [
                 {
-                  "title": "item:v",
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                },
+                {
+                  "title": "pb:b",
                   "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        "metadata": {},
+        "name": "prod_to_target_iterated_item",
+        "source_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [],
+          "metadata": {},
+          "name": "prod",
+          "outputs": [
+            {
+              "items": {
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "groups",
+                "type": "object"
+              },
+              "title": "groups",
+              "type": "array"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "neograph node 'prod' (mode=scripted)",
+            "inputs": [],
+            "metadata": {},
+            "name": "prod",
+            "outputs": [
+              {
+                "items": {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "groups",
+                  "type": "object"
+                },
+                "title": "groups",
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "source_output": "groups"
+      },
+      {
+        "component_type": "DataFlowEdge",
+        "description": null,
+        "destination_input": "iterated_pb:b",
+        "destination_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "MapNode",
+          "description": null,
+          "inputs": [
+            {
+              "anyOf": [
+                {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "iterated_item"
+            },
+            {
+              "anyOf": [
+                {
+                  "title": "pb:b",
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "title": "pb:b",
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "iterated_pb:b"
+            }
+          ],
+          "metadata": {
+            "neograph/each_spec": {
+              "key": "v",
+              "on_error": "raise",
+              "over": "prod.groups"
+            },
+            "neograph/modifier": "each"
+          },
+          "name": "target",
+          "outputs": [],
+          "reducers": {},
+          "subflow": {
+            "component_type": "Flow",
+            "control_flow_connections": [
+              {
+                "component_type": "ControlFlowEdge",
+                "description": null,
+                "from_branch": null,
+                "from_node": {
+                  "branches": [
+                    "next"
+                  ],
+                  "component_type": "StartNode",
+                  "description": null,
+                  "inputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    },
+                    {
+                      "title": "pb:b",
+                      "type": "string"
+                    }
+                  ],
+                  "metadata": {},
+                  "name": "target__each_start",
+                  "outputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    },
+                    {
+                      "title": "pb:b",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "metadata": {},
+                "name": "target__each_start_edge",
+                "to_node": {
+                  "branches": [
+                    "next"
+                  ],
+                  "component_type": "ToolNode",
+                  "description": null,
+                  "inputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    },
+                    {
+                      "title": "pb:b",
+                      "type": "string"
+                    }
+                  ],
+                  "metadata": {},
+                  "name": "target",
+                  "outputs": [
+                    {
+                      "title": "ok",
+                      "type": "string"
+                    }
+                  ],
+                  "tool": {
+                    "component_type": "ServerTool",
+                    "description": "neograph node 'target' (mode=scripted)",
+                    "inputs": [
+                      {
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
+                      },
+                      {
+                        "title": "pb:b",
+                        "type": "string"
+                      }
+                    ],
+                    "metadata": {},
+                    "name": "target",
+                    "outputs": [
+                      {
+                        "title": "ok",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "component_type": "ControlFlowEdge",
+                "description": null,
+                "from_branch": null,
+                "from_node": {
+                  "branches": [
+                    "next"
+                  ],
+                  "component_type": "ToolNode",
+                  "description": null,
+                  "inputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    },
+                    {
+                      "title": "pb:b",
+                      "type": "string"
+                    }
+                  ],
+                  "metadata": {},
+                  "name": "target",
+                  "outputs": [
+                    {
+                      "title": "ok",
+                      "type": "string"
+                    }
+                  ],
+                  "tool": {
+                    "component_type": "ServerTool",
+                    "description": "neograph node 'target' (mode=scripted)",
+                    "inputs": [
+                      {
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
+                      },
+                      {
+                        "title": "pb:b",
+                        "type": "string"
+                      }
+                    ],
+                    "metadata": {},
+                    "name": "target",
+                    "outputs": [
+                      {
+                        "title": "ok",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                },
+                "metadata": {},
+                "name": "target__each_end_edge",
+                "to_node": {
+                  "branch_name": "next",
+                  "branches": [],
+                  "component_type": "EndNode",
+                  "description": null,
+                  "inputs": [],
+                  "metadata": {},
+                  "name": "target__each_end",
+                  "outputs": []
+                }
+              }
+            ],
+            "data_flow_connections": null,
+            "description": null,
+            "inputs": [
+              {
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
+              },
+              {
+                "title": "pb:b",
+                "type": "string"
+              }
+            ],
+            "metadata": {},
+            "name": "target__each_body",
+            "nodes": [
+              {
+                "branches": [
+                  "next"
+                ],
+                "component_type": "StartNode",
+                "description": null,
+                "inputs": [
+                  {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  },
+                  {
+                    "title": "pb:b",
+                    "type": "string"
+                  }
+                ],
+                "metadata": {},
+                "name": "target__each_start",
+                "outputs": [
+                  {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  },
+                  {
+                    "title": "pb:b",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "branches": [
+                  "next"
+                ],
+                "component_type": "ToolNode",
+                "description": null,
+                "inputs": [
+                  {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  },
+                  {
+                    "title": "pb:b",
+                    "type": "string"
+                  }
+                ],
+                "metadata": {},
+                "name": "target",
+                "outputs": [
+                  {
+                    "title": "ok",
+                    "type": "string"
+                  }
+                ],
+                "tool": {
+                  "component_type": "ServerTool",
+                  "description": "neograph node 'target' (mode=scripted)",
+                  "inputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    },
+                    {
+                      "title": "pb:b",
+                      "type": "string"
+                    }
+                  ],
+                  "metadata": {},
+                  "name": "target",
+                  "outputs": [
+                    {
+                      "title": "ok",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              {
+                "branch_name": "next",
+                "branches": [],
+                "component_type": "EndNode",
+                "description": null,
+                "inputs": [],
+                "metadata": {},
+                "name": "target__each_end",
+                "outputs": []
+              }
+            ],
+            "outputs": [],
+            "start_node": {
+              "branches": [
+                "next"
+              ],
+              "component_type": "StartNode",
+              "description": null,
+              "inputs": [
+                {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                },
+                {
+                  "title": "pb:b",
+                  "type": "string"
+                }
+              ],
+              "metadata": {},
+              "name": "target__each_start",
+              "outputs": [
+                {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "title": "pb:b",
@@ -24183,18 +25779,30 @@
           {
             "anyOf": [
               {
-                "title": "item:v",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               },
               {
                 "items": {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 "type": "array"
               }
             ],
-            "title": "iterated_item:v"
+            "title": "iterated_item"
           },
           {
             "anyOf": [
@@ -24239,8 +25847,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -24251,8 +25865,14 @@
                 "name": "target__each_start",
                 "outputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -24270,8 +25890,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -24291,8 +25917,14 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -24322,8 +25954,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -24343,8 +25981,14 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     },
                     {
                       "title": "pb:b",
@@ -24379,8 +26023,14 @@
           "description": null,
           "inputs": [
             {
-              "title": "item:v",
-              "type": "string"
+              "properties": {
+                "v": {
+                  "title": "v",
+                  "type": "string"
+                }
+              },
+              "title": "item",
+              "type": "object"
             },
             {
               "title": "pb:b",
@@ -24398,8 +26048,14 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "title": "pb:b",
@@ -24410,8 +26066,14 @@
               "name": "target__each_start",
               "outputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "title": "pb:b",
@@ -24427,8 +26089,14 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "title": "pb:b",
@@ -24448,8 +26116,14 @@
                 "description": "neograph node 'target' (mode=scripted)",
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   {
                     "title": "pb:b",
@@ -24486,8 +26160,14 @@
             "description": null,
             "inputs": [
               {
-                "title": "item:v",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               },
               {
                 "title": "pb:b",
@@ -24498,8 +26178,14 @@
             "name": "target__each_start",
             "outputs": [
               {
-                "title": "item:v",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               },
               {
                 "title": "pb:b",
@@ -24669,18 +26355,30 @@
             {
               "anyOf": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "items": {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   "type": "array"
                 }
               ],
-              "title": "iterated_item:v"
+              "title": "iterated_item"
             }
           ],
           "metadata": {
@@ -24709,16 +26407,28 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     }
                   ],
                   "metadata": {},
                   "name": "target__each_start",
                   "outputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     }
                   ]
                 },
@@ -24732,8 +26442,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     }
                   ],
                   "metadata": {},
@@ -24749,8 +26465,14 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "item:v",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       }
                     ],
                     "metadata": {},
@@ -24776,8 +26498,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     }
                   ],
                   "metadata": {},
@@ -24793,8 +26521,14 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "item:v",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       }
                     ],
                     "metadata": {},
@@ -24825,8 +26559,14 @@
             "description": null,
             "inputs": [
               {
-                "title": "item:v",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               }
             ],
             "metadata": {},
@@ -24840,16 +26580,28 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   }
                 ],
                 "metadata": {},
                 "name": "target__each_start",
                 "outputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   }
                 ]
               },
@@ -24861,8 +26613,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   }
                 ],
                 "metadata": {},
@@ -24878,8 +26636,14 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     }
                   ],
                   "metadata": {},
@@ -24912,16 +26676,28 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 }
               ],
               "metadata": {},
               "name": "target__each_start",
               "outputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 }
               ]
             }
@@ -24942,18 +26718,30 @@
             {
               "anyOf": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 {
                   "items": {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   },
                   "type": "array"
                 }
               ],
-              "title": "iterated_item:v"
+              "title": "iterated_item"
             }
           ],
           "metadata": {
@@ -24982,16 +26770,28 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     }
                   ],
                   "metadata": {},
                   "name": "target__each_start",
                   "outputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     }
                   ]
                 },
@@ -25005,8 +26805,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     }
                   ],
                   "metadata": {},
@@ -25022,8 +26828,14 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "item:v",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       }
                     ],
                     "metadata": {},
@@ -25049,8 +26861,14 @@
                   "description": null,
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     }
                   ],
                   "metadata": {},
@@ -25066,8 +26884,14 @@
                     "description": "neograph node 'target' (mode=scripted)",
                     "inputs": [
                       {
-                        "title": "item:v",
-                        "type": "string"
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
                       }
                     ],
                     "metadata": {},
@@ -25098,8 +26922,14 @@
             "description": null,
             "inputs": [
               {
-                "title": "item:v",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               }
             ],
             "metadata": {},
@@ -25113,16 +26943,28 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   }
                 ],
                 "metadata": {},
                 "name": "target__each_start",
                 "outputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   }
                 ]
               },
@@ -25134,8 +26976,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   }
                 ],
                 "metadata": {},
@@ -25151,8 +26999,14 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     }
                   ],
                   "metadata": {},
@@ -25185,16 +27039,28 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 }
               ],
               "metadata": {},
               "name": "target__each_start",
               "outputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 }
               ]
             }
@@ -25214,7 +27080,423 @@
         }
       }
     ],
-    "data_flow_connections": null,
+    "data_flow_connections": [
+      {
+        "component_type": "DataFlowEdge",
+        "description": null,
+        "destination_input": "iterated_item",
+        "destination_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "MapNode",
+          "description": null,
+          "inputs": [
+            {
+              "anyOf": [
+                {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "iterated_item"
+            }
+          ],
+          "metadata": {
+            "neograph/each_spec": {
+              "key": "v",
+              "on_error": "raise",
+              "over": "prod.groups"
+            },
+            "neograph/modifier": "each"
+          },
+          "name": "target",
+          "outputs": [],
+          "reducers": {},
+          "subflow": {
+            "component_type": "Flow",
+            "control_flow_connections": [
+              {
+                "component_type": "ControlFlowEdge",
+                "description": null,
+                "from_branch": null,
+                "from_node": {
+                  "branches": [
+                    "next"
+                  ],
+                  "component_type": "StartNode",
+                  "description": null,
+                  "inputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    }
+                  ],
+                  "metadata": {},
+                  "name": "target__each_start",
+                  "outputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    }
+                  ]
+                },
+                "metadata": {},
+                "name": "target__each_start_edge",
+                "to_node": {
+                  "branches": [
+                    "next"
+                  ],
+                  "component_type": "ToolNode",
+                  "description": null,
+                  "inputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    }
+                  ],
+                  "metadata": {},
+                  "name": "target",
+                  "outputs": [
+                    {
+                      "title": "ok",
+                      "type": "string"
+                    }
+                  ],
+                  "tool": {
+                    "component_type": "ServerTool",
+                    "description": "neograph node 'target' (mode=scripted)",
+                    "inputs": [
+                      {
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
+                      }
+                    ],
+                    "metadata": {},
+                    "name": "target",
+                    "outputs": [
+                      {
+                        "title": "ok",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "component_type": "ControlFlowEdge",
+                "description": null,
+                "from_branch": null,
+                "from_node": {
+                  "branches": [
+                    "next"
+                  ],
+                  "component_type": "ToolNode",
+                  "description": null,
+                  "inputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    }
+                  ],
+                  "metadata": {},
+                  "name": "target",
+                  "outputs": [
+                    {
+                      "title": "ok",
+                      "type": "string"
+                    }
+                  ],
+                  "tool": {
+                    "component_type": "ServerTool",
+                    "description": "neograph node 'target' (mode=scripted)",
+                    "inputs": [
+                      {
+                        "properties": {
+                          "v": {
+                            "title": "v",
+                            "type": "string"
+                          }
+                        },
+                        "title": "item",
+                        "type": "object"
+                      }
+                    ],
+                    "metadata": {},
+                    "name": "target",
+                    "outputs": [
+                      {
+                        "title": "ok",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                },
+                "metadata": {},
+                "name": "target__each_end_edge",
+                "to_node": {
+                  "branch_name": "next",
+                  "branches": [],
+                  "component_type": "EndNode",
+                  "description": null,
+                  "inputs": [],
+                  "metadata": {},
+                  "name": "target__each_end",
+                  "outputs": []
+                }
+              }
+            ],
+            "data_flow_connections": null,
+            "description": null,
+            "inputs": [
+              {
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
+              }
+            ],
+            "metadata": {},
+            "name": "target__each_body",
+            "nodes": [
+              {
+                "branches": [
+                  "next"
+                ],
+                "component_type": "StartNode",
+                "description": null,
+                "inputs": [
+                  {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  }
+                ],
+                "metadata": {},
+                "name": "target__each_start",
+                "outputs": [
+                  {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "branches": [
+                  "next"
+                ],
+                "component_type": "ToolNode",
+                "description": null,
+                "inputs": [
+                  {
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
+                  }
+                ],
+                "metadata": {},
+                "name": "target",
+                "outputs": [
+                  {
+                    "title": "ok",
+                    "type": "string"
+                  }
+                ],
+                "tool": {
+                  "component_type": "ServerTool",
+                  "description": "neograph node 'target' (mode=scripted)",
+                  "inputs": [
+                    {
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
+                    }
+                  ],
+                  "metadata": {},
+                  "name": "target",
+                  "outputs": [
+                    {
+                      "title": "ok",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              {
+                "branch_name": "next",
+                "branches": [],
+                "component_type": "EndNode",
+                "description": null,
+                "inputs": [],
+                "metadata": {},
+                "name": "target__each_end",
+                "outputs": []
+              }
+            ],
+            "outputs": [],
+            "start_node": {
+              "branches": [
+                "next"
+              ],
+              "component_type": "StartNode",
+              "description": null,
+              "inputs": [
+                {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                }
+              ],
+              "metadata": {},
+              "name": "target__each_start",
+              "outputs": [
+                {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
+                }
+              ]
+            }
+          }
+        },
+        "metadata": {},
+        "name": "prod_to_target_iterated_item",
+        "source_node": {
+          "branches": [
+            "next"
+          ],
+          "component_type": "ToolNode",
+          "description": null,
+          "inputs": [],
+          "metadata": {},
+          "name": "prod",
+          "outputs": [
+            {
+              "items": {
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "groups",
+                "type": "object"
+              },
+              "title": "groups",
+              "type": "array"
+            }
+          ],
+          "tool": {
+            "component_type": "ServerTool",
+            "description": "neograph node 'prod' (mode=scripted)",
+            "inputs": [],
+            "metadata": {},
+            "name": "prod",
+            "outputs": [
+              {
+                "items": {
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "groups",
+                  "type": "object"
+                },
+                "title": "groups",
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "source_output": "groups"
+      }
+    ],
     "description": null,
     "inputs": [],
     "metadata": {},
@@ -25290,18 +27572,30 @@
           {
             "anyOf": [
               {
-                "title": "item:v",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               },
               {
                 "items": {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 },
                 "type": "array"
               }
             ],
-            "title": "iterated_item:v"
+            "title": "iterated_item"
           }
         ],
         "metadata": {
@@ -25330,16 +27624,28 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   }
                 ],
                 "metadata": {},
                 "name": "target__each_start",
                 "outputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   }
                 ]
               },
@@ -25353,8 +27659,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   }
                 ],
                 "metadata": {},
@@ -25370,8 +27682,14 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     }
                   ],
                   "metadata": {},
@@ -25397,8 +27715,14 @@
                 "description": null,
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   }
                 ],
                 "metadata": {},
@@ -25414,8 +27738,14 @@
                   "description": "neograph node 'target' (mode=scripted)",
                   "inputs": [
                     {
-                      "title": "item:v",
-                      "type": "string"
+                      "properties": {
+                        "v": {
+                          "title": "v",
+                          "type": "string"
+                        }
+                      },
+                      "title": "item",
+                      "type": "object"
                     }
                   ],
                   "metadata": {},
@@ -25446,8 +27776,14 @@
           "description": null,
           "inputs": [
             {
-              "title": "item:v",
-              "type": "string"
+              "properties": {
+                "v": {
+                  "title": "v",
+                  "type": "string"
+                }
+              },
+              "title": "item",
+              "type": "object"
             }
           ],
           "metadata": {},
@@ -25461,16 +27797,28 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 }
               ],
               "metadata": {},
               "name": "target__each_start",
               "outputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 }
               ]
             },
@@ -25482,8 +27830,14 @@
               "description": null,
               "inputs": [
                 {
-                  "title": "item:v",
-                  "type": "string"
+                  "properties": {
+                    "v": {
+                      "title": "v",
+                      "type": "string"
+                    }
+                  },
+                  "title": "item",
+                  "type": "object"
                 }
               ],
               "metadata": {},
@@ -25499,8 +27853,14 @@
                 "description": "neograph node 'target' (mode=scripted)",
                 "inputs": [
                   {
-                    "title": "item:v",
-                    "type": "string"
+                    "properties": {
+                      "v": {
+                        "title": "v",
+                        "type": "string"
+                      }
+                    },
+                    "title": "item",
+                    "type": "object"
                   }
                 ],
                 "metadata": {},
@@ -25533,16 +27893,28 @@
             "description": null,
             "inputs": [
               {
-                "title": "item:v",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               }
             ],
             "metadata": {},
             "name": "target__each_start",
             "outputs": [
               {
-                "title": "item:v",
-                "type": "string"
+                "properties": {
+                  "v": {
+                    "title": "v",
+                    "type": "string"
+                  }
+                },
+                "title": "item",
+                "type": "object"
               }
             ]
           }

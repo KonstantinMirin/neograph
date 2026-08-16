@@ -25,6 +25,7 @@ from neograph.errors import ConfigurationError
 from neograph.node import Node
 from neograph.spec_types import (
     _import_agent_spec_property_classes,
+    _normalize_erased_property,
     _structural_type_name,
     agent_spec_properties_to_types,
     lookup_type,
@@ -99,12 +100,27 @@ def _dict_form_inputs_from_props(props: Any) -> dict[str, Any] | None:
     (leave the caller's default single-type reconstruction in charge)."""
     if not props:
         return None
+    pas = _import_agent_spec_property_classes()
     groups: dict[str, list[Any]] = {}
     for p in props:
         key, rest = split_property_title(p.title)
-        if key is None:
-            return None
-        groups.setdefault(key, []).append(p.model_copy(update={"title": rest}))
+        if key is not None:
+            groups.setdefault(key, []).append(p.model_copy(update={"title": rest}))
+            continue
+        # neograph-qtfof.7: a bare-titled ObjectProperty is the RESHAPED
+        # fan-out receiver (one Property for the whole per-item model,
+        # replacing the old dotted-per-field flattening) -- its OWN
+        # `.properties` (already unprefixed, exactly like a dotted group's
+        # un-prefixed members) becomes that key's group. A bare-titled
+        # NON-object Property is the legacy single-type shape (no dot,
+        # nothing to group) and must still fall through to the caller's
+        # default reconstruction -- discriminating on "ObjectProperty",
+        # not "bare title" alone, is load-bearing here.
+        inflated = _normalize_erased_property(p)
+        if isinstance(inflated, pas.ObjectProperty) and inflated.properties:
+            groups[p.title] = list(inflated.properties.values())
+            continue
+        return None
     return {key: _agent_spec_props_to_type(group) for key, group in groups.items()} or None
 
 

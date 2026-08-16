@@ -66,6 +66,7 @@ __all__ = ["to_agent_spec"]
 
 # --- extracted clusters (neograph-3ffdg.3), re-exported so this module's public import surface is unchanged.
 from neograph._agent_spec_boundary import resolve_end_node_sources  # noqa: E402
+from neograph._agent_spec_each_fanout import each_fanout_edge_source  # noqa: E402
 from neograph._agent_spec_markers import (  # noqa: E402,F401
     _MARK_AGENT_SPEC,
     _MARK_BRANCH,
@@ -525,10 +526,22 @@ def to_agent_spec(construct: Construct, api_provider: str | None = None) -> Flow
             fan_out_key = getattr(item, "fan_out_param", None)
             for upstream_name in ni.by_name:
                 if upstream_name == fan_out_key:
-                    # The Each fan-out receiver slot is not an upstream NODE
-                    # name -- it's populated per-item by the MapNode's own
-                    # sub-flow wiring (_lower_each), so no DataFlowEdge here
-                    # (mirrors _validation_inputs.py's fan_out_param skip).
+                    # neograph-qtfof.7: a real DataFlowEdge when Each.over
+                    # resolves to a single-segment path AND the edge is SAFE
+                    # (each_fanout_edge_source's own scope boundary + the
+                    # json_schemas_have_same_type pre-check) -- else stays
+                    # metadata-only, mirroring _validation_inputs.py's
+                    # fan_out_param skip.
+                    each_mod = item.modifier_set.each
+                    resolved = (
+                        each_fanout_edge_source(
+                            each_mod.over, fan_out_key, ni.by_name[upstream_name], item_by_name, data_node_by_item_name, _properties_for
+                        )
+                        if each_mod is not None
+                        else None
+                    )
+                    if resolved is not None:
+                        _emit_input_edges(item.name, "", resolved[0], resolved[1], dest_title=fan_out_key)
                     continue
                 upstream_item = item_by_name.get(upstream_name)
                 source_node = data_node_by_item_name.get(upstream_name)

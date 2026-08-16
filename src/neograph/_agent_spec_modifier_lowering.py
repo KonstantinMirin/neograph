@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeAlias
 
+from neograph._agent_spec_each_fanout import each_receiver_properties
 from neograph._agent_spec_loop_predicate import synthesize_loop_predicate
 from neograph._agent_spec_markers import (
     _MARK_BRANCH,
@@ -306,7 +307,7 @@ def _lower_each(
     if _is_translation_eligible(node):
         _rewritten, inner_inputs, _flat = _node_translation(node)
     else:
-        inner_inputs = _properties_for(_item_inputs(node))
+        inner_inputs = each_receiver_properties(_item_inputs(node), getattr(node, "fan_out_param", None), _properties_for)
     start_node = nodes_mod.StartNode(name=f"{node.name}__each_start", inputs=inner_inputs or None)
     end_node = nodes_mod.EndNode(name=f"{node.name}__each_end")
 

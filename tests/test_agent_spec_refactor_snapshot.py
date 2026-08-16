@@ -170,6 +170,34 @@ the new predicate ``ToolNode`` + its ``ServerTool``, two new
 ``DataFlowEdge``s (body->predicate, predicate->check), and one new
 ``ControlFlowEdge`` for ``DEFAULT_BRANCH``'s exit.
 
+## The SIXTH sanctioned value modification (neograph-qtfof.7, 2026-08-16)
+
+Same category: the golden had captured the qtfof.7 bug too -- an Each-modified
+node's MapNode declared its fan-out receiver as FLATTENED per-field
+Properties (``item:v``), so pyagentspec inferred ``iterated_item:v`` instead
+of one ``iterated_item`` Property a real collection edge could target. The
+fix reshapes the StartNode's (and the inner body's own) receiver into ONE
+ObjectProperty titled with the ``fan_out_param`` key, and wires a real
+``DataFlowEdge`` from the producer into it -- CONDITIONAL on pyagentspec's own
+``json_schemas_have_same_type`` predicate (mirroring qtfof.6's precedent), so
+an incompatible producer/receiver shape still emits no edge rather than a
+silent broadcast.
+
+Extent, measured by a full recursive golden-vs-actual diff across all 34
+REPRESENTATIVE_CELLS BEFORE patching: exactly 3 cells changed (scripted-each-
+single, scripted-each-dict, scripted-each-context -- every SCRIPTED plain-Each
+cell in the representative set), 31 unchanged (verified `set(old) ==
+set(new)` for all 31, zero added/removed top-level keys; think-each-single is
+translation-eligible and deliberately carved out of the reshape, so it is
+correctly among the unchanged). In each changed cell the diff is confined to
+exactly three top-level keys (`nodes`, `control_flow_connections`,
+`data_flow_connections`) -- verified `set(old.keys()) == set(new.keys())` per
+cell before patching, not assumed. Large line churn
+(`git diff --numstat`) is expected and not evidence of a wider change: the new
+ObjectProperty receiver shape is structurally DEEPER (nested sub-properties)
+than the flattened form it replaces, and `_canonicalize` full-inlines it on
+both sides of an `anyOf` union.
+
 Run with::
 
     uv run --extra agent-spec pytest tests/test_agent_spec_refactor_snapshot.py

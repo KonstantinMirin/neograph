@@ -83,7 +83,7 @@ from tests.agent_spec_loader_harness import (  # noqa: E402
     server_tools,
     stub_registry,
 )
-from tests.test_agent_spec_matrix import CELLS, GREEN, Alpha, Beta, Out, build_cell  # noqa: E402
+from tests.test_agent_spec_matrix import CELLS, GREEN, Alpha, Beta, Coll, Ctx, Elem, Out, build_cell  # noqa: E402
 
 # The shared graph walk is NOT re-derived here: two builders over the same
 # ``control_flow_connections`` that must agree forever and are checked by nothing
@@ -140,6 +140,21 @@ _CELL_BODIES: dict[str, dict[str, object]] = {
     # gap, explicitly out of that ticket's scope) -- see EXEC_EXEMPT below.
     "scripted-loop-single": {"prod": Alpha(a="p"), "refine": Alpha(a="not-x")},
     "scripted-loop-dict": {"pa": Alpha(a="p"), "pb": Beta(b="q"), "refine": Alpha(a="not-x")},
+    # neograph-qtfof.7 widened COMPARE_CELLS to include these three. `target`'s
+    # body is a CONSTANT (both `_const`/`_body` ignore kwargs), so every fanned-
+    # out item produces the identical Out -- the comparison is on that shared
+    # value winding up on both sides via real iteration, not per-item content.
+    "scripted-each-single": {"prod": Coll(groups=[Elem(v="a"), Elem(v="b"), Elem(v="c")]), "target": Out(ok="done")},
+    "scripted-each-dict": {
+        "prod": Coll(groups=[Elem(v="a"), Elem(v="b"), Elem(v="c")]),
+        "pb": Beta(b="q"),
+        "target": Out(ok="done"),
+    },
+    "scripted-each-context": {
+        "prod": Coll(groups=[Elem(v="a"), Elem(v="b"), Elem(v="c")]),
+        "source": Ctx(c="ctx"),
+        "target": Out(ok="done"),
+    },
 }
 
 
@@ -251,7 +266,7 @@ class TestExecExemptProjectionCoverage:
     def test_exemption_status_is_determined_by_mode_and_modifier_projection(self) -> None:
         from neograph.modifiers import modifier_names_for_combo
 
-        projection_status: dict[tuple[str, bool, bool, bool], set[bool]] = {}
+        projection_status: dict[tuple[str, bool, bool, bool, bool], set[bool]] = {}
         for cell_id in sorted(GREEN):
             mode, combo, config, _shape = CELLS[cell_id]
             names = modifier_names_for_combo(combo)
@@ -261,7 +276,16 @@ class TestExecExemptProjectionCoverage:
             # reads the whole state bus, genuinely undeterminable (out of this
             # ticket's scope), so its check node's input stays permanently
             # unfed regardless of whether Loop is also present.
-            key = (mode, "each" in names, "operator" in names, config == "merge_prompt")
+            # neograph-qtfof.7: "each" alone likewise no longer determines
+            # exemption for the PLAIN (non-fused) case -- the MapNode's
+            # iterated_item now gets a real, conditional DataFlowEdge. The
+            # FUSED Each x Oracle sub-flow is a genuinely different closure
+            # status (its own inner variant node stays unfed -- the fused
+            # branch's non-empty body_data disables auto-wiring one level
+            # deeper, out of this ticket's budget), so "oracle" (whether this
+            # combo also carries Oracle) is a real, separate axis now, mirroring
+            # how qtfof.6 added "operator" alongside "loop".
+            key = (mode, "each" in names, "each" in names and "oracle" in names, "operator" in names, config == "merge_prompt")
             projection_status.setdefault(key, set()).add(cell_id in EXEC_EXEMPT)
 
         inconsistent = {k: v for k, v in projection_status.items() if len(v) > 1}

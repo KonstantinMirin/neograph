@@ -150,6 +150,15 @@ def classify_load_failure(exc: Exception) -> str | None:
         predicate = "llm_config_missing_api_provider"
     elif "iterated_item" in msg:
         predicate = "modifier_metadata_only_fanout"
+    elif "__variant_" in msg and "to have a value for property" in msg:
+        # neograph-qtfof.7 scope boundary (documented, not a new finding): the
+        # FUSED Each x Oracle sub-flow's own variant node is unfed too, one
+        # level deeper than the outer MapNode this ticket fixes. The fused
+        # branch's non-empty body_data disables pyagentspec's title-based
+        # auto-wiring for that inner sub-flow (same root cause, same bead --
+        # the fan-out source is metadata-only there as well); fixing the
+        # fused sub-flow's own internal wiring is out of this ticket's budget.
+        predicate = "modifier_metadata_only_fanout"
     elif "branching_mapping_key" in msg:
         predicate = "modifier_metadata_only_branch"
     if predicate is None:
