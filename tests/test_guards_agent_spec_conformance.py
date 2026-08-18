@@ -126,10 +126,17 @@ class TestSingleWalkerInvariant:
             f"walker) -- found {len(calls)}. A second call site is a re-derived walker."
         )
 
-    def test_flow_nodes_attribute_walked_by_exactly_two_functions(self):
-        """`flow.nodes` (or `n.subflow`) is read by exactly the two designated
-        Flow-level walker helpers -- `_check_outermost_end_node` and
-        `_walk_flow_for_llm_configs` -- never a third."""
+    def test_flow_nodes_attribute_walked_by_exactly_the_designated_functions(self):
+        """`flow.nodes` (or `n.subflow`) is read by exactly the DESIGNATED
+        Flow-level walker helpers -- never by an undesignated one.
+
+        The invariant is ONE walker per concern, not a frozen count.
+        `_check_map_node_fanout` joined the set in neograph-qtfof.11, when
+        `modifier_metadata_only_fanout` was repointed from the IR level (where
+        "an Each is present" had become a demonstrable over-match) to the
+        exported artifact. It is a walk of a DIFFERENT question, not a second
+        copy of either sibling's -- which is the shape this guard exists to
+        forbid. Adding a name here requires that justification in writing."""
         tree = ast.parse(CONFORMANCE_MODULE.read_text())
         readers: set[str] = set()
         for node in ast.walk(tree):
@@ -137,10 +144,10 @@ class TestSingleWalkerInvariant:
                 for inner in ast.walk(node):
                     if isinstance(inner, ast.Attribute) and inner.attr in ("nodes", "subflow"):
                         readers.add(node.name)
-        allowed = {"_check_outermost_end_node", "_walk_flow_for_llm_configs"}
+        allowed = {"_check_outermost_end_node", "_check_map_node_fanout", "_walk_flow_for_llm_configs"}
         unexpected = readers - allowed
         assert not unexpected, (
-            f"function(s) reading flow.nodes/.subflow outside the two designated Flow-level walkers: "
+            f"function(s) reading flow.nodes/.subflow outside the designated Flow-level walkers: "
             f"{sorted(unexpected)} -- this is a second, re-derived Flow walk."
         )
 

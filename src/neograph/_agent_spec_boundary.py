@@ -64,14 +64,160 @@ from neograph.node import Node
 #: _properties_for(_item_outputs(item)) -- IDENTICAL to the bare case, so the
 #: terminal-producer wiring below is correct for them too (verified against
 #: _lower_oracle: both the merge_prompt LlmNode and merge_fn ToolNode declare
-#: outputs = _properties_for(_item_outputs(node)) verbatim). EACH is
-#: deliberately excluded -- a MapNode infers its own outputs from its inner
-#: sub-Flow's EndNode, a different shape (see module docstring).
+#: outputs = _properties_for(_item_outputs(node)) verbatim).
 _WIRABLE_SHAPES = (PrimaryShape.BARE, PrimaryShape.ORACLE)
+
+#: Shapes whose exported SpecNode declares outputs pyagentspec INFERS rather than
+#: outputs neograph declares -- so the IR is the WRONG source and the lowered node
+#: is read instead (``_inferred_output_props``). EACH: a MapNode's outputs are
+#: ``collected_{inner title}``, list-wrapped by its default APPEND reducer
+#: (``MapNode._get_inferred_outputs`` + ``_get_default_reducers``, reading
+#: ``subflow.outputs`` <- the sub-Flow's EndNode). neograph-qtfof.11 made those
+#: non-empty (``_lower_each`` now declares + feeds that EndNode); this admits them
+#: to the wiring. The ``collected_`` prefix and the list-wrapping stay
+#: pyagentspec's -- re-deriving either here would be the disease that ticket's
+#: codebase scan pinned at zero instances.
+_INFERRED_SHAPES = (PrimaryShape.EACH,)
 
 
 def _is_wirable(item: Any) -> bool:
     return primary_shape(item) in _WIRABLE_SHAPES
+
+
+def _inferred_output_props(item: Any, data_node_by_item_name: dict[str, Any]) -> tuple[list[Any], Any] | None:
+    """``(properties, source_node)`` read off ``item``'s LOWERED SpecNode, or
+    ``None`` when ``item``'s shape is not one pyagentspec infers outputs for.
+
+    ``ComponentWithIO.model_post_init`` materialises ``.outputs`` from
+    ``_get_inferred_outputs`` at construction, so by the time the caller holds the
+    lowered node the inferred Properties are already there to be read.
+    """
+    if primary_shape(item) not in _INFERRED_SHAPES:
+        return None
+    name = getattr(item, "name", None)
+    source_node = data_node_by_item_name.get(name) if isinstance(name, str) else None
+    if source_node is None:
+        return None
+    return list(getattr(source_node, "outputs", None) or []), source_node
+
+
+def _sub_flow_end_outputs(terminal: Any) -> list[Any]:
+    """The output Properties a sub-Flow's synthetic ``EndNode`` must declare:
+    exactly those its terminal producer exposes (neograph-qtfof.11).
+
+    Read off the LOWERED SpecNode rather than recomputed from the IR, so a
+    placeholder-translated (LLM-mode) body -- whose declared Properties are the
+    flat ``${var}``-derived names, not the dotted IR ones -- stays correct with no
+    second rule. ``EndNode`` mirrors ``outputs`` into ``inputs``
+    (``_get_inferred_inputs``), which is what makes the edges below wirable.
+    """
+    return list(getattr(terminal, "outputs", None) or [])
+
+
+def _sub_flow_boundary_edges(
+    prefix: str,
+    start_node: Any,
+    body_nodes: list[Any],
+    terminal: Any,
+    end_node: Any,
+    edges_mod: Any,
+    existing: list[Any],
+) -> list[Any]:
+    """Every ``DataFlowEdge`` a sub-Flow's own boundary needs: ``StartNode`` ->
+    each body input it can fill, then ``terminal`` -> ``EndNode``.
+
+    **Why the StartNode half is not separable from the EndNode half.** A Flow's
+    same-title data edges are synthesised by the loader ONLY while
+    ``data_flow_connections is None`` (``_langgraphconverter``, all-or-nothing).
+    A sub-Flow that shipped ``None`` was relying on that synthesis for its body's
+    INPUT; the first explicit edge -- the EndNode one this ticket adds -- switches
+    it off for the WHOLE sub-Flow. Emitting both halves together is what keeps
+    that flip from turning a missing-result bug into a missing-input one.
+
+    **Why this is not a blanket replay of the loader's rule.** The loader pairs
+    EVERY same-titled ``(source output, destination input)``; replayed verbatim on
+    a fused Each x Oracle body that would put BOTH variants AND the merge onto the
+    EndNode's single input -- many sources, one destination, last writer wins. So
+    only the two safe directions are emitted: one source (the StartNode) fanning
+    out to many destinations, and the single terminal producer feeding the
+    EndNode. ``existing`` (the modifier's own already-emitted edges) is honoured,
+    never duplicated.
+    """
+    fed = {(edge.destination_node.name, edge.destination_input) for edge in existing}
+    edges: list[Any] = []
+    start_titles = {prop.title for prop in (getattr(start_node, "outputs", None) or [])}
+    for body in body_nodes:
+        for prop in getattr(body, "inputs", None) or []:
+            if prop.title not in start_titles or (body.name, prop.title) in fed:
+                continue
+            fed.add((body.name, prop.title))
+            edges.append(
+                edges_mod.DataFlowEdge(
+                    name=f"{prefix}__start_data_{body.name}_{prop.title}",
+                    source_node=start_node,
+                    source_output=prop.title,
+                    destination_node=body,
+                    destination_input=prop.title,
+                )
+            )
+    for prop in getattr(end_node, "outputs", None) or []:
+        if (end_node.name, prop.title) in fed:
+            continue
+        edges.append(
+            edges_mod.DataFlowEdge(
+                name=f"{prefix}__end_data_{prop.title}",
+                source_node=terminal,
+                source_output=prop.title,
+                destination_node=end_node,
+                destination_input=prop.title,
+            )
+        )
+    return edges
+
+
+def close_sub_flow(
+    kind: str,
+    name: str,
+    start_node: Any,
+    body_nodes: list[Any],
+    body_control: list[Any],
+    body_data: list[Any],
+    flow_classes: tuple[Any, Any, Any],
+) -> Any:
+    """Build a modifier's sub-``Flow``, CLOSED at its terminal boundary
+    (neograph-qtfof.11): the ``EndNode`` declares its terminal producer's outputs
+    and every boundary ``DataFlowEdge`` is emitted.
+
+    ``kind`` names the modifier for the synthesized node/edge names
+    (``{name}__{kind}_end``); ``flow_classes`` is the caller's already-imported
+    ``(nodes_mod, flow_mod, edges_mod)`` triple, so this module keeps its
+    import-free relationship with pyagentspec.
+
+    ``body_nodes[-1]`` is the terminal producer by construction -- the plain body,
+    or ``_lower_oracle``'s trailing merge -- i.e. exactly the node the end control
+    edge has always departed from. The caller's ``body_control`` order is preserved
+    with the end edge APPENDED, so lowering order is unchanged.
+
+    Why the whole boundary lives here rather than at the call site: a synthetic
+    boundary node with no declared I/O was the one disease three separate export
+    sites shared (neograph-qtfof.9 outermost, .11 Each, .12 Portal), and the
+    ``data_flow_connections``-flip trap ``_sub_flow_boundary_edges`` documents is
+    not something each caller should have to remember independently.
+    """
+    nodes_mod, flow_mod, edges_mod = flow_classes
+    terminal = body_nodes[-1]
+    end_node = nodes_mod.EndNode(name=f"{name}__{kind}_end", outputs=_sub_flow_end_outputs(terminal) or None)
+    edges = _sub_flow_boundary_edges(name, start_node, body_nodes, terminal, end_node, edges_mod, body_data)
+    return flow_mod.Flow(
+        name=f"{name}__{kind}_body",
+        start_node=start_node,
+        nodes=[start_node, *body_nodes, end_node],
+        control_flow_connections=[
+            *body_control,
+            edges_mod.ControlFlowEdge(name=f"{name}__{kind}_end_edge", from_node=terminal, to_node=end_node),
+        ],
+        data_flow_connections=[*body_data, *edges] or None,
+    )
 
 
 def resolve_end_node_sources(
@@ -127,6 +273,16 @@ def resolve_end_node_sources(
             for prop in props
         ]
         return props, sources
+
+    # neograph-qtfof.11: an EACH terminal's Properties are pyagentspec's inferred
+    # ``collected_*``, not neograph's declared ones -- read the lowered MapNode.
+    # Branch arms are deliberately NOT extended to this: two MapNodes converging on
+    # one EndNode input is the many-sources-one-destination shape the arm case above
+    # only gets away with because both arms write the SAME converged Property.
+    inferred = _inferred_output_props(last, data_node_by_item_name)
+    if inferred is not None:
+        props, source_node = inferred
+        return (props, [(source_node, prop.title) for prop in props]) if props else fallback
 
     if not _is_wirable(last):
         return fallback

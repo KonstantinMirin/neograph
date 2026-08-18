@@ -126,6 +126,40 @@ def run_via_neograph(construct: Any, bodies: dict[str, BaseModel]) -> dict[str, 
     return run(graph, input={})
 
 
+def terminal_property_map(neograph_side: dict[str, Any]) -> dict[str, Any]:
+    """neograph's own run result, projected into the flat property map an exported
+    Flow's ``invoke()`` returns -- THE single projection both COMPARE tiers use.
+
+    neograph keys its result by NODE name and carries Pydantic instances; the
+    exported Flow surfaces a flat ``{property title: value}`` map. For a BARE-shaped
+    terminal that is just ``model_dump()``.
+
+    An EACH terminal is the shape that needs saying out loud (neograph-qtfof.11,
+    which made this comparison possible at all by giving the MapNode outputs):
+    neograph's own value is ``dict[map_key, Model]``, while the exported MapNode
+    reduces the same per-item results with its DEFAULT APPEND reducer into
+    ``collected_{field}: [value, ...]``. So the projection is a TRANSPOSE -- N models
+    of M fields become M lists of N values -- not a rename. The two runtimes really
+    do return different containers for the same computation, and hiding that behind
+    a laxer assertion is what this whole tier exists not to do.
+    """
+    terminal = list(neograph_side)[-1]
+    value = neograph_side[terminal]
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    if isinstance(value, dict):
+        collected: dict[str, Any] = {}
+        for item in value.values():
+            for field, field_value in item.model_dump().items():
+                collected.setdefault(f"collected_{field}", []).append(field_value)
+        return collected
+    raise AssertionError(
+        f"terminal node {terminal!r} produced {type(value).__name__}, which has no known projection "
+        "into an Agent Spec property map -- a new terminal shape reached COMPARE; teach this "
+        "projection what the exported artifact does with it rather than loosening the comparison"
+    )
+
+
 def classify_load_failure(exc: Exception) -> str | None:
     """Map an EXECUTE-tier failure to its tracked root-cause ticket, or ``None``
     if the failure does not match a known, already-filed export gap.

@@ -99,8 +99,7 @@ CONFORMANCE_PREDICATE_META: dict[str, ConformancePredicateMeta] = {
     "llm_config_missing_api_provider": ConformancePredicateMeta(
         ConformanceTier.NEOGRAPH_ROUND_TRIP_ONLY,
         "neograph-qtfof.8",
-        "An exported LlmConfig has api_provider=None, which pyagentspec's "
-        "AgentSpecLoader cannot load.",
+        "An exported LlmConfig has api_provider=None, which pyagentspec's AgentSpecLoader cannot load.",
     ),
     "outermost_end_node_unwired": ConformancePredicateMeta(
         ConformanceTier.NEOGRAPH_ROUND_TRIP_ONLY,
@@ -156,10 +155,10 @@ def _walk_structural(construct: Construct, findings: list[ConformanceFinding]) -
         combo, _mods = classify_modifiers(item)
         names = modifier_names_for_combo(combo)
         node_name = getattr(item, "name", None)
-        if "each" in names:
-            findings.append(
-                ConformanceFinding("modifier_metadata_only_fanout", node_name, "Each modifier present")
-            )
+        # NOTE: "each" is deliberately absent here. Its predicate
+        # (modifier_metadata_only_fanout) moved to the Flow level in
+        # neograph-qtfof.11 -- see _check_map_node_fanout for why an IR-level
+        # "an Each is present" test became an over-match.
         if "loop" in names or "operator" in names:
             findings.append(
                 ConformanceFinding("modifier_metadata_only_branch", node_name, "Loop/Operator modifier present")
@@ -180,13 +179,64 @@ def _flow_findings(flow: Any) -> list[ConformanceFinding]:
     """The ONE Flow-level (post-export) walker. See module docstring."""
     findings: list[ConformanceFinding] = []
     if _is_swarm(flow):
-        findings.append(
-            ConformanceFinding("portal_mesh_unverified", None, "exports as a Swarm, not a Flow")
-        )
+        findings.append(ConformanceFinding("portal_mesh_unverified", None, "exports as a Swarm, not a Flow"))
         return findings
     _check_outermost_end_node(flow, findings)
+    _check_map_node_fanout(flow, findings)
     _walk_flow_for_llm_configs(flow, findings)
     return findings
+
+
+def _check_map_node_fanout(flow: Any, findings: list[ConformanceFinding]) -> None:
+    """Every ``MapNode``'s ``iterated_*`` input must arrive over a real
+    ``DataFlowEdge`` -- at every nesting level.
+
+    THE REPOINTING (neograph-qtfof.11). This predicate used to be IR-level: "an
+    Each modifier is present" => not portable. That was true when NO Each export
+    carried a fan-out edge, and it stayed true-looking afterwards only because
+    neograph-qtfof.9's own gap made every Each cell fail before the empirical
+    authority could contradict it. qtfof.7 made the edge REAL for the scripted,
+    named-receiver, single-segment-``over`` case, and qtfof.11 made those cells
+    execute end to end -- at which point "an Each is present" became a
+    demonstrable OVER-MATCH, flagging constructs a third-party runtime provably
+    runs correctly.
+
+    The fix is not to re-derive qtfof.7's scope boundary here as a second copy of
+    ``each_fanout_edge_source``'s conditions (this module imports nothing from
+    ``_agent_spec*`` by design, and a duplicated rule is how the two drift). It is
+    to ask the ARTIFACT the question the predicate's own meaning text always
+    asked: is the iterated input fed, or not? An LLM-mode or single-type-inputs
+    Each still ships no edge and still fires -- unchanged, and now for the real
+    reason rather than by proxy.
+
+    A ``data_flow_connections`` of ``None`` counts as feeding nothing: the loader
+    then synthesises SAME-TITLE edges only, and no producer is titled
+    ``iterated_*``.
+    """
+    from pyagentspec.flows.nodes.mapnode import MapNode
+
+    fed = {
+        (edge.destination_node.name, edge.destination_input)
+        for edge in (getattr(flow, "data_flow_connections", None) or [])
+    }
+    for n in getattr(flow, "nodes", None) or []:
+        if isinstance(n, MapNode):
+            unfed = [
+                prop.title
+                for prop in (n.inputs or [])
+                if prop.title.startswith("iterated_") and (n.name, prop.title) not in fed
+            ]
+            if unfed:
+                findings.append(
+                    ConformanceFinding(
+                        "modifier_metadata_only_fanout",
+                        getattr(n, "name", None),
+                        f"MapNode fan-out input(s) {unfed} fed by no DataFlowEdge",
+                    )
+                )
+        subflow = getattr(n, "subflow", None)
+        if subflow is not None:
+            _check_map_node_fanout(subflow, findings)
 
 
 def _check_outermost_end_node(flow: Any, findings: list[ConformanceFinding]) -> None:

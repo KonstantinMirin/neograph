@@ -82,6 +82,7 @@ from tests.agent_spec_loader_harness import (  # noqa: E402
     run_via_neograph,
     server_tools,
     stub_registry,
+    terminal_property_map,
 )
 from tests.test_agent_spec_matrix import CELLS, GREEN, Alpha, Beta, Coll, Ctx, Elem, Out, build_cell  # noqa: E402
 
@@ -151,6 +152,28 @@ _CELL_BODIES: dict[str, dict[str, object]] = {
         "target": Out(ok="done"),
     },
     "scripted-each-context": {
+        "prod": Coll(groups=[Elem(v="a"), Elem(v="b"), Elem(v="c")]),
+        "source": Ctx(c="ctx"),
+        "target": Out(ok="done"),
+    },
+    # neograph-qtfof.11 widened COMPARE_CELLS again, to the FUSED Each x Oracle
+    # cells. Their sub-Flow already shipped explicit data edges (_lower_oracle's
+    # variant fan-in), so the loader's same-title auto-wiring was already off and
+    # their `item` input was fed by nothing -- that ticket's StartNode->body edges
+    # are what made them loadable. Same bodies as the plain Each cells above: the
+    # keys are TOOL names, and both Oracle variants carry the one `target` tool
+    # (the merge carries `m_combine`, left to compare_registry's pass-through,
+    # which mirrors neograph's own `variants[0]` merge registration).
+    "scripted-each_oracle-merge_fn-single": {
+        "prod": Coll(groups=[Elem(v="a"), Elem(v="b"), Elem(v="c")]),
+        "target": Out(ok="done"),
+    },
+    "scripted-each_oracle-merge_fn-dict": {
+        "prod": Coll(groups=[Elem(v="a"), Elem(v="b"), Elem(v="c")]),
+        "pb": Beta(b="q"),
+        "target": Out(ok="done"),
+    },
+    "scripted-each_oracle-merge_fn-context": {
         "prod": Coll(groups=[Elem(v="a"), Elem(v="b"), Elem(v="c")]),
         "source": Ctx(c="ctx"),
         "target": Out(ok="done"),
@@ -380,9 +403,11 @@ class TestTheThirdPartyRuntimeAgreesWithNeographsOwnRuntime:
 
         # neograph keys its result by NODE name and carries Pydantic instances; the
         # exported Flow's terminal value is a flat property map. Compare the flat
-        # projection of the neograph result's terminal node against it.
+        # projection of the neograph result's terminal node against it -- via the
+        # SHARED projection, so this tier and the conformance calibration cannot
+        # drift into two different notions of "equal".
         terminal = max(neograph_side, key=lambda name: list(neograph_side).index(name))
-        expected = neograph_side[terminal].model_dump()
+        expected = terminal_property_map(neograph_side)
 
         assert third_party.get("outputs") == expected, (
             f"{cell_id}: the two independently-authored runtimes disagree on the result.\n"

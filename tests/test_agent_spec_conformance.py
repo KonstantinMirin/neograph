@@ -53,6 +53,7 @@ from tests.agent_spec_loader_harness import (  # noqa: E402
     compare_registry,
     run_via_agent_spec_loader,
     run_via_neograph,
+    terminal_property_map,
 )
 from tests.test_agent_spec_execute import (  # noqa: E402
     _CELL_BODIES,
@@ -113,7 +114,7 @@ def _grade_green_cells_empirically() -> _EmpiricalGrading:
 
         neograph_side = run_via_neograph(build_cell(*CELLS[cell_id]), bodies)
         terminal = list(neograph_side)[-1]
-        expected = neograph_side[terminal].model_dump()
+        expected = terminal_property_map(neograph_side)
         if outputs != expected:
             failed[cell_id] = (
                 f"the two independently-authored runtimes disagree -- third-party {outputs!r} "
@@ -183,17 +184,33 @@ class TestTheStaticConformanceVerdictIsCalibratedAgainstEmpiricalExecution:
 
         # neograph-qtfof.9 landed: a BARE/ORACLE terminal producer's EndNode is now
         # correctly wired (real DataFlowEdge, real declared outputs), and none of
-        # these 4 cells carry an LLM node, so no qtfof.8 api_provider gap applies
+        # these cells carry an LLM node, so no qtfof.8 api_provider gap applies
         # either -- the first cells ever to be genuinely PORTABLE, both statically
-        # and empirically. Each/Loop/Portal terminal producers are NOT in this set
-        # (qtfof.9's own scope boundary -- see _agent_spec_boundary.py), and any
-        # LLM-bearing cell needs api_provider= (qtfof.8) before it can join.
+        # and empirically. Any LLM-bearing cell still needs api_provider= (qtfof.8)
+        # before it can join.
+        #
+        # neograph-qtfof.11 then added the 6 EACH-terminal cells (3 plain + 3 fused
+        # Each x Oracle): the Each sub-Flow's EndNode now declares + is fed, so the
+        # MapNode exposes its collected_* outputs and the outermost EndNode sources
+        # from it. Both halves of the biconditional were re-read before this literal
+        # moved -- `unsound` and `over_pessimistic` are both empty above, and the
+        # `modifier_metadata_only_fanout` predicate was repointed from the IR level
+        # to the exported artifact in the same change, so it still fires for the
+        # LLM-mode / single-type-inputs Each shapes that genuinely ship no fan-out
+        # edge. LOOP and PORTAL terminals remain outside (qtfof.9's scope boundary
+        # for Loop; neograph-qtfof.12 for the gated Portal mesh).
         assert grading.passed == frozenset(
             {
                 "scripted-bare-single",
                 "scripted-bare-dict",
                 "scripted-oracle-merge_fn-single",
                 "scripted-oracle-merge_fn-dict",
+                "scripted-each-single",
+                "scripted-each-dict",
+                "scripted-each-context",
+                "scripted-each_oracle-merge_fn-single",
+                "scripted-each_oracle-merge_fn-dict",
+                "scripted-each_oracle-merge_fn-context",
             }
         ), (
             "VACUITY RATCHET: the empirical PASS set changed shape -- "

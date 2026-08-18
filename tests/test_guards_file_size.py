@@ -83,7 +83,12 @@ ALLOWLIST: dict[str, int] = {
     "_agent_spec.py": 694,
     # neograph-qtfof.8: 646 -> 649. _lower_oracle/_lower_each thread api_provider
     # to their _make_llm_config/_lower_generation_step call sites.
-    "_agent_spec_modifier_lowering.py": 650,
+    # neograph-qtfof.11: 650 -> 648. _lower_each's sub-Flow assembly (EndNode,
+    # boundary edges, Flow construction) moved into _agent_spec_boundary's
+    # close_sub_flow -- the ticket ADDED behaviour here and the file still shrank,
+    # because the boundary now belongs to the module that already owned the
+    # outermost one.
+    "_agent_spec_modifier_lowering.py": 648,
     "_oracle.py": 517,
     "_tool_loop.py": 548,
     "_wiring.py": 773,

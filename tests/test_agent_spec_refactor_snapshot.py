@@ -198,9 +198,41 @@ ObjectProperty receiver shape is structurally DEEPER (nested sub-properties)
 than the flattened form it replaces, and `_canonicalize` full-inlines it on
 both sides of an `anyOf` union.
 
+## The SEVENTH sanctioned value modification (neograph-qtfof.11, 2026-08-18)
+
+Same category: the golden had captured the qtfof.11 bug too -- an Each
+sub-Flow's ``EndNode`` was built with NO declared outputs and no
+``DataFlowEdge`` feeding it, so ``Flow._get_inferred_outputs`` saw nothing,
+``MapNode._get_inferred_outputs`` (which reads ``subflow.outputs``) inferred
+nothing, and the whole fan-out RESULT was dropped at the boundary -- a
+third-party ``invoke()`` returned ``{}``. The fix declares the inner EndNode's
+outputs from the lowered terminal producer, feeds it a real edge, emits the
+``StartNode``->body edges that pyagentspec's now-disabled same-title
+auto-wiring stops supplying, and admits the EACH shape to
+``_agent_spec_boundary``'s outermost-EndNode wiring (sourcing the MapNode's
+inferred ``collected_*`` Property).
+
+Extent, measured by a full recursive golden-vs-actual diff across all 34
+REPRESENTATIVE_CELLS BEFORE patching: exactly 4 cells changed (scripted-each-
+single/-dict/-context and think-each-single -- every EACH cell in the
+representative set, the think one included because the inner EndNode's
+declaration is mode-agnostic even though its fan-out INPUT stays unwired), 30
+unchanged (verified ``old[k] == new[k]`` per cell against HEAD's golden, plus
+``set(old) == set(new)``, zero added/removed top-level keys -- and the same
+key-set equality per changed cell). In each changed cell the diff is confined to
+exactly four top-level keys: ``outputs`` (the Flow now exposes ``collected_ok``),
+``nodes`` (the MapNode gains its inferred outputs + its sub-Flow's closed
+boundary; the outermost EndNode gains outputs/inputs), ``data_flow_connections``
+(+1 edge, MapNode -> EndNode), and ``control_flow_connections`` -- which gained
+NO edge: ``_canonicalize`` full-inlines each edge's ``from_node``/``to_node``, so
+the two edges touching the changed nodes carry their new payload. Line churn
+(``git diff --numstat``: 11406 insertions, 3652 deletions) is that same inlining
+artifact, not a wider change.
+
 Run with::
 
     uv run --extra agent-spec pytest tests/test_agent_spec_refactor_snapshot.py
+
 """
 
 from __future__ import annotations

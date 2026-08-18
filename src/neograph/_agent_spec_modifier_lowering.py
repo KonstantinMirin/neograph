@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeAlias
 
+from neograph._agent_spec_boundary import close_sub_flow
 from neograph._agent_spec_each_fanout import each_receiver_properties
 from neograph._agent_spec_loop_predicate import synthesize_loop_predicate
 from neograph._agent_spec_markers import (
@@ -307,16 +308,16 @@ def _lower_each(
     if _is_translation_eligible(node):
         _rewritten, inner_inputs, _flat = _node_translation(node)
     else:
-        inner_inputs = each_receiver_properties(_item_inputs(node), getattr(node, "fan_out_param", None), _properties_for)
+        inner_inputs = each_receiver_properties(
+            _item_inputs(node), getattr(node, "fan_out_param", None), _properties_for
+        )
     start_node = nodes_mod.StartNode(name=f"{node.name}__each_start", inputs=inner_inputs or None)
-    end_node = nodes_mod.EndNode(name=f"{node.name}__each_end")
 
     if oracle is None:
         inner = _lower_item_body(node, export_flow, api_provider=api_provider)
         body_nodes: list[SpecNode] = [inner]
         body_control = [
             edges_mod.ControlFlowEdge(name=f"{node.name}__each_start_edge", from_node=start_node, to_node=inner),
-            edges_mod.ControlFlowEdge(name=f"{node.name}__each_end_edge", from_node=inner, to_node=end_node),
         ]
         body_data: list[DataFlowEdge] = []
     else:
@@ -330,25 +331,22 @@ def _lower_each(
         # at the merge instead (the pre-fix shape) orphaned every variant. The
         # inner merge keeps the MapNode's own name, which validates and round-trips.
         body_nodes, body_control, body_data = _lower_oracle(node, oracle, export_flow, api_provider=api_provider)
-        merge = body_nodes[-1]  # _lower_oracle returns [*variants, merge]
         body_control = [
             edges_mod.ControlFlowEdge(
                 name=f"{node.name}__each_start_edge", from_node=start_node, to_node=body_nodes[0]
             ),
             *body_control,
-            edges_mod.ControlFlowEdge(name=f"{node.name}__each_end_edge", from_node=merge, to_node=end_node),
         ]
 
-    sub_flow = flow_mod.Flow(
-        name=f"{node.name}__each_body",
-        start_node=start_node,
-        nodes=[start_node, *body_nodes, end_node],
-        control_flow_connections=body_control,
-        data_flow_connections=body_data or None,
-    )
+    # neograph-qtfof.11: close_sub_flow owns the terminal boundary -- the EndNode
+    # DECLARES the terminal producer's outputs and is FED by a real DataFlowEdge
+    # (a MapNode infers its OWN outputs from ``subflow.outputs`` <- that EndNode,
+    # so an empty one erased the entire fan-out result from the exported artifact).
     return nodes_mod.MapNode(
         name=node.name,
-        subflow=sub_flow,
+        subflow=close_sub_flow(
+            "each", node.name, start_node, body_nodes, body_control, body_data, (nodes_mod, flow_mod, edges_mod)
+        ),
         metadata={
             _MARK_MODIFIER: "each",
             _MARK_EACH_SPEC: {"over": each.over, "key": each.key, "on_error": each.on_error},
