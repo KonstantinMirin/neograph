@@ -240,12 +240,46 @@ def _check_map_node_fanout(flow: Any, findings: list[ConformanceFinding]) -> Non
 
 
 def _check_outermost_end_node(flow: Any, findings: list[ConformanceFinding]) -> None:
-    """Only the TOP-LEVEL Flow's EndNode is checked -- a nested subflow's
-    EndNode is always wired to its parent MapNode/FlowNode and is not the
-    qtfof.9 gap (which is specifically about the outermost Construct)."""
+    """The outermost boundary's finding -- WHICH one it is, and for which nodes.
+
+    Only the TOP-LEVEL Flow's EndNode is checked: a nested subflow's EndNode is
+    wired to its parent MapNode/FlowNode and is not the qtfof.9 gap (which is
+    specifically about the outermost Construct).
+
+    A GATED PORTAL MESH takes the other branch (neograph-qtfof.12). Its export is
+    a Flow WRAPPING the peer mesh (``AgentNode(agent=Swarm)`` -> BranchingNode ->
+    InputMessageNode -> two EndNodes), so it slipped past ``_flow_findings``'
+    Swarm early-return and its output-less EndNodes were filed under
+    ``outermost_end_node_unwired`` -- i.e. against neograph-qtfof.9, a CLOSED
+    ticket whose fix (wire ``construct.nodes[-1]``'s terminal producer) provably
+    cannot reach this shape: there is no such terminal, only a wrapped Swarm.
+    Filing an open gap against a closed bead makes the report claim the gap is
+    already fixed. The mesh is the SAME shape its ungated sibling is -- zero GREEN
+    cells, never certified PORTABLE -- so it gets the SAME ``portal_mesh_unverified``
+    predicate, at the same tier, which is why the verdict does not move.
+
+    Detected STRUCTURALLY off the artifact (an AgentNode whose ``.agent`` is a
+    Swarm -- the only such construction site, ``_agent_spec_portal.py``; the other
+    two AgentNode sites wrap an Agent/RemoteAgent), never off a
+    ``neograph/modifier`` marker: this module imports nothing from ``_agent_spec*``
+    by design, and reading the marker would trade that invariant for nothing.
+    """
+    from pyagentspec.flows.nodes.agentnode import AgentNode
     from pyagentspec.flows.nodes.endnode import EndNode
 
-    for n in getattr(flow, "nodes", None) or []:
+    nodes = getattr(flow, "nodes", None) or []
+    wrapped_mesh = next((n for n in nodes if isinstance(n, AgentNode) and _is_swarm(getattr(n, "agent", None))), None)
+    if wrapped_mesh is not None:
+        findings.append(
+            ConformanceFinding(
+                "portal_mesh_unverified",
+                getattr(wrapped_mesh, "name", None),
+                "a gated peer mesh: a Flow wrapping a Swarm, not a Flow of primitives",
+            )
+        )
+        return
+
+    for n in nodes:
         if isinstance(n, EndNode) and not (n.outputs or n.inputs):
             findings.append(
                 ConformanceFinding(

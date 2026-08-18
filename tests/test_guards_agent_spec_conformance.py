@@ -1,6 +1,6 @@
 """Structural guards for the Agent Spec conformance classifier (neograph-ftnxl.1).
 
-Pins three invariants the design depends on:
+Pins four invariants the design depends on:
 
 1. **Predicate registry completeness, BOTH directions.** Every predicate id
    ``ConformanceFinding(...)`` can emit has an entry in
@@ -17,7 +17,16 @@ Pins three invariants the design depends on:
    ``iter_with_arms``/``Construct`` recursion or ``flow.nodes``/``subflow``
    for a conformance predicate -- that would re-duplicate the exact
    "two entry points into one predicate set" risk the design named.
-3. **Anti-duplication (AST-based, not regex).** ``_agent_spec_conformance.py``
+3. **Classifier-does-not-import-the-exporter.** ``_agent_spec_conformance.py``
+   imports NOTHING from ``neograph._agent_spec*`` -- the invariant its own
+   module docstring states and the one neograph-qtfof.12 leaned on: a gated
+   Portal mesh is detected STRUCTURALLY off the exported artifact (an AgentNode
+   whose ``.agent`` is a Swarm) rather than by reading a ``neograph/modifier``
+   marker, because reading the marker would mean importing
+   ``_agent_spec_markers`` and creating the cycle ``neograph/__init__`` ->
+   ``_agent_spec`` -> ... -> conformance. A future author "simplifying" the
+   detection into a marker lookup is exactly what this catches.
+4. **Anti-duplication (AST-based, not regex).** ``_agent_spec_conformance.py``
    and ``_agent_spec_conformance_report.py`` contain no re-typed copy of the
    exporter's own NOT_EXPORTABLE raise-list field names (``raw_fn``,
    ``skip_when``, ``handoff_channel``, ``gate_tools_when``) as string
@@ -77,7 +86,9 @@ def _registry_keys(tree: ast.Module) -> set[str]:
 
 def _walker_function_names(tree: ast.Module) -> set[str]:
     """Every top-level function definition in the conformance module."""
-    return {node.name for node in ast.iter_child_nodes(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    return {
+        node.name for node in ast.iter_child_nodes(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
 
 
 class TestPredicateRegistryCompleteness:
@@ -169,3 +180,52 @@ class TestNoRaiseListReDerivation:
                     literals = [n.value for n in [node.left, *node.comparators] if isinstance(n, ast.Constant)]
                     hit = _BANNED_RAISE_LIST_LITERALS & {v for v in literals if isinstance(v, str)}
                     assert not hit, f"{module_path.name}: raise-list field name used in a comparison: {hit}"
+
+
+def _exporter_imports(source: str) -> list[str]:
+    """Every ``neograph._agent_spec*`` module this source imports, by ANY spelling.
+
+    AST rather than a line regex, because the spellings a regex misses are the
+    ones a well-meaning refactor actually reaches for: an aliased
+    ``import neograph._agent_spec_markers as m`` (an ``ast.Import``, not an
+    ``ast.ImportFrom``) and a FUNCTION-LOCAL import placed there precisely to
+    "avoid the cycle" -- which does not avoid it, it only hides it until runtime.
+    """
+    banned: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            banned.extend(a.name for a in node.names if a.name.startswith("neograph._agent_spec"))
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("neograph._agent_spec"):
+            banned.append(node.module or "")
+    return banned
+
+
+class TestClassifierDoesNotImportTheExporter:
+    """The conformance module must stay one-way-independent of the exporter."""
+
+    def test_the_classifier_imports_nothing_from_the_agent_spec_export_side(self):
+        found = _exporter_imports(CONFORMANCE_MODULE.read_text())
+
+        assert not found, (
+            f"_agent_spec_conformance.py imports {found} from the exporter side. That is the cycle its "
+            "module docstring forbids (neograph/__init__ imports _agent_spec eagerly), and it is what "
+            "makes predicates re-derive exporter rules instead of reading the artifact -- the disease "
+            "neograph-qtfof.11 and neograph-qtfof.12 each had to undo. Detect the shape STRUCTURALLY "
+            "off the exported Flow instead."
+        )
+
+    def test_the_detector_sees_a_plain_from_import(self):
+        assert _exporter_imports("from neograph._agent_spec_markers import _MARK_MODIFIER\n") == [
+            "neograph._agent_spec_markers"
+        ]
+
+    def test_the_detector_sees_an_aliased_import_a_from_regex_would_miss(self):
+        assert _exporter_imports("import neograph._agent_spec_markers as m\n") == ["neograph._agent_spec_markers"]
+
+    def test_the_detector_sees_a_function_local_import(self):
+        source = "def f():\n    from neograph._agent_spec import to_agent_spec\n    return to_agent_spec\n"
+        assert _exporter_imports(source) == ["neograph._agent_spec"]
+
+    def test_the_detector_ignores_unrelated_imports(self):
+        source = "from neograph.modifiers import classify_modifiers\nfrom pyagentspec.swarm import Swarm\n"
+        assert _exporter_imports(source) == []
