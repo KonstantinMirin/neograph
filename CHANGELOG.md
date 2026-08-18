@@ -5,6 +5,12 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.7] - unreleased
+
+### Fixed
+
+- **`describe_type` renders exactly one `null` per optional field** (`neograph-g21jc`, [GH #7](https://github.com/KonstantinMirin/neograph/issues/7)). A field's nullability is knowable from two independent places in a Pydantic model — the annotation (`X | None`, which `_render_type` already lowers to a `null` union member) and `FieldInfo.is_required()` — and `_render_model_body` consulted both, then combined them by string-appending. Every optional field in every rendered schema therefore shipped `T or null or null`, and since `describe_type` output is injected verbatim into structured-output prompts, the defect lived in the model-facing contract rather than in a debug helper. The annotation is now the single authority: a new `_admits_none()` gate — reusing the module's own `origin is Union or origin is types.UnionType` spelling, so emitter and guard cannot drift — suppresses the second marker. The gate is deliberately annotation-shaped rather than text-shaped: PEP-604 unions preserve author order, so `None | str` renders `null or string`, and the obvious `type_str.endswith("null")` dedupe would have left exactly that shape still doubled. A non-nullable field with a default (`name: str = "x"`) keeps its `or null` — that is separate "may be absent" semantics, not the bug. `tests/test_guards_nullability_marker.py` pins the single-source rule going forward.
+
 ## [0.7.6] - 2026-08-12
 
 ### Fixed

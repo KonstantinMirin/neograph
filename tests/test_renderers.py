@@ -5,7 +5,7 @@ render_prompt inspector, and three-surface parity.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
@@ -401,6 +401,112 @@ class TestDescribeType:
         name_line = [l for l in lines if l.startswith("name:")][0]
         assert "null" not in name_line
 
+    def test_optional_field_renders_exactly_one_null_when_annotation_is_nullable(self):
+        """An ``X | None`` field carries its None-ness twice -- once in the
+        annotation's own Union, once in ``is_required() is False`` -- and those
+        two signals must collapse to ONE ``or null`` token.
+
+        Regression for neograph-g21jc / GH issue #7: ``_render_model_body``
+        appended ' or null' unconditionally on top of the union-rendered null,
+        shipping ``T or null or null`` into every structured-output prompt.
+        """
+
+        from pydantic import Field
+
+        from neograph import describe_type
+
+        class WithNullables(BaseModel):
+            band: Literal["a", "b"] | None = Field(None, description="d")
+            plain: str | None = None
+            nested: list[str] | None = None
+
+        result = describe_type(WithNullables, prefix="")
+
+        assert "or null or null" not in result, (
+            f"duplicated null marker in rendered schema:\n{result}"
+        )
+        lines = [line.strip() for line in result.splitlines()]
+        assert [line for line in lines if line.startswith("band:")] == [
+            'band: "a" or "b" or null  // d'
+        ]
+        assert [line for line in lines if line.startswith("plain:")] == [
+            "plain: string or null"
+        ]
+        assert [line for line in lines if line.startswith("nested:")] == [
+            "nested: [string] or null"
+        ]
+
+    def test_optional_field_renders_one_null_when_none_is_first_union_member(self):
+        """``None | str`` renders ``null or string`` -- the null marker is NOT
+        trailing, because PEP-604 unions preserve author order.
+
+        This is the case that discriminates an annotation-shape guard from a
+        string-shape one: a ``type_str.endswith("null")`` dedupe passes every
+        other case in this suite and still emits ``null or string or null``
+        here (neograph-g21jc / GH issue #7, architect-review finding #3).
+        """
+        from typing import Optional, Union
+
+        from neograph import describe_type
+
+        class NoneFirst(BaseModel):
+            # The legacy `typing` spellings are deliberate: they are the only
+            # way to reach `_admits_none`'s `origin is Union` arm (PEP-604
+            # unions carry `types.UnionType` instead), so the modernizing
+            # lint rules are suppressed rather than obeyed here.
+            pep604: None | str = None
+            explicit: Union[None, int] = None  # noqa: UP007
+            trailing: Optional[str] = None  # noqa: UP045
+
+        result = describe_type(NoneFirst, prefix="")
+
+        assert "or null or null" not in result, (
+            f"duplicated null marker in rendered schema:\n{result}"
+        )
+        lines = [line.strip() for line in result.splitlines()]
+        assert [line for line in lines if line.startswith("pep604:")] == [
+            "pep604: null or string"
+        ]
+        assert [line for line in lines if line.startswith("explicit:")] == [
+            "explicit: null or int"
+        ]
+        assert [line for line in lines if line.startswith("trailing:")] == [
+            "trailing: string or null"
+        ]
+
+    def test_non_nullable_field_with_a_default_still_gets_or_null(self):
+        """Preservation guard for the neograph-g21jc fix: a field that is not
+        annotated nullable but HAS a default is ``is_required() is False``, and
+        its ``or null`` suffix is pre-existing 'may be absent' semantics --
+        deduping the doubled null must not silently drop it."""
+        from neograph import describe_type
+
+        class WithDefaults(BaseModel):
+            name: str = "x"
+            count: int = 3
+
+        result = describe_type(WithDefaults, prefix="")
+        lines = [line.strip() for line in result.splitlines()]
+        assert [line for line in lines if line.startswith("name:")] == [
+            "name: string or null"
+        ]
+        assert [line for line in lines if line.startswith("count:")] == [
+            "count: int or null"
+        ]
+
+    def test_required_nullable_field_renders_exactly_one_null(self):
+        """``x: str | None`` with NO default is required, so only the
+        annotation contributes a null -- exactly one, before and after the
+        neograph-g21jc fix."""
+        from neograph import describe_type
+
+        class RequiredNullable(BaseModel):
+            x: str | None
+
+        result = describe_type(RequiredNullable, prefix="")
+        lines = [line.strip() for line in result.splitlines()]
+        assert [line for line in lines if line.startswith("x:")] == ["x: string or null"]
+
     def test_joins_union_types_with_or_splitter(self):
         """Union[A, B] renders with or_splitter."""
 
@@ -414,7 +520,6 @@ class TestDescribeType:
 
     def test_renders_literal_values_as_quoted_strings(self):
         """Literal types render as quoted strings joined by or_splitter."""
-        from typing import Literal
 
         from neograph import describe_type
 
@@ -999,6 +1104,66 @@ class TestRenderPromptInspector:
         assert "Template: my/template" in result
         assert "[user]" in result
         assert "hello world" in result
+
+    def test_json_mode_output_schema_reaching_the_prompt_has_no_doubled_null(self):
+        """End-to-end at the ACCEPTANCE's locus: the schema text a node really
+        ships to the model.
+
+        neograph-g21jc / GH issue #7 was reported as a defect in the prompt, not
+        in a helper -- so the proof is the compiled prompt, not describe_type()
+        in isolation. json_mode is the strategy that rides the rendered schema
+        into the message, via ``describe_type(output_model)`` in
+        ``_llm_render``; this drives that whole path with no LLM call.
+        """
+        from neograph._llm import render_prompt
+        from tests.fakes import build_fake_runtime
+
+        captured: list[str | None] = []
+
+        def schema_capturing_compiler(template, data, output_schema=None, **kw):
+            captured.append(output_schema)
+            return [{"role": "user", "content": f"{template}\n{output_schema}"}]
+
+        class Verdict(BaseModel):
+            band: Literal["high", "low"] | None = None
+            note: str | None = None
+            reviewer: None | str = None
+            required_nullable: str | None
+            defaulted: str = "x"
+
+        n = Node(
+            name="verdict",
+            mode="think",
+            outputs=Verdict,
+            model="fast",
+            prompt="judge/verdict",
+            llm_config={"output_strategy": "json_mode"},
+        )
+        result = render_prompt(
+            n,
+            "some input",
+            runtime=build_fake_runtime(prompt_compiler=schema_capturing_compiler),
+        )
+
+        assert len(captured) == 1
+        schema = captured[0]
+        assert schema is not None, "json_mode must ride a rendered output schema"
+
+        # The defect, at the surface the user actually reported it on.
+        assert "or null or null" not in schema, f"doubled null in shipped schema:\n{schema}"
+        assert "or null or null" not in result, f"doubled null in shipped prompt:\n{result}"
+
+        lines = [line.strip() for line in schema.splitlines()]
+
+        def line_for(field: str) -> str:
+            return [line for line in lines if line.startswith(f"{field}:")][0]
+
+        assert line_for("band") == 'band: "high" or "low" or null'
+        assert line_for("note") == "note: string or null"
+        assert line_for("reviewer") == "reviewer: null or string"
+        assert line_for("required_nullable") == "required_nullable: string or null"
+        # Non-nullable-but-defaulted keeps its pre-existing "may be absent" null.
+        assert line_for("defaulted") == "defaulted: string or null"
 
     def test_applies_node_renderer_before_compilation(self):
         """render_prompt applies node.renderer before compilation."""

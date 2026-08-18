@@ -250,6 +250,21 @@ def _count_annotation(
 # ---------------------------------------------------------------------------
 
 
+def _admits_none(annotation: Any) -> bool:
+    """True when *annotation* can hold ``None``.
+
+    Mirrors the ``NoneType`` handling in :func:`_render_type` -- the same
+    question that function answers when it emits a ``null`` union member --
+    so the emitter and this guard cannot drift apart.
+    """
+    if annotation is None or annotation is type(None):
+        return True
+    origin = get_origin(annotation)
+    if origin is Union or origin is types.UnionType:
+        return any(arg is type(None) for arg in get_args(annotation))
+    return False
+
+
 def _render_model_body(
     model: type[BaseModel],
     *,
@@ -279,8 +294,13 @@ def _render_model_body(
             hoisted=hoisted,
             visited=visited,
         )
-        # Check if field is optional (has a default).
-        if not field_info.is_required():
+        # A nullable annotation already contributed its own ``null`` union
+        # member in ``_render_type``; appending a second one for the same fact
+        # (the field also being non-required) renders ``T or null or null``.
+        # Guard on the ANNOTATION, not on ``type_str``: PEP-604 unions keep
+        # author order, so ``None | str`` renders ``null or string`` and a
+        # trailing-text check would miss it (neograph-g21jc / GH issue #7).
+        if not field_info.is_required() and not _admits_none(field_info.annotation):
             type_str = f"{type_str} or null"
 
         comment = _field_comment(field_info)
