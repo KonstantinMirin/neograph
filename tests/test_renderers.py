@@ -349,6 +349,178 @@ class TestDescribeType:
     """Tests for describe_type() — two-pass Pydantic model walker that emits
     TypeScript-style schema notation."""
 
+    def test_container_over_a_model_renders_through_the_nested_dispatch(self):
+        """A container or union over a BaseModel renders at the top level the
+        same way it would as a nested field -- ``list[M]``, ``dict[str, M]``,
+        ``M | None`` -- instead of dying on ``model_fields``.
+
+        neograph-vduhp / GH issue #8. ``describe_type`` promised
+        ``type[BaseModel]``, enforced nothing, and let the value reach
+        ``model.model_fields``, so a caller walking a node's dict-form outputs
+        got ``AttributeError: type object 'list' has no attribute
+        'model_fields'`` -- a Pydantic internal naming a builtin rather than
+        the annotation they passed.
+        """
+        from neograph import describe_type
+
+        class Item(BaseModel):
+            a: str
+            b: int
+
+        body = "{\n  a: string\n  b: int\n}"
+
+        assert describe_type(list[Item], prefix="") == f"[{body}]"
+        assert describe_type(dict[str, Item], prefix="") == f"object<string, {body}>"
+        assert describe_type(Item | None, prefix="") == f"{body} or null"
+        assert describe_type(str, prefix="") == "string"
+
+    def test_top_level_container_still_hoists_its_member(self):
+        """The hoisting contract survives the container: ``hoist_classes='all'``
+        must emit the ``type M = {...}`` declaration ahead of ``[M]``, not
+        inline the body and lose it (neograph-vduhp / GH issue #8)."""
+        from neograph import describe_type
+
+        class Item(BaseModel):
+            a: str
+
+        result = describe_type(list[Item], prefix="", hoist_classes="all")
+
+        assert result == "type Item = {\n  a: string\n}\n\n[Item]"
+
+    def test_undescribable_annotation_is_refused_by_name(self):
+        """The discriminating case for the hybrid shape.
+
+        ``_render_type``'s fallthrough returns ``str(annotation)``. A pure
+        dispatch fix would expose that at the top level, so
+        ``describe_type(SomeClass)`` would return ``"<class '...'>"`` and ship
+        it to a model as though it were a schema -- a silent wrong answer in
+        place of a loud one. The boundary refuses instead, and the message
+        names what was passed rather than a Pydantic internal.
+
+        The GH issue asked for a ``TypeError``; the refusal is a
+        ``ConfigurationError`` because ``tests/test_guards_any_audit.py``
+        requires every raise in ``src/neograph`` to be a ``NeographError``
+        subclass, and growing that allowlist to spell one exception the other
+        way is not worth it. The reported shapes (``list[M]``, ``str``) now
+        RENDER, so this path is only reached by annotations the issue never
+        raised.
+        """
+        import pytest
+
+        from neograph import describe_type
+        from neograph.errors import ConfigurationError
+
+        class NotAModel:
+            pass
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            describe_type(NotAModel)
+
+        message = str(excinfo.value)
+        assert "NotAModel" in message
+        assert "model_fields" not in message
+
+    def test_basemodel_path_is_byte_identical_after_the_container_branch(self):
+        """The container branch must not perturb a single existing render.
+
+        Specifically it must NOT be 'simplified' by routing BaseModel input
+        through ``_count_annotation`` too: that counts the top model itself, so
+        a model which also appears nested reaches 2 and silently starts being
+        hoisted under ``hoist_classes='auto'``.
+        """
+        from neograph import describe_type
+
+        class Leaf(BaseModel):
+            v: str
+
+        class Root(BaseModel):
+            here: Leaf
+            items: list[Leaf]
+
+        result = describe_type(Root, prefix="")
+
+        # Leaf appears twice, so 'auto' hoists it -- and Root, the top model,
+        # must NOT be hoisted despite also being the render target.
+        assert result == (
+            "type Leaf = {\n  v: string\n}\n"
+            "\n"
+            "{\n  here: Leaf\n  items: [Leaf]\n}"
+        )
+
+    def test_hoist_all_does_not_hoist_the_render_target_itself(self):
+        """The other half of the byte-identical guarantee, and the case that
+        catches the tempting 'simplification'.
+
+        Routing BaseModel input through ``_count_annotation`` as well would
+        register the TOP model in ``class_counts``, so ``hoist_classes='all'``
+        would emit a ``type Root = {...}`` declaration alongside the body it is
+        already rendering. The two counters stay separate for exactly this
+        reason (neograph-vduhp / GH issue #8).
+        """
+        from neograph import describe_type
+
+        class Leaf(BaseModel):
+            v: str
+
+        class Root(BaseModel):
+            here: Leaf
+
+        result = describe_type(Root, prefix="", hoist_classes="all")
+
+        assert result == "type Leaf = {\n  v: string\n}\n\n{\n  here: Leaf\n}"
+        assert "type Root" not in result
+
+    def test_nested_undescribable_annotation_still_renders_leniently(self):
+        """``strict`` must not leak into recursion.
+
+        A field whose annotation this module has no notation for has always
+        rendered as its ``repr``; making that raise would be a silent breaking
+        change for existing pipelines, so the refusal is scoped to the
+        top-level boundary only.
+        """
+        from neograph import describe_type
+
+        class Opaque:
+            pass
+
+        class HasOpaque(BaseModel):
+            model_config = {"arbitrary_types_allowed": True}
+
+            thing: Opaque
+
+        result = describe_type(HasOpaque, prefix="")
+
+        assert "thing:" in result
+        assert "Opaque" in result
+
+    def test_inject_schema_no_longer_leaks_on_a_container_output_model(self):
+        """The second PUBLIC face of the same root (prompt.py:121 forwards
+        straight to ``describe_type``). Asserted rather than assumed to follow
+        from the shared root -- an unasserted claim is how the second face
+        silently diverges later (neograph-vduhp / GH issue #8)."""
+        from neograph import inject_schema
+        from neograph.tool import ToolInteraction
+
+        result = inject_schema({}, list[ToolInteraction])
+
+        assert "json_schema" in result
+        assert "tool_name" in result["json_schema"]
+
+    def test_dict_form_outputs_can_be_walked_entry_by_entry(self):
+        """The reported real-world trigger (neograph-vduhp / GH issue #8): a
+        consumer walking a node's declared dict-form ``outputs`` to render each
+        entry. The BaseModel entry worked; the ``list[X]`` sibling blew up."""
+        from neograph import describe_type
+        from neograph.tool import ToolInteraction
+
+        declared_outputs = {"result": Claims, "tool_log": list[ToolInteraction]}
+
+        rendered = {key: describe_type(ann, prefix="") for key, ann in declared_outputs.items()}
+
+        assert rendered["result"].startswith("{")
+        assert rendered["tool_log"].startswith("[{")
+        assert "tool_name: string" in rendered["tool_log"]
+
     def test_maps_primitives_to_typescript_names(self):
         """Primitive types map to their TypeScript-style names."""
         from neograph import describe_type
