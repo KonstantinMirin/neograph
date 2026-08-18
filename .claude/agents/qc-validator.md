@@ -270,7 +270,7 @@ Reference: `.claude/rules/workflows/session-completion.md` Step 6 "Verify"
 
 **1. Check beads sync status**:
 ```bash
-bd sync --status
+bd status
 ```
 - Expected: No pending beads changes (see session-completion.md Step 5)
 - If pending: FAIL with "Beads not synced - run /beads:sync"

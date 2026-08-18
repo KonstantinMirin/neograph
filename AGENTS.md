@@ -44,7 +44,7 @@ bd ready              # Find available work
 bd show <id>          # View issue details
 bd update <id> --status in_progress  # Claim work
 bd close <id>         # Complete work
-bd sync               # Sync with git
+bd export -o .beads/issues.jsonl               # Sync with git
 ```
 
 ### Landing the plane (session completion)
@@ -57,7 +57,7 @@ bd sync               # Sync with git
 4. **PUSH TO REMOTE** — this is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync
+   bd export -o .beads/issues.jsonl
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -782,3 +782,27 @@ These aren't bugs, just things worth considering for future sessions:
 - **TDD for bug fixes, always.** Write the failing test first.
 - **Parallel agent teams for multi-file work.** The `/team` slash command invokes a team with scoped file regions. Use it for anything that can be parallelized without file conflicts.
 - **User is the sole maintainer and sole downstream user (piarch).** No migration burden for hypothetical users.
+
+## Beads storage — updated 2026-08-18 (supersedes older guidance in this file)
+
+bd talks to a **local dolt sql-server** for this project (`.beads/dolt/<db>`); worktrees share it
+through a `.beads/redirect` file rather than keeping their own tracker. A shared Dolt server on
+Hetzner, reachable only over Tailscale, holds a replicated copy — it is a **backup target, never
+the live database**.
+
+- **Never point bd at the remote.** Measured: ~6.8 s per `bd ready` remote vs ~0.2 s local, because
+  bd makes ~200 sequential round trips per command and has no connection reuse.
+- **Never run `bd dolt push` / `bd dolt pull`.** They fail with `Access denied for user 'root'` —
+  Dolt's server-side push path hardcodes root with an empty password and no config can change it.
+  Replicate with `ox-troubleshooting-demo/scripts/beads_sync.sh`.
+- **`bd sync` does not exist** in bd 1.1.2 — not `--flush-only`, not `--from-main`. JSONL export is
+  automatic; `bd export -o .beads/issues.jsonl` is the explicit form.
+- **If bd reports "No issues found" unexpectedly, stop and diagnose — do not create anything.**
+  `.beads/metadata.json` is a git-tracked pointer to the database, so a branch checkout can silently
+  revert it; bd then creates an EMPTY database rather than failing. This once hid 5279 issues.
+  Run `make beads-preflight` (in ox-troubleshooting-demo) to check every project.
+- **Where `.beads` is gitignored, `export.git-add` must stay `false`**, or every bd write fails with
+  `auto-export: git add failed` while reads keep working.
+
+Full rationale and measurements:
+`pi-agentic-coding/plugins/dev-practices/skills/session-completion/references/beads-topology.md`

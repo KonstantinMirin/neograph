@@ -86,7 +86,7 @@ After all executors complete:
 2. Rescan index: `contextgit scan docs/requirements/ --recursive`
 3. Stage all new/modified requirement files
 4. Commit with descriptive message
-5. `bd sync --flush-only`
+5. `bd export -o .beads/issues.jsonl`
 
 ### Step 6: Shutdown team
 
