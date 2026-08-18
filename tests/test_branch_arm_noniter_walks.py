@@ -24,6 +24,24 @@ walk ignores. Branches only arise from ForwardConstruct tracing or a
 programmatic ``_BranchNode`` sentinel, so the branch itself is built
 programmatically (mirroring ``test_branch_arm_iter_nodes.py``); the arm content
 is a bare ``Node`` — the exact surface these walks make invisible.
+
+neograph-ftnxl.19 addendum -- two of the five site probes were CONVERTED.
+
+Sites 2 (``normalize_ir``) and 6-7 (``compiler.py``'s two Operator scans) could
+only be probed with a MODIFIED arm item, because their arm-relevant work is
+modifier-triggered: ``normalize_ir``'s three normalizers all gate on
+``modifier_set.each``/``.oracle``/``.portal``, and the Operator scans gate on
+``classify_modifiers(item)`` carrying an ``operator``. ``_wiring_branch.py``
+never wired ANY arm modifier (no Loop back-edge, no Each fan-out or barrier, no
+Oracle merge, no Operator interrupt check), so those walks were bookkeeping for
+a shape with zero runtime. neograph-ftnxl.19 makes the shape unrepresentable at
+``Construct(...)`` assembly -- strictly earlier and stronger than the
+compile-time errors those probes pinned -- so they now assert rejection instead.
+
+The walks themselves stay arm-aware and stay tested: sites 1/3/4/5 use BARE arm
+nodes and are unaffected, and the Operator scans still run (and are still
+needed) for TOP-LEVEL items. Constructive arm-aware wiring, which would restore
+the original probes, is tracked as neograph-ftnxl.22.
 """
 
 from __future__ import annotations
@@ -40,7 +58,7 @@ from neograph._ir_branch import (
     iter_with_arms,
 )
 from neograph.construct import ConstructError
-from neograph.errors import CompileError, ConfigurationError
+from neograph.errors import CompileError
 from tests.fakes import (
     build_test_compile_kwargs,
     configure_fake_llm,
@@ -99,6 +117,8 @@ def _arm_meta(parent: Construct) -> _BranchMeta:
     raise AssertionError("no _BranchNode in parent")
 
 
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Site 1 — _construct_validation._validate_node_chain (producer registration
 # + type validation)
@@ -128,13 +148,12 @@ def test_arm_node_input_type_mismatch_is_caught_at_assembly():
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def test_arm_each_node_gets_fan_out_param_normalized():
-    """An Each + dict-form arm Node must have ``fan_out_param`` inferred by
-    ``normalize_ir`` (which runs in ``Construct.__init__``).
+def test_arm_each_node_is_rejected_at_assembly():
+    """Site 2 (normalize_ir), converted.
 
-    The fan-out receiver is the single input key naming neither a peer producer
-    nor the node itself — here ``group``. Because ``normalize_ir`` skips
-    ``_BranchNode``, the arm node's ``fan_out_param`` stays ``None``.
+    Originally: an Each + dict-form arm Node must have ``fan_out_param``
+    inferred by ``normalize_ir``. Now an Each arm item cannot be assembled at
+    all, so that inference is unobservable for arms.
     """
     each_arm = Node.scripted(
         "canonicalize",
@@ -142,14 +161,11 @@ def test_arm_each_node_gets_fan_out_param_normalized():
         inputs={"group": ArmGroup},
         outputs=ArmResult,
     ) | Each(over="seed.items", key="label")
-    parent = _branch_parent(each_arm)
 
-    arm_node = _arm_meta(parent).true_arm_nodes[0]
-    assert arm_node.fan_out_param == "group", (
-        "branch-arm Each node missed fan_out_param normalization — the fan-out "
-        "receiver was never resolved, so the runtime extractor reads the wrong "
-        "input"
-    )
+    with pytest.raises(ConstructError) as exc:
+        _branch_parent(each_arm)
+    msg = str(exc.value).lower()
+    assert "each" in msg and "arm" in msg
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -299,19 +315,20 @@ def test_iter_item_slots_write_back_targets_the_arm_meta_list():
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def test_false_arm_each_node_gets_fan_out_param_normalized():
-    """normalize_ir must reach the FALSE arm too (write-back into
-    meta.false_arm_nodes)."""
+def test_false_arm_each_node_is_rejected_at_assembly():
+    """False-arm parity for the converted site-2 probe: the guard walks BOTH
+    arms, so the false arm is rejected identically to the true arm."""
     each_arm = Node.scripted(
         "canonicalize",
         fn="f",
         inputs={"group": ArmGroup},
         outputs=ArmResult,
     ) | Each(over="seed.items", key="label")
-    parent = _branch_parent(each_arm, arm="false")
 
-    arm_node = _arm_meta(parent).false_arm_nodes[0]
-    assert arm_node.fan_out_param == "group"
+    with pytest.raises(ConstructError) as exc:
+        _branch_parent(each_arm, arm="false")
+    msg = str(exc.value).lower()
+    assert "each" in msg and "arm" in msg
 
 
 def test_false_arm_llm_node_is_seen_by_has_llm_nodes():
@@ -329,9 +346,19 @@ def test_false_arm_llm_node_is_seen_by_has_llm_nodes():
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def test_arm_operator_unregistered_condition_raises_at_compile():
-    """Site 6: a bare arm Operator node with a string condition that is not
-    registered must raise ConfigurationError at compile()."""
+def test_arm_operator_is_rejected_at_assembly_before_the_condition_scan():
+    """Sites 6-7 (compiler.py's two Operator scans), converted.
+
+    Originally two tests: a bare arm Operator node with an UNREGISTERED string
+    condition raised ``ConfigurationError`` at compile(), and one with a
+    registered condition but no checkpointer raised ``CompileError``. Both
+    proved ``compiler.py``'s ``iter_with_arms`` Operator scans reach arm items.
+
+    Now assembly rejects the arm Operator strictly earlier -- before compile()
+    is ever called -- so neither compile-time error is reachable for an arm
+    item. Both former probes collapse into this single assembly assertion; the
+    scans themselves still run (and are still needed) for TOP-LEVEL items.
+    """
     register_scripted("arm_seed", lambda _in, _cfg: ArmClaim(claim_id="c1", text="x"))
     register_scripted("f", lambda _in, _cfg: ArmResult(claim_id="c1", disposition="d"))
     op_arm = Node.scripted(
@@ -340,29 +367,11 @@ def test_arm_operator_unregistered_condition_raises_at_compile():
         inputs={"seed": ArmClaim},
         outputs=ArmResult,
     ) | Operator(when="unregistered_cond_9513")
-    parent = _branch_parent(op_arm)
 
-    with pytest.raises(ConfigurationError, match="unregistered_cond_9513"):
-        compile(parent, **build_test_compile_kwargs())
-
-
-def test_arm_operator_without_checkpointer_raises_at_compile():
-    """Site 7 (highest-value): a bare arm Operator node with a REGISTERED
-    condition still requires a checkpointer — compile() with checkpointer=None
-    must raise CompileError, not defer the failure to runtime."""
-    register_scripted("arm_seed", lambda _in, _cfg: ArmClaim(claim_id="c1", text="x"))
-    register_scripted("f", lambda _in, _cfg: ArmResult(claim_id="c1", disposition="d"))
-    op_arm = Node.scripted(
-        "gate",
-        fn="f",
-        inputs={"seed": ArmClaim},
-        outputs=ArmResult,
-    ) | Operator(when="reg_cond")
-    parent = _branch_parent(op_arm)
-
-    kwargs = build_test_compile_kwargs(conditions={"reg_cond": lambda d: True})
-    with pytest.raises(CompileError, match="checkpointer"):
-        compile(parent, checkpointer=None, **kwargs)
+    with pytest.raises(ConstructError) as exc:
+        _branch_parent(op_arm)
+    msg = str(exc.value).lower()
+    assert "operator" in msg and "arm" in msg
 
 
 def test_arm_agent_node_missing_tool_factory_raises_at_compile():

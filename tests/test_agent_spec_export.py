@@ -973,17 +973,38 @@ class TestToAgentSpecLowersModifiers:
             "mn-step1 must NOT reconverge directly -- only the arm's final item's exit does"
         )
 
-    def test_modifier_wrapped_node_inside_arm_gets_its_existing_lowering(self):
-        """neograph-s7zt3.17 (architect-review-flagged): an arm item carrying
-        its OWN modifier (Loop) must dispatch through the SAME
-        _lower_construct_item machinery the top-level loop uses -- proving
-        the recursive per-arm-item reuse design generalizes, not just bare
-        single-node arms."""
+    def test_modifier_wrapped_node_inside_arm_is_now_rejected_at_assembly(self):
+        """neograph-ftnxl.19 SUPERSEDES neograph-s7zt3.17 for this shape.
+
+        ORIGINAL INTENT (s7zt3.17, architect-review-flagged): an arm item
+        carrying its OWN modifier (Loop) must dispatch through the SAME
+        ``_lower_construct_item`` machinery the top-level loop uses, proving
+        the recursive per-arm-item reuse design generalizes beyond bare
+        single-node arms. That export-side behavior was and remains correct in
+        isolation -- ``_lower_branch`` really does route every arm item through
+        the full modifier-aware lowerer, and this test really did observe the
+        Loop's own ``BranchingNode`` + back-edge in the exported Flow.
+
+        WHY IT WAS INVALIDATED: the COMPILER never wired that loop.
+        ``_wiring_branch.py``'s ``_add_arm_nodes``/``_wire_arm_edges`` have no
+        ``primary_shape`` dispatch, so the identical construct compiled to a
+        plain node with NO back-edge and no exit router (neograph-ftnxl.19,
+        empirically confirmed). The exporter therefore emitted an Agent Spec
+        that ASSERTED a loop the runtime did not have -- a spec/runtime
+        divergence, and a worse failure than refusing the input. neograph-
+        ftnxl.19 makes the shape unrepresentable at ``Construct(...)`` assembly
+        (north star: unrepresentable > fail-loud > silent), which removes the
+        divergence at its source; no change was needed on the export side.
+
+        Constructive support for arm modifiers -- at which point the original
+        s7zt3.17 assertion becomes valid again -- is tracked as
+        neograph-ftnxl.22.
+        """
         import operator as op
 
-        from pyagentspec.flows.nodes import BranchingNode
+        import pytest
 
-        from neograph._agent_spec import to_agent_spec
+        from neograph import ConstructError
         from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
         from neograph.modifiers import Loop
         from neograph.node import Node
@@ -999,17 +1020,11 @@ class TestToAgentSpecLowersModifiers:
             true_arm_nodes=[looped],
             false_arm_nodes=[low_path],
         )
-        pipeline = Construct("modifier-in-arm", nodes=[seed, _BranchNode(branch_meta, 0)])
 
-        flow = to_agent_spec(pipeline)
-
-        loop_branch_nodes = [
-            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get(_MARK_MODIFIER) == "loop"
-        ]
-        assert len(loop_branch_nodes) == 1, (
-            "expected the arm's Loop-wrapped node to lower to its own BranchingNode+back-edge, "
-            "via the SAME modifier dispatch the top-level loop uses"
-        )
+        with pytest.raises(ConstructError) as exc:
+            Construct("modifier-in-arm", nodes=[seed, _BranchNode(branch_meta, 0)])
+        msg = str(exc.value).lower()
+        assert "loop" in msg and "arm" in msg
 
 
 # ── neograph-s7zt3.8: Construct-ITEM modifier export (silent-drop bug fix) ────

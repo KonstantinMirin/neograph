@@ -115,6 +115,16 @@ MIGRATED: frozenset[str] = frozenset(
         # boundary) -- reads the canonical classifier directly, zero
         # hand-written member dispatch, joins MIGRATED directly (never PENDING).
         "_agent_spec_boundary.py",
+        # neograph-ftnxl.19: the branch-arm modifier guard
+        # (_check_no_modifier_in_branch_arm) reads
+        # COMBO_DECOMPOSITION[combo].primary/.has_operator to decide whether an
+        # arm item carries ANY modifier, and modifier_names_for_combo(combo) to
+        # name the offenders in the error. Deriving the predicate from the table
+        # is what makes the guard TOTAL over future PrimaryShape values -- a
+        # hand-written member list would silently let a new shape become
+        # arm-legal, the exact regrowth this inventory forbids. Joins MIGRATED
+        # directly (never PENDING).
+        "_validation_arms.py",
     }
 )
 

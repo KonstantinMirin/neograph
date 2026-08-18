@@ -37,7 +37,7 @@ from neograph._ir_protocols import ConstructLike
 from neograph._normalize import _declared_output
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._state_keys import StateKeys
-from neograph._validation_arms import ArmScopedProducers
+from neograph._validation_arms import ArmScopedProducers, _check_no_modifier_in_branch_arm
 from neograph._validation_inputs import _check_item_input
 from neograph._validation_modifiers import (
     _validate_merge_hooks,
@@ -137,6 +137,7 @@ def _validate_node_chain(
     # TYPE-based exception).
     arms = ArmScopedProducers(construct.output)
     arms.seed_subgraph_input(construct.input, construct.name)
+    _check_no_modifier_in_branch_arm(construct)
 
     # iter_with_arm_ids expands _BranchNode sentinels into their arm items,
     # tagged with (branch_id, is_true_arm) so a bare arm Node is

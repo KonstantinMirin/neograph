@@ -74,6 +74,15 @@ def wrap_fan_over_agents(construct: Construct, scripted_lookup: dict[str, Callab
     # top-level rewrite is necessarily in a branch arm (iter_with_arms flattens
     # _BranchNode arms but does NOT descend into sub-construct nodes). The base
     # case does not cover arms — fail loud instead of a broken graph.
+    #
+    # DEFENSE-IN-DEPTH, deliberately retained (neograph-ftnxl.19): assembly now
+    # rejects EVERY modifier-carrying arm item via
+    # _validation_arms._check_no_modifier_in_branch_arm, which fires strictly
+    # earlier than this compile-time walk, so an Oracle-over-agent arm item can
+    # no longer reach here. Kept rather than deleted for the same reason
+    # compiler.py keeps its unreachable PORTAL match arms: if the assembly guard
+    # is ever weakened, this fails loud instead of silently dropping the Oracle
+    # modifier — the precise silent seam ftnxl.19 exists to close.
     for item in iter_with_arms(wrapped):
         if is_supported_fan_over_agent(item):
             raise CompileError.build(

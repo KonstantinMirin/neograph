@@ -26,10 +26,17 @@ from __future__ import annotations
 
 from collections import OrderedDict
 
+from neograph._ir_branch import iter_with_arm_ids
 from neograph._ir_protocols import ConstructLike
 from neograph._state_keys import StateKeys
 from neograph._validation_types import NodeItem, Producer, ProducerMap, _fmt_type, _source_location, _types_compatible
 from neograph.errors import ConstructError, NeographError
+from neograph.modifiers import (
+    COMBO_DECOMPOSITION,
+    PrimaryShape,
+    classify_modifiers,
+    modifier_names_for_combo,
+)
 from neograph.node import TypeSpecStatic
 
 
@@ -160,3 +167,57 @@ def _build_cross_arm_error(
         construct=construct.name,
         location=_source_location(),
     )
+
+
+def _check_no_modifier_in_branch_arm(construct: ConstructLike) -> None:
+    """Reject any modifier-carrying item (Node or Construct) placed directly
+    inside a branch arm (neograph-ftnxl.19; generalizes neograph-ftnxl.12's
+    Portal-only rule, which this replaces).
+
+    ``_wiring_branch.py``'s ``_add_arm_nodes``/``_wire_arm_edges`` never
+    dispatch on ``primary_shape`` — every arm item is wired via plain
+    ``make_node_fn``/``make_subgraph_fn`` plus a static ``add_edge``,
+    regardless of what it carries. Compare ``compiler.py``'s main loop, whose
+    ``match COMBO_DECOMPOSITION[combo].primary`` routes ORACLE/EACH/LOOP/BARE/
+    PORTAL to five different graph-builders and then appends
+    ``_add_operator_check`` for the orthogonal Operator wrapper. So an arm
+    modifier compiles cleanly today and is completely INERT: no Loop back-edge
+    or exit router, no Each fan-out or barrier, no Oracle variants or merge, no
+    Operator interrupt check, no ``Command(goto=...)`` routing.
+
+    ANTI-BAND-AID: reject at assembly (north star: unrepresentable > fail-loud >
+    silent) rather than partially wire, or re-cost, a modifier that would never
+    run. Full arm-aware wiring is a feature, tracked as neograph-ftnxl.22.
+
+    The predicate is read from the ONE decomposition table — ``primary is not
+    BARE`` for the five body shapes, ``has_operator`` for the orthogonal
+    wrapper — never a hand-typed modifier list. A future ``PrimaryShape`` value
+    is therefore rejected in an arm by construction, not by remembering to add
+    a case. Reuses :func:`iter_with_arm_ids` (neograph-ftnxl.2) — no second
+    arm-tagging primitive.
+    """
+    for item, arm_key in iter_with_arm_ids(construct):
+        if arm_key is None:
+            continue
+        combo, _mods = classify_modifiers(item)
+        decomp = COMBO_DECOMPOSITION[combo]
+        if decomp.primary is PrimaryShape.BARE and not decomp.has_operator:
+            continue
+        name = getattr(item, "name", "?")
+        carried = ", ".join(sorted(modifier_names_for_combo(combo)))
+        raise ConstructError.build(
+            f"modifier-carrying item '{name}' found inside a branch arm (carries: {carried})",
+            expected="branch-arm items to be unmodified; put modifiers on top-level items",
+            found=(
+                f"a {decomp.primary.name}-shaped item inside a _BranchNode arm "
+                f"(inert: arm items are wired without any modifier dispatch)"
+            ),
+            hint=(
+                "wrap the modified node in a sub-Construct and place THAT in the arm "
+                "(the sub-construct compiles through the full modifier path), or move it "
+                "above/below the branch. Arm-aware wiring is tracked as neograph-ftnxl.22."
+            ),
+            node=name,
+            construct=construct.name,
+            location=_source_location(),
+        )

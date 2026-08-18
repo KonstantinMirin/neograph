@@ -95,26 +95,23 @@ def compile_state_model(
         _add_output_field(node, fields)
         _add_agent_channels(node, fields)
 
-    # Branch arm nodes: add state fields for nodes inside branch arms.
-    # Arms can contain both Nodes and Constructs (e.g., self.loop() in
-    # ForwardConstruct produces a Construct in the branch arm).
+    # Branch arm items: add state fields for nodes/Constructs inside branch arms.
+    # Every arm item is BARE by assembly validation (neograph-ftnxl.19's
+    # _check_no_modifier_in_branch_arm), so there is exactly ONE shape to build
+    # here. The LOOP-shaped case this block used to carry was a silent seam, not
+    # support: _wiring_branch.py never wired an arm Loop, so the
+    # Annotated[list[T], _append_loop_result] field it produced always held
+    # exactly one element -- indistinguishable, to an `all_in_scope` list[T]
+    # consumer, from a genuine single-iteration loop. Arm-aware wiring (at which
+    # point a shape dispatch belongs here again) is tracked as neograph-ftnxl.22.
     for branch in branch_nodes:
         meta = branch._neo_branch_meta
         for arm_item in meta.true_arm_nodes + meta.false_arm_nodes:
             if isinstance(arm_item, Construct):
-                # Construct in branch arm — same handling as sub-constructs
+                # Construct in branch arm — same handling as a bare sub-construct
                 if arm_item.output is None:
                     continue
-                field_name = field_name_for(arm_item.name)
-                arm_combo, _ = classify_modifiers(arm_item)
-                if COMBO_DECOMPOSITION[arm_combo].primary is PrimaryShape.LOOP:
-                    fields[field_name] = (
-                        Annotated[list[arm_item.output], _append_loop_result],  # type: ignore[name-defined]
-                        [],
-                    )
-                    fields[StateKeys.loop_count(field_name)] = (int, 0)
-                else:
-                    fields[field_name] = (arm_item.output | None, None)
+                fields[field_name_for(arm_item.name)] = (arm_item.output | None, None)
             else:
                 _add_output_field(arm_item, fields)
 

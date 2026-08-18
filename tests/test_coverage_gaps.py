@@ -1342,9 +1342,27 @@ class TestBranchArmConstructState:
         # The Construct's output should be a field
         assert "ba_sub" in state_model.model_fields
 
-    def test_branch_arm_with_loop_construct_creates_append_list_field(self):
-        """Construct with Loop in branch arm creates append-list field (lines 110-115)."""
-        from neograph.state import compile_state_model
+    def test_branch_arm_with_loop_construct_is_rejected_at_assembly(self):
+        """neograph-ftnxl.19 SUPERSEDES this test's original subject.
+
+        ORIGINAL INTENT: cover ``state.py``'s arm-Construct LOOP branch, which
+        gave a ``Construct(...) | Loop(...)`` placed in a branch arm an
+        ``Annotated[list[T], _append_loop_result]`` field plus a
+        ``neo_loop_count_*`` counter -- state shaped exactly like a real loop's.
+
+        WHY IT WAS INVALIDATED: ``_wiring_branch.py`` never wired that loop (no
+        back-edge, no exit router), so the append-list ALWAYS held exactly one
+        element. An ``all_in_scope`` ``list[T]`` consumer could not distinguish
+        it from a genuine single-iteration loop, and ``from_enclosing(n)``
+        silently indexed a history that never grew. The state branch was
+        therefore removed alongside this test, and the shape is now rejected at
+        ``Construct(...)`` assembly. Constructive arm-aware wiring -- which
+        would restore both the state branch and this assertion -- is tracked as
+        neograph-ftnxl.22.
+        """
+        import pytest
+
+        from neograph import ConstructError
 
         register_scripted("bal_inner", lambda _in, _cfg: Draft(content="done", score=1.0))
         register_scripted("bal_seed", lambda _in, _cfg: Draft(content="start", score=0.8))
@@ -1374,12 +1392,10 @@ class TestBranchArmConstructState:
         )
         branch = _BranchNode(meta, branch_id=2)
 
-        pipeline = Construct("bal-test", nodes=[seed_node, branch])
-        state_model = compile_state_model(pipeline)
-
-        # Loop Construct should have append-list field + counter
-        assert "bal_sub" in state_model.model_fields
-        assert "neo_loop_count_bal_sub" in state_model.model_fields
+        with pytest.raises(ConstructError) as exc:
+            Construct("bal-test", nodes=[seed_node, branch])
+        msg = str(exc.value).lower()
+        assert "loop" in msg and "arm" in msg
 
     def test_branch_arm_construct_without_output_skipped(self):
         """Construct in branch arm without output is skipped (line 107-108)."""
