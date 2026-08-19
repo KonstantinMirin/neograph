@@ -29,7 +29,7 @@ from neograph._oracle import (
 from neograph._state_bus import StateBus, adapt_state, snapshot_state
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
-from neograph._trace import named, subgraph_metadata
+from neograph._trace import add_traced_node, named, subgraph_metadata
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ConfigurationError, ExecutionError
@@ -200,8 +200,14 @@ def _wire_oracle(
     merge_fn: LangGraphNodeFn,
     oracle: Oracle,
     prev_node: str | None,
+    subgraph_meta: dict[str, str] | None = None,
 ) -> str:
     """Shared Oracle wiring used by both Node and Construct paths.
+
+    ``subgraph_meta`` is supplied ONLY by the Construct path, where ``gen_fn``
+    is a redirect closure holding a compiled Pregel. Binding such a runnable
+    hides the nested graph from LangGraph's introspection, so the metadata rides
+    ``add_node`` instead. See ``_trace.add_traced_node``.
 
     Adds generator node, oracle_router with Send, merge barrier with defer=True.
     """
@@ -209,7 +215,9 @@ def _wire_oracle(
 
     # Generator node (called N times via Send). `named` so the engine span reads
     # as the node (not the leaking redirect __name__). See neograph-3fm1.
-    graph.add_node(gen_name, cast(Any, named(cast(Runnable, gen_fn), gen_name, mode="oracle")))
+    add_traced_node(
+        graph, gen_name, cast(Any, gen_fn), mode="oracle", subgraph_meta=subgraph_meta
+    )
 
     # Router that dispatches N generators
     models = oracle.models
@@ -238,7 +246,11 @@ def _wire_oracle(
         graph.add_conditional_edges(START, oracle_router, path_map=[gen_name])
 
     # Merge barrier
-    graph.add_node(merge_name, cast(Any, named(cast(Runnable, merge_fn), merge_name, mode="oracle_merge")), defer=True)
+    # The merge barrier holds no Pregel -- it consumes the generators' results --
+    # so it keeps its full binding.
+    add_traced_node(
+        graph, merge_name, cast(Any, merge_fn), mode="oracle_merge", defer=True
+    )
     graph.add_edge([gen_name], merge_name)
 
     return merge_name
@@ -250,8 +262,13 @@ def _wire_each(
     fan_fn: LangGraphNodeFn,
     each: Each,
     prev_node: str | None,
+    subgraph_meta: dict[str, str] | None = None,
 ) -> str:
     """Shared Each wiring used by both Node and Construct paths.
+
+    ``subgraph_meta`` is supplied ONLY by the Construct path, where ``fan_fn``
+    is a redirect closure holding a compiled Pregel. See
+    ``_trace.add_traced_node``.
 
     Adds fan-out node, each_router with Send (dotted path navigation),
     barrier with defer=True.
@@ -259,9 +276,9 @@ def _wire_each(
     barrier_name = f"assemble_{fan_name}"
     empty_name = f"__each_empty_{fan_name}"
 
-    # `named` so the fan-out node's engine span reads as the node (not the
-    # leaking wrapper __name__). See neograph-3fm1.
-    graph.add_node(fan_name, cast(Any, named(cast(Runnable, fan_fn), fan_name, mode="each")))
+    add_traced_node(
+        graph, fan_name, cast(Any, fan_fn), mode="each", subgraph_meta=subgraph_meta
+    )
 
     # Empty-collection bypass: writes empty dict to the Each field so
     # downstream nodes proceed. Follows the __loop_exit_ pattern.

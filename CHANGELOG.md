@@ -5,6 +5,16 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.8] - 2026-08-19
+
+### Fixed
+
+- **`Each`- and `Oracle`-modified sub-constructs were still invisible to LangGraph introspection** (`neograph-4o1cn`, [GH #6](https://github.com/KonstantinMirin/neograph/issues/6)). 0.7.7 fixed the two `make_subgraph_fn` call sites and proved the modifier'd paths with a single `Loop` case, then generalised to the whole family. `Loop` recovers because `_add_subgraph_loop` passes the runnable through unwrapped; `Each` and `Oracle` re-wrap at their own `named()` sites in the shared `_wire_each` / `_wire_oracle`, so both stayed hidden — `get_subgraphs()` returned `[]` for a fan-out, and `recurse=True` missed an `Each` nested inside a fixed `Loop`. The reporter found `Each`; `Oracle` was found only because the regression test was parametrized over every placement. The decision of whether a graph node may be config-bound now lives in ONE function, `_trace.add_traced_node` — it is a property of what is inside the runnable, not of the wiring path, and re-making it per call site is exactly what caused two misses. `tests/test_subgraph_introspection.py` now parametrizes over plain/Loop/Each/Oracle plus the nested Each-in-Loop shape.
+
+- **`dump_spec` lost every agent node's output contract** (`neograph-c9fya`, [GH #9](https://github.com/KonstantinMirin/neograph/issues/9)). The canonical tool-binding shape — `outputs={"result": Model, "tool_log": list[Entry]}` — lost both halves: the dict form had no `NodeSpec` slot, and `list[Entry]` is not a `BaseModel` so the type resolver refused it. On a representative pipeline those two ids were 10 of 11 losses, `strict=True` refused any tool-binding construct outright, and the graph-viewer use case the feature exists for was not served. `NodeSpec.outputs` now accepts `str | dict[str, str]` (mirroring `inputs`), and the type resolver renders containers over models — `list[X]` → `"[X]"`, `dict[str, X]` → `"{str: X}"`, `X | None` → `"X?"` — recursing so each member's schema reaches `types:`. `loader._resolve_type_ref` inverts the same notation, so a dumped dict-form output reloads to the identical annotation rather than half-resolving.
+
+- **The release gate was not a gate** (`neograph-pyfsb`). It reported success while whole shipped surfaces did not run: `neograph[mcp]` (a second top-level package) contributed **74 silently-skipped tests**, the examples were never executed, and the website was never built. A pass count cannot distinguish "green" from "did not run" — the same defect that let 0.7.4 ship with silently-skipped live checks. `make release-gate` now also runs the suite with every extra installed, the keyless examples end-to-end, the website build, and `scripts/check_skips.py`, which fails on any skip whose reason is not in `tests/skip_allowlist.txt`. That allowlist is **empty by design** and may only shrink. `make quality` is unchanged, so the dev loop stays fast.
+
 ## [0.7.7] - 2026-08-19
 
 ### Added
