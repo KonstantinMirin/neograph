@@ -31,7 +31,7 @@ from neograph._runtime_registry import _decoration_registry
 from neograph._sidecar import _get_param_res
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
-from neograph._trace import named
+from neograph._trace import subgraph_metadata
 from neograph._wiring import (
     _add_agent_cycle,
     _add_branch_to_graph,
@@ -453,16 +453,15 @@ def _add_subgraph(
 
     # Build the subgraph node function via factory. compile() returns the
     # CompiledNeograph facade; make_subgraph_fn drives the raw LangGraph graph.
-    # `named` binds run_name=sub.name here (not inside make_subgraph_fn, whose
-    # bare dual-path return is pinned by the async guard) so the sub-construct's
-    # engine span reads as the construct name across every modifier branch below
-    # (bare / oracle-redirect / each-redirect / loop). See neograph-3fm1.
-    subgraph_fn = named(
-        make_subgraph_fn(sub, sub_graph.graph),
-        sub.name,
-        mode="subgraph",
-        output_type=sub.output.__name__ if sub.output is not None else None,
-    )
+    # NOT wrapped in `named(...)`, unlike every other node kind. `named` calls
+    # `.with_config(...)`, which returns a RunnableBinding -- and LangGraph's
+    # `find_subgraph_pregel` has no branch for that shape, so binding here hides
+    # the nested Pregel from get_subgraphs()/xray/to_json()/Studio/Langfuse
+    # -- see neograph-xunot / GH #6. run_name comes from `RunnableLambda(name=...)`
+    # inside make_subgraph_fn instead, and the metadata rides `add_node(
+    # metadata=...)` below; only the tags are lost. See _trace.py.
+    subgraph_fn = make_subgraph_fn(sub, sub_graph.graph)
+    subgraph_meta = subgraph_metadata(sub.name, sub.output)
 
     from typing import assert_never
 
@@ -506,7 +505,7 @@ def _add_subgraph(
             last_name = _add_subgraph_loop(graph, sub, subgraph_fn, loop, prev_node, condition_lookup=condition_lookup)
         case ModifierCombo.BARE | ModifierCombo.OPERATOR:
             # Plain subgraph — no modifiers (or Operator only)
-            graph.add_node(sub.name, subgraph_fn)
+            graph.add_node(sub.name, subgraph_fn, metadata=subgraph_meta)
             if prev_node:
                 graph.add_edge(prev_node, sub.name)
             else:

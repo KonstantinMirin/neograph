@@ -73,3 +73,36 @@ def named(
         metadata["neograph_node_id"] = node_id
 
     return runnable.with_config(run_name=name, tags=tags, metadata=metadata)
+
+
+def subgraph_metadata(name: str, output: type | None) -> dict[str, str]:
+    """Span metadata for a SUB-CONSTRUCT node, for ``graph.add_node(metadata=...)``.
+
+    Sub-constructs are the one node kind that must NOT go through :func:`named`.
+    Their runnable closes over a compiled Pregel, and LangGraph discovers nesting
+    by walking into the node runnable — ``find_subgraph_pregel`` follows
+    ``RunnableSequence.steps``, ``RunnableLambda.deps`` and ``RunnableCallable``
+    nonlocals, but has no branch for ``RunnableBinding.bound``. ``named`` produces
+    exactly a ``RunnableBinding``, so binding a sub-construct node hid its
+    interior from ``get_subgraphs()`` / ``get_graph(xray=True)`` / ``to_json()``
+    and therefore from Studio and Langfuse's agent-graph view (neograph-xunot,
+    GH issue #6).
+
+    The three things ``named`` attaches are recovered separately, and one is not:
+
+    - ``run_name`` — set via ``RunnableLambda(name=...)`` in ``make_subgraph_fn``.
+    - ``metadata`` — this function, handed to ``StateGraph.add_node(metadata=...)``.
+    - ``tags`` — **KNOWN GAP.** ``add_node`` accepts no ``tags=`` (its only
+      ``**kwargs`` catch-all, ``DeprecatedKwargs``, is an empty ``TypedDict`` in
+      the pinned version), and any ``.with_config(tags=...)`` re-creates the
+      binding that caused the bug. So a sub-construct node carries neither
+      :data:`NODE_TAG` nor ``neograph:mode:subgraph``, and a trace backend cannot
+      filter to it by tag — use the ``neograph_node`` / ``neograph_mode``
+      metadata keys instead. Deliberate and accepted; it resolves upstream if
+      ``find_subgraph_pregel`` grows a ``RunnableBinding`` branch, at which point
+      this whole helper can go away and ``named`` can be restored.
+    """
+    metadata = {"neograph_node": name, "neograph_mode": "subgraph"}
+    if output is not None:
+        metadata["neograph_output_type"] = output.__name__
+    return metadata
