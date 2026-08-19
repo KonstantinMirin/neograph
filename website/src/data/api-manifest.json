@@ -1097,6 +1097,13 @@
       "signature": "(spec: 'str | dict[str, Any]', project: 'str | dict[str, Any] | None' = None) -> 'Construct'"
     },
     {
+      "anchor": "dump_spec",
+      "doc": "Render *construct* as a JSON-serializable spec dict.",
+      "kind": "function",
+      "name": "dump_spec",
+      "signature": "(construct: 'Construct', *, strict: 'bool' = False) -> 'dict[str, Any]'"
+    },
+    {
       "anchor": "lint",
       "doc": "Validate DI bindings and template placeholders in *construct*.",
       "kind": "function",
