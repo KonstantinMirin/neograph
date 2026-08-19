@@ -27,6 +27,7 @@ from neograph._llm import (
     render_prompt,
 )
 from neograph._rendered import PromptInput, Rendered
+from neograph._spec_dump import dump_spec
 from neograph.compiler import compile, describe_graph
 from neograph.conditions import parse_condition
 from neograph.construct import Construct
@@ -180,6 +181,7 @@ __all__ = [
     "lookup_type",
     # Spec loader
     "load_spec",
+    "dump_spec",
     # Lint
     "lint",
     "LintIssue",
@@ -198,4 +200,4 @@ __all__ = [
     "RawNodeFn",
 ]
 
-__version__ = "0.7.6"
+__version__ = "0.7.7"

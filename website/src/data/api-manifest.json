@@ -984,7 +984,7 @@
       "doc": "Render a Pydantic model as TypeScript-style schema notation.",
       "kind": "function",
       "name": "describe_type",
-      "signature": "(model: 'type[BaseModel]', *, prefix: 'str' = 'Answer in JSON matching this schema:', hoist_classes: \"Literal['auto', 'all'] | list[str]\" = 'auto', always_hoist_enums: 'bool' = True, or_splitter: 'str' = ' or ', indent: 'str' = '  ') -> 'str'"
+      "signature": "(model: 'Any', *, prefix: 'str' = 'Answer in JSON matching this schema:', hoist_classes: \"Literal['auto', 'all'] | list[str]\" = 'auto', always_hoist_enums: 'bool' = True, or_splitter: 'str' = ' or ', indent: 'str' = '  ') -> 'str'"
     },
     {
       "anchor": "describe_value",
@@ -1095,6 +1095,13 @@
       "kind": "function",
       "name": "load_spec",
       "signature": "(spec: 'str | dict[str, Any]', project: 'str | dict[str, Any] | None' = None) -> 'Construct'"
+    },
+    {
+      "anchor": "dump_spec",
+      "doc": "Render *construct* as a JSON-serializable spec dict.",
+      "kind": "function",
+      "name": "dump_spec",
+      "signature": "(construct: 'Construct', *, strict: 'bool' = False) -> 'dict[str, Any]'"
     },
     {
       "anchor": "lint",

@@ -165,7 +165,7 @@ DelimitedRenderer()
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-describe_type(model: 'type[BaseModel]', *, prefix: 'str' = 'Answer in JSON matching this schema:', hoist_classes: "Literal['auto', 'all'] | list[str]" = 'auto', always_hoist_enums: 'bool' = True, or_splitter: 'str' = ' or ', indent: 'str' = '  ') -> 'str'
+describe_type(model: 'Any', *, prefix: 'str' = 'Answer in JSON matching this schema:', hoist_classes: "Literal['auto', 'all'] | list[str]" = 'auto', always_hoist_enums: 'bool' = True, or_splitter: 'str' = ' or ', indent: 'str' = '  ') -> 'str'
 ```
 
 ### describe_value
@@ -173,6 +173,13 @@ describe_type(model: 'type[BaseModel]', *, prefix: 'str' = 'Answer in JSON match
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
 describe_value(value: 'Any', *, prefix: 'str' = '', indent: 'str' = '  ') -> 'str'
+```
+
+### dump_spec
+
+{/* test-skip: generated API signature (declaration, not runnable) */}
+```python
+dump_spec(construct: 'Construct', *, strict: 'bool' = False) -> 'dict[str, Any]'
 ```
 
 ### Each

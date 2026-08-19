@@ -29,7 +29,7 @@ from neograph._oracle import (
 from neograph._state_bus import StateBus, adapt_state, snapshot_state
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
-from neograph._trace import named
+from neograph._trace import named, subgraph_metadata
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ConfigurationError, ExecutionError
@@ -161,19 +161,16 @@ def _add_arm_nodes(
                 tool_factories=tool_factory_lookup,
             )
             subgraph_fn = make_subgraph_fn(item, sub_graph.graph)
-            # `named` so the arm sub-construct's engine span reads as the construct
-            # name (not the leaking `subgraph_node` __name__). See neograph-3fm1.
+            # NOT wrapped in `named(...)` -- same reason as the top-level
+            # sub-construct in compiler.py: `.with_config` returns a
+            # RunnableBinding, which LangGraph's `find_subgraph_pregel` cannot
+            # see through, hiding an arm sub-construct's interior from
+            # get_subgraphs()/xray/to_json(). See neograph-xunot / GH #6. run_name
+            # comes from `RunnableLambda(name=...)` inside make_subgraph_fn.
             graph.add_node(
                 item.name,
-                cast(
-                    Any,
-                    named(
-                        subgraph_fn,
-                        item.name,
-                        mode="subgraph",
-                        output_type=item.output.__name__ if item.output is not None else None,
-                    ),
-                ),
+                cast(Any, subgraph_fn),
+                metadata=subgraph_metadata(item.name, item.output),
             )
         else:
             # make_node_fn already self-names its wrapper per neograph-3fm1.

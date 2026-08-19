@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
+from neograph.errors import ConfigurationError
+
 if TYPE_CHECKING:
     from neograph.node import TypeSpecStatic
 
@@ -68,7 +70,7 @@ _PRIMITIVE_MAP: dict[type, str] = {
 
 
 def describe_type(
-    model: type[BaseModel],
+    model: Any,
     *,
     prefix: str = "Answer in JSON matching this schema:",
     hoist_classes: Literal["auto", "all"] | list[str] = "auto",
@@ -81,7 +83,12 @@ def describe_type(
     Parameters
     ----------
     model:
-        The Pydantic BaseModel class to describe.
+        The annotation to describe. A Pydantic ``BaseModel`` subclass renders
+        as a ``{ field: type }`` block; a container or union over models
+        (``list[M]``, ``dict[str, M]``, ``M | None``) renders through the same
+        dispatch a nested field would use, hoisting its members as usual. An
+        annotation this module has no notation for raises ``TypeError`` rather
+        than rendering its ``repr`` -- see Raises.
     prefix:
         Text line prepended before the schema block. Empty string to omit.
     hoist_classes:
@@ -100,12 +107,30 @@ def describe_type(
     -------
     str
         The rendered schema string.
+
+    Raises
+    ------
+    ConfigurationError
+        When *model* is neither a ``BaseModel`` subclass nor a shape
+        :func:`_render_type` has notation for. Rendering such an annotation
+        would emit its ``repr`` into an LLM prompt as though it were a schema,
+        so the boundary refuses instead (neograph-vduhp / GH issue #8).
     """
-    # Pass 1: count class occurrences to decide what to hoist.
+    is_model = isinstance(model, type) and issubclass(model, BaseModel)
+
+    # Pass 1: count class occurrences to decide what to hoist. A BaseModel is
+    # walked field-by-field; anything else is walked as a bare annotation, which
+    # recurses into generic args so a `list[M]` still hoists M's dependencies.
+    # These stay SEPARATE on purpose: `_count_annotation` would also count the
+    # top model itself, pushing a model that appears nested too from 1 to 2 and
+    # silently starting to hoist it under `hoist_classes='auto'`.
     class_counts: dict[type, int] = {}
     enum_classes: set[type] = set()
     recursive: set[type] = set()
-    _count_classes(model, class_counts, enum_classes, recursive, visited=set(), path=set())
+    if is_model:
+        _count_classes(model, class_counts, enum_classes, recursive, visited=set(), path=set())
+    else:
+        _count_annotation(model, class_counts, enum_classes, recursive, set(), set())
 
     # Determine which classes to hoist.
     hoisted: set[type] = set()
@@ -151,15 +176,28 @@ def describe_type(
             lines.append(f"type {cls.__name__} = {body}")
         lines.append("")
 
-    # Render the main model body.
-    body = _render_model_body(
-        model,
-        indent=indent,
-        depth=0,
-        or_splitter=or_splitter,
-        hoisted=hoisted,
-        visited=set(),
-    )
+    # Render the main type. `strict=True` turns _render_type's lenient
+    # `str(annotation)` fallthrough into a refusal at THIS boundary only --
+    # nested fields keep rendering leniently.
+    if is_model:
+        body = _render_model_body(
+            model,
+            indent=indent,
+            depth=0,
+            or_splitter=or_splitter,
+            hoisted=hoisted,
+            visited=set(),
+        )
+    else:
+        body = _render_type(
+            model,
+            indent=indent,
+            depth=0,
+            or_splitter=or_splitter,
+            hoisted=hoisted,
+            visited=set(),
+            strict=True,
+        )
     lines.append(body)
 
     return "\n".join(lines)
@@ -250,6 +288,21 @@ def _count_annotation(
 # ---------------------------------------------------------------------------
 
 
+def _admits_none(annotation: Any) -> bool:
+    """True when *annotation* can hold ``None``.
+
+    Mirrors the ``NoneType`` handling in :func:`_render_type` -- the same
+    question that function answers when it emits a ``null`` union member --
+    so the emitter and this guard cannot drift apart.
+    """
+    if annotation is None or annotation is type(None):
+        return True
+    origin = get_origin(annotation)
+    if origin is Union or origin is types.UnionType:
+        return any(arg is type(None) for arg in get_args(annotation))
+    return False
+
+
 def _render_model_body(
     model: type[BaseModel],
     *,
@@ -279,8 +332,13 @@ def _render_model_body(
             hoisted=hoisted,
             visited=visited,
         )
-        # Check if field is optional (has a default).
-        if not field_info.is_required():
+        # A nullable annotation already contributed its own ``null`` union
+        # member in ``_render_type``; appending a second one for the same fact
+        # (the field also being non-required) renders ``T or null or null``.
+        # Guard on the ANNOTATION, not on ``type_str``: PEP-604 unions keep
+        # author order, so ``None | str`` renders ``null or string`` and a
+        # trailing-text check would miss it (neograph-g21jc / GH issue #7).
+        if not field_info.is_required() and not _admits_none(field_info.annotation):
             type_str = f"{type_str} or null"
 
         comment = _field_comment(field_info)
@@ -303,8 +361,15 @@ def _render_type(
     or_splitter: str,
     hoisted: set[type],
     visited: set[type],
+    strict: bool = False,
 ) -> str:
-    """Render a single type annotation to schema notation."""
+    """Render a single type annotation to schema notation.
+
+    ``strict`` is consulted only at the final fallthrough, and only by the
+    top-level :func:`describe_type` boundary: the recursive calls below
+    deliberately do not pass it, so a field with an exotic annotation keeps
+    rendering as its ``repr`` rather than breaking an existing pipeline.
+    """
     if annotation is None or annotation is type(None):
         return "null"
 
@@ -414,6 +479,13 @@ def _render_type(
     if annotation is Any:
         return "any"
 
+    if strict:
+        raise ConfigurationError.build(
+            "describe_type() has no schema notation for this annotation",
+            found=repr(annotation),
+            expected="a Pydantic BaseModel subclass, or a container/union over one",
+            hint="pass Model, list[Model], dict[str, Model], or Model | None.",
+        )
     return str(annotation)
 
 

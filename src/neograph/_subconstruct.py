@@ -200,8 +200,18 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableL
 
     # Driver-selected dual path. __name__ stays informational; routing is the
     # graph.add_node(name, fn) argument (always sub.name/item.name). See
-    # neograph-y20i. Trace-span naming per neograph-3fm1 is applied by the
-    # graph-assembly layer (`named(...)` at the add_node sites in compiler.py and
-    # _wiring._add_arm_nodes) so this factory keeps returning the bare
-    # dual-path RunnableLambda the async guard pins.
-    return RunnableLambda(subgraph_node, afunc=asubgraph_node)
+    # neograph-y20i.
+    #
+    # `name=` is set HERE, not by `named(...)` at the assembly layer as every
+    # other node kind does -- see neograph-3fm1 -- and that exception is
+    # load-bearing:
+    # this RunnableLambda closes over a compiled Pregel, and LangGraph discovers
+    # nesting by walking INTO the node runnable (`find_subgraph_pregel` follows
+    # RunnableSequence.steps / RunnableLambda.deps / RunnableCallable nonlocals).
+    # `named()` calls `.with_config(...)`, which WRAPS the lambda in a
+    # RunnableBinding -- a shape that walker has no branch for -- so the nested
+    # graph became unreachable and get_subgraphs()/xray/to_json()/Studio/Langfuse
+    # all rendered the sub-construct as one opaque box. See neograph-xunot / GH #6.
+    # A `name=` on the RunnableLambda gives the span the same run_name without
+    # creating that wrapper. See _trace.py for what this costs.
+    return RunnableLambda(subgraph_node, afunc=asubgraph_node, name=sub.name)
