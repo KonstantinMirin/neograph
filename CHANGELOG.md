@@ -5,9 +5,14 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.8] - 2026-08-19
+## [0.7.8] - 2026-08-20
 
 ### Fixed
+
+- **`neograph check` honours lint severity** (`neograph-1q9x9`). The command derived an ERROR or WARN label from `LintIssue.required`, appended every issue to one error list, and failed the run. The label changed the printed word and nothing else, so a WARN failed the check exactly as an ERROR did. Six kinds carry a documented severity of WARN — `template_placeholder_known_vars_only`, `template_var_requires_async_driver`, `tool_requires_async_driver`, `ask_human_in_mutating_node`, `act_mode_all_idempotent_tools`, and `llm_kwargs_missing` — and every one of them failed the build, which made the severity vocabulary decorative. A compile failure now blocks, an ERROR lint issue blocks, and a WARN prints without changing the exit code. **Behaviour change:** a pipeline that failed on one of those six kinds passes after this change. That matches the severity each kind already documented.
+
+
+
 
 - **`Each`- and `Oracle`-modified sub-constructs were still invisible to LangGraph introspection** (`neograph-4o1cn`, [GH #6](https://github.com/KonstantinMirin/neograph/issues/6)). 0.7.7 fixed the two `make_subgraph_fn` call sites and proved the modifier'd paths with a single `Loop` case, then generalised to the whole family. `Loop` recovers because `_add_subgraph_loop` passes the runnable through unwrapped; `Each` and `Oracle` re-wrap at their own `named()` sites in the shared `_wire_each` / `_wire_oracle`, so both stayed hidden — `get_subgraphs()` returned `[]` for a fan-out, and `recurse=True` missed an `Each` nested inside a fixed `Loop`. The reporter found `Each`; `Oracle` was found only because the regression test was parametrized over every placement. The decision of whether a graph node may be config-bound now lives in ONE function, `_trace.add_traced_node` — it is a property of what is inside the runnable, not of the wiring path, and re-making it per call site is exactly what caused two misses. `tests/test_subgraph_introspection.py` now parametrizes over plain/Loop/Each/Oracle plus the nested Each-in-Loop shape.
 
