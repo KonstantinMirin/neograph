@@ -43,7 +43,7 @@ class TestLint:
         def my_node(topic: Annotated[str, FromInput]) -> RawText: ...
 
         pipeline = construct_from_functions("bad", [my_node])
-        issues = lint(pipeline, config={})
+        issues = [i for i in lint(pipeline, config={}) if i.kind == "from_input"]
         assert len(issues) == 1
         assert "topic" in issues[0].param
         assert "my" in issues[0].node_name  # "my-node" or "my_node"
@@ -129,9 +129,13 @@ class TestLint:
         sub = construct_from_functions("sub", [inner], input=None, output=Claims)
         outer_prod = _producer("start", RawText)
         pipeline = Construct("outer", nodes=[outer_prod, sub])
-        issues = lint(pipeline, config={})
-        assert len(issues) == 1
-        assert "topic" in issues[0].param
+        # This test grades RECURSION: does the walk reach the inner node's DI
+        # binding. Scoped to the DI kind because the fixture's scaffolding
+        # producer is genuinely unconsumed, so output_field_unconsumed reports
+        # it correctly -- a separate true finding, not what this test measures.
+        di_issues = [i for i in lint(pipeline, config={}) if i.kind == "from_input"]
+        assert len(di_issues) == 1
+        assert "topic" in di_issues[0].param
 
     def test_lint_skips_upstream_and_constant_params(self):
         """Upstream and constant params should not be checked against config."""
@@ -1022,3 +1026,84 @@ class TestUnconsumedOutputField:
             return Verdict(decision="yes", explanation="why")
 
         assert self._dead(lint(construct_from_functions("pipe3", [seed3, decide3]))) == []
+
+    def test_reports_nothing_when_a_sub_construct_port_consumes_the_output(self):
+        """A member sub-construct consumes its port BY TYPE, and it is a
+        `Construct`, not a `Node`. Filtering the walk to Nodes made it invisible
+        as a consumer, so every producer feeding a sub-construct looked dead."""
+        from neograph import construct_from_functions, node
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Scored(BaseModel):
+            value: float
+
+        @node(outputs=Claims)
+        def decompose4() -> Claims:
+            return Claims(items=["a"])
+
+        @node(outputs=Scored)
+        def inner4(claims: Claims) -> Scored:
+            """`claims` is typed as the construct's `input=`, so it is a PORT
+            parameter read from neo_subgraph_input, not a peer reference."""
+            return Scored(value=1.0)
+
+        enrich = construct_from_functions("enrich4", [inner4], input=Claims, output=Scored)
+
+        @node(outputs=Scored)
+        def report4(enrich4: Scored) -> Scored:
+            return enrich4
+
+        top = construct_from_functions("subc-pipe", [decompose4, enrich, report4])
+
+        assert self._dead(lint(top)) == [], "the sub-construct's port consumes Claims"
+
+    def test_reports_nothing_when_a_single_type_input_consumes_by_type(self):
+        """A single-type input resolves BY TYPE at runtime, not by the producer's
+        name. Comparing it against a name-keyed producer made every such consumer
+        invisible."""
+        from neograph import Node, construct_from_functions, node
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Out(BaseModel):
+            text: str
+
+        @node(outputs=Claims)
+        def decompose5() -> Claims:
+            return Claims(items=["a"])
+
+        report = Node.scripted("report5", fn="unref_decl_src", inputs=Claims, outputs=Out)
+        top = construct_from_functions("bytype-pipe", [decompose5])
+        top = type(top)(top.name, nodes=[*top.nodes, report])
+
+        assert self._dead(lint(top)) == [], "report consumes Claims by type"
+
+    def test_reports_nothing_when_an_image_prefixed_placeholder_reads_the_field(self):
+        """`${image:seed.photo}` reads field `photo` of `seed`. The `image:`
+        prefix is a rendering directive; both placeholder readers must strip it
+        or a referenced field looks unread."""
+        from neograph import construct_from_functions, node
+        from neograph.lint import lint
+
+        class ImageInput(BaseModel):
+            photo: str
+            caption: str = ""
+
+        class Out(BaseModel):
+            text: str
+
+        @node(outputs=ImageInput)
+        def seed6() -> ImageInput:
+            return ImageInput(photo="b64")
+
+        @node(outputs=Out, mode="think", model="fast", prompt="Analyze: ${image:seed6.photo}")
+        def analyze6(seed6: ImageInput) -> Out: ...
+
+        dead = {i.param for i in self._dead(lint(construct_from_functions("img-pipe", [seed6, analyze6])))}
+
+        assert "photo" not in dead, f"the image-prefixed placeholder reads photo; got {dead}"

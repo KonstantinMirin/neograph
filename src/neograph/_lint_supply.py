@@ -173,7 +173,12 @@ def _dotted_field_reads(node: Node, template_resolver: Any) -> set[tuple[str, st
 
     reads: set[tuple[str, str]] = set()
     for placeholder in placeholders:
-        parts = placeholder.split(".")
+        # `${image:seed.photo}` reads field `photo` of `seed`. The `image:`
+        # prefix is a rendering directive, not part of the name, and
+        # `_placeholder_root` already strips it -- both readers must agree or a
+        # referenced field looks unread.
+        body = placeholder.split(":", 1)[1] if placeholder.startswith("image:") else placeholder
+        parts = body.split(".")
         if len(parts) >= 2:
             reads.add((parts[0], parts[1]))
     return reads
@@ -201,13 +206,27 @@ def _check_unconsumed_outputs(
     Deriving fewer axes reports false cleanliness, which is worse than reporting
     nothing, because a guard that cannot fire is evidence of nothing.
     """
-    nodes = [n for n in iter_with_arms(construct) if isinstance(n, Node)]
+    members = list(iter_with_arms(construct))
+    nodes = [n for n in members if isinstance(n, Node)]
     if not nodes:
         return
-    terminal = nodes[-1].name
+    # The LAST member is the terminal, whether it is a Node or a sub-construct.
+    # When a sub-construct is last, no leaf node is terminal.
+    terminal = members[-1].name if members else None
+
+    # A member sub-construct consumes its port BY TYPE: `_scan_subgraph_input`
+    # matches any upstream value whose type is the declared `input=`. It is not a
+    # Node, so filtering to Node alone makes it invisible as a consumer and every
+    # producer feeding it looks dead.
+    port_types = {
+        m.input
+        for m in members
+        if isinstance(m, Construct) and isinstance(m.input, type)
+    }
 
     consumed_whole: set[str] = set()
     consumed_fields: set[tuple[str, str]] = set()
+    consumed_types: set[type] = set()
 
     for node in nodes:
         inputs = normalize_inputs(node.inputs)
@@ -215,7 +234,10 @@ def _check_unconsumed_outputs(
         if inputs.is_dict_form:
             declared_names = set(inputs.by_name)
         elif not inputs.is_none and isinstance(inputs.single_type, type):
+            # A single-type input is resolved by TYPE at runtime, not by the
+            # producer's name.
             declared_names = {inputs.single_type.__name__}
+            consumed_types.add(inputs.single_type)
 
         if node.mode == "scripted" or not node.prompt:
             # A scripted body can read any field, and which ones is not
@@ -253,6 +275,10 @@ def _check_unconsumed_outputs(
             base = field_name_for(node.name)
             root = base if key == node.name else output_field_name(base, key)
             if root in consumed_whole or base in consumed_whole:
+                continue
+            if any(declared is t or issubclass(declared, t) for t in port_types):
+                continue
+            if any(declared is t or issubclass(declared, t) for t in consumed_types):
                 continue
             for fname in declared.model_fields:
                 if (root, fname) in consumed_fields or (base, fname) in consumed_fields:
