@@ -68,6 +68,7 @@ from neograph.errors import (
 from neograph.forward import ForwardConstruct
 from neograph.hitl import ask_human
 from neograph.lint import LintIssue, lint
+from neograph._spec_dump import dump_spec
 from neograph.loader import from_agent_spec, load_spec
 from neograph.modifiers import (
     HANDOFF_END,
@@ -192,6 +193,7 @@ __all__ = [
     "lookup_type",
     # Spec loader
     "load_spec",
+    "dump_spec",
     # Lint
     "lint",
     "LintIssue",

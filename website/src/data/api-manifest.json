@@ -484,7 +484,7 @@
           "required": false
         },
         {
-          "annotation": "Optional[Literal['output', 'tool']]",
+          "annotation": "Literal['output', 'tool'] | None",
           "default": "None",
           "name": "trigger",
           "required": false
@@ -496,7 +496,7 @@
           "required": false
         },
         {
-          "annotation": "Optional[Literal['error', 'exit']]",
+          "annotation": "Literal['error', 'exit'] | None",
           "default": "None",
           "name": "on_exhaust",
           "required": false
@@ -558,7 +558,7 @@
       ],
       "kind": "pydantic_model",
       "name": "Portal",
-      "signature": "(to: list[str] | None = None, route: str = 'goto', trigger: Optional[Literal['output', 'tool']] = None, max_hops: int | None = None, on_exhaust: Optional[Literal['error', 'exit']] = None, name: str | None = None, spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise', 'route_to_error'] = 'raise', error_handler: str | None = None, max_depth: int | None = None)"
+      "signature": "(to: list[str] | None = None, route: str = 'goto', trigger: Literal['output', 'tool'] | None = None, max_hops: int | None = None, on_exhaust: Literal['error', 'exit'] | None = None, name: str | None = None, spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise', 'route_to_error'] = 'raise', error_handler: str | None = None, max_depth: int | None = None)"
     },
     {
       "anchor": "handoff_end",
@@ -941,7 +941,7 @@
     },
     {
       "anchor": "typespecstatic",
-      "doc": "Represent a PEP 604 union type",
+      "doc": "Represent a union type",
       "kind": "other",
       "name": "TypeSpecStatic"
     },
@@ -1229,6 +1229,13 @@
       "kind": "function",
       "name": "load_spec",
       "signature": "(spec: 'str | dict[str, Any]', project: 'str | dict[str, Any] | None' = None) -> 'Construct'"
+    },
+    {
+      "anchor": "dump_spec",
+      "doc": "Render *construct* as a JSON-serializable spec dict.",
+      "kind": "function",
+      "name": "dump_spec",
+      "signature": "(construct: 'Construct', *, strict: 'bool' = False) -> 'dict[str, Any]'"
     },
     {
       "anchor": "lint",

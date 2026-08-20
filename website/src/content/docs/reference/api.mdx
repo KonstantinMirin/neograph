@@ -208,6 +208,13 @@ describe_type(model: 'type[BaseModel]', *, prefix: 'str' = 'Answer in JSON match
 describe_value(value: 'Any', *, prefix: 'str' = '', indent: 'str' = '  ') -> 'str'
 ```
 
+### dump_spec
+
+{/* test-skip: generated API signature (declaration, not runnable) */}
+```python
+dump_spec(construct: 'Construct', *, strict: 'bool' = False) -> 'dict[str, Any]'
+```
+
 ### Each
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
@@ -460,16 +467,16 @@ Oracle(n: int = 3, models: list[str] | None = None, merge_prompt: str | None = N
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-Portal(to: list[str] | None = None, route: str = 'goto', trigger: Optional[Literal['output', 'tool']] = None, max_hops: int | None = None, on_exhaust: Optional[Literal['error', 'exit']] = None, name: str | None = None, spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise', 'route_to_error'] = 'raise', error_handler: str | None = None, max_depth: int | None = None)
+Portal(to: list[str] | None = None, route: str = 'goto', trigger: Literal['output', 'tool'] | None = None, max_hops: int | None = None, on_exhaust: Literal['error', 'exit'] | None = None, name: str | None = None, spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise', 'route_to_error'] = 'raise', error_handler: str | None = None, max_depth: int | None = None)
 ```
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
 | <span id="portal-to"></span>`to` | `list[str] | None` | no | `None` |
 | <span id="portal-route"></span>`route` | `str` | no | `'goto'` |
-| <span id="portal-trigger"></span>`trigger` | `Optional[Literal['output', 'tool']]` | no | `None` |
+| <span id="portal-trigger"></span>`trigger` | `Literal['output', 'tool'] | None` | no | `None` |
 | <span id="portal-max_hops"></span>`max_hops` | `int | None` | no | `None` |
-| <span id="portal-on_exhaust"></span>`on_exhaust` | `Optional[Literal['error', 'exit']]` | no | `None` |
+| <span id="portal-on_exhaust"></span>`on_exhaust` | `Literal['error', 'exit'] | None` | no | `None` |
 | <span id="portal-name"></span>`name` | `str | None` | no | `None` |
 | <span id="portal-spec_field"></span>`spec_field` | `str | None` | no | `None` |
 | <span id="portal-input_field"></span>`input_field` | `str | None` | no | `None` |
