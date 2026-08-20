@@ -1117,3 +1117,90 @@ class TestUnconsumedOutputField:
         dead = {i.param for i in self._dead(lint(construct_from_functions("img-pipe", [seed6, analyze6])))}
 
         assert "photo" not in dead, f"the image-prefixed placeholder reads photo; got {dead}"
+
+
+class TestSupplySideChecksOnARealisticPipeline:
+    """The three supply-side checks on ONE pipeline, not in isolation.
+
+    Each check has its own unit tests, but nothing exercised them together on a
+    shape a consumer would actually write: DI parameters, a template-ref prompt,
+    dict-form outputs with a tool log, and a field that genuinely reaches no one.
+    Interaction bugs live exactly there -- three of this check family's
+    false-positive bugs were found only by running it against real pipelines.
+    """
+
+    def _pipeline(self):
+        from typing import Annotated
+
+        from neograph import FromInput, ToolInteraction, construct_from_functions, node
+
+        class Deal(BaseModel):
+            deal_id: str
+            notes: str
+
+        class Finding(BaseModel):
+            severity: str
+            rationale: str
+
+        class Report(BaseModel):
+            summary: str
+
+        @node(outputs=Deal)
+        def fetch(deal_ref: Annotated[str, FromInput]) -> Deal: ...
+
+        @node(
+            outputs={"result": Finding, "tool_log": list[ToolInteraction]},
+            mode="think",
+            model="fast",
+            prompt="triage",
+        )
+        def triage(fetch: Deal, region: Annotated[str, FromInput]) -> Finding: ...
+
+        @node(outputs=Report, mode="think", model="fast", prompt="summarize")
+        def summarize(triage_result: Finding) -> Report: ...
+
+        return construct_from_functions("deal-triage", [fetch, triage, summarize])
+
+    @staticmethod
+    def _resolver(name):
+        return {
+            "triage": "Assess {fetch} for {region}.",
+            "summarize": "Summarize {triage_result.severity}.",
+        }.get(name)
+
+    def _lint(self):
+        from neograph.lint import lint
+
+        return lint(
+            self._pipeline(),
+            template_resolver=self._resolver,
+            prompt_compiler=lambda t, d, *, di_inputs=None, **kw: [],
+            llm_factory=lambda tier: None,
+        )
+
+    def test_di_parameters_are_the_input_contract_not_errors(self):
+        """`deal_ref` and `region` are supplied by a caller at run time."""
+        di = [i for i in self._lint() if i.kind == "from_input"]
+
+        assert {i.param for i in di} == {"deal_ref", "region"}
+        assert not any(i.required for i in di), "the input contract is not an error"
+
+    def test_the_unread_output_field_is_reported(self):
+        """`summarize` reads `${triage_result.severity}`. Nothing reads
+        `rationale`, so the model is asked to produce it on every call for
+        nothing."""
+        dead = {i.param for i in self._lint() if i.kind == "output_field_unconsumed"}
+
+        assert dead == {"rationale"}, f"expected only 'rationale' dead, got {dead}"
+
+    def test_referenced_inputs_and_the_tool_log_are_not_reported(self):
+        """No false positives on the live parts. `fetch` and `region` are named
+        by the template, `severity` is read dotted, and `tool_log` is a
+        `list[X]` with no fields of its own to check."""
+        issues = self._lint()
+
+        assert [i for i in issues if i.kind == "template_input_unreferenced"] == []
+        dead = {i.param for i in issues if i.kind == "output_field_unconsumed"}
+        assert "severity" not in dead
+        assert "tool_log" not in dead
+        assert "deal_id" not in dead and "notes" not in dead
