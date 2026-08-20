@@ -114,6 +114,14 @@ LINT_KIND_META: dict[str, LintKindMeta] = {
         "config.",
     ),
     # Template placeholders.
+    "template_input_unreferenced": LintKindMeta(
+        "WARN",
+        "A bound input, DI parameter, or context field that the node's own "
+        "template never references. The value reaches the node and the model "
+        "never sees it. Demand is read from the template text, so a "
+        "`prompt_compiler` that composes the message may consume the name "
+        "without naming it.",
+    ),
     "template_placeholder_unresolvable": LintKindMeta(
         "ERROR",
         "Prompt placeholder not found in predicted input keys or known extras.",
@@ -526,6 +534,108 @@ def _walk(
     _check_act_mode_all_idempotent(item, issues)
 
 
+def _placeholder_root(placeholder: str) -> str:
+    """Root name a placeholder references. ``claims.items`` references ``claims``."""
+    body = placeholder.split(":", 1)[1] if placeholder.startswith("image:") else placeholder
+    return body.split(".")[0]
+
+
+def _supply_axes(node: Node, *, is_inline: bool) -> list[tuple[str, str, set[str]]]:
+    """Every name supplied to *node*, as ``(axis, name, aliases)`` triples.
+
+    Reads the accessors the compiler already exposes. It derives nothing the IR
+    does not hold, and it asks the pipeline author for no annotation.
+    """
+    axes: list[tuple[str, str, set[str]]] = []
+
+    inputs = normalize_inputs(node.inputs)
+    if inputs.is_dict_form:
+        for key, declared in inputs.by_name.items():
+            aliases = {key}
+            if not is_inline:
+                aliases |= _get_flattened_field_names(declared)
+                if key == StateKeys.SUBGRAPH_INPUT and isinstance(declared, type):
+                    aliases.add(declared.__name__)
+            axes.append(("upstream input", key, aliases))
+    elif not inputs.is_none and isinstance(inputs.single_type, type) and not is_inline:
+        # A single-type input reaches an inline prompt as the bare value, so it
+        # has no name to reference. Only template-ref prompts key it by type.
+        name = inputs.single_type.__name__
+        axes.append(("upstream input", name, {name}))
+
+    for name in sorted(_di_template_var_names(node) | _di_resource_template_var_names(node)):
+        axes.append(("DI parameter", name, {name}))
+
+    for name in getattr(node, "context", None) or ():
+        axes.append(("context field", name, {name}))
+
+    return axes
+
+
+def _check_unreferenced_inputs(
+    node: Node,
+    issues: list[LintIssue],
+    *,
+    referenced: set[str],
+    is_inline: bool,
+    consumer_known: frozenset[str] | set[str],
+    node_label: str,
+) -> None:
+    """Report a bound name that the node's own template never references.
+
+    The mirror of :func:`_check_template_placeholders`'s demand check. A node
+    binds an input, the data arrives, and the prompt never names it, so the model
+    never sees the value while every gate passes.
+
+    Demand is inferred from the template TEXT. A custom ``prompt_compiler``
+    composes the final message and can consume a name the resolved template never
+    spells, so this check reports a warning rather than an error.
+
+    Three suppressions, each read from the IR:
+
+    - ``skip_when``: the predicate receives the extracted input dict on the think
+      path and on the agent path, so an input it reads is real demand. The
+      callable is opaque, which makes suppression the only sound disposition.
+    - An Oracle ``merge_prompt``: ``_build_upstream_context`` injects one entry
+      per ``node.inputs`` key into that prompt, so it is a second demand surface
+      over the same keys.
+    - A bridge alias: when the template names a ``known_vars``-only placeholder,
+      the consumer supplies names this walk cannot see. Scoped to the inputs
+      axis, since a bridge alias cannot explain an unreferenced context field.
+    """
+    oracle = getattr(getattr(node, "modifier_set", None), "oracle", None)
+    inputs_suppressed = (
+        getattr(node, "skip_when", None) is not None
+        or (oracle is not None and getattr(oracle, "merge_prompt", None))
+        or bool(referenced & consumer_known)
+    )
+
+    fan_out = getattr(node, "fan_out_param", None)
+    shown = ", ".join(sorted(referenced)) or "none"
+
+    for axis, name, aliases in _supply_axes(node, is_inline=is_inline):
+        if name == fan_out or aliases & referenced:
+            continue
+        if axis == "upstream input" and inputs_suppressed:
+            continue
+        issues.append(
+            LintIssue(
+                node_name=node.name,
+                param=name,
+                kind="template_input_unreferenced",
+                required=False,
+                message=(
+                    f"{node_label}: {axis} '{name}' is bound but the node's "
+                    f"template references none of {sorted(aliases)}. The value "
+                    f"reaches the node and the model never sees it. Template "
+                    f"references: {shown}. Demand is read from the template "
+                    f"text, so a prompt_compiler that composes the message may "
+                    f"consume this name without naming it."
+                ),
+            )
+        )
+
+
 def _check_template_placeholders(
     node: Node,
     issues: list[LintIssue],
@@ -566,9 +676,6 @@ def _check_template_placeholders(
             return
         placeholders = _extract_format_placeholders(text)
 
-    if not placeholders:
-        return
-
     node_label = f"Node '{node.name}'"
     placeholder_syntax = "${%s}" if is_inline else "{%s}"
 
@@ -604,6 +711,26 @@ def _check_template_placeholders(
             valid_keys = valid_keys | resource_vars
 
     consumer_known = known_vars - _KNOWN_EXTRAS - predicted_keys
+
+    # The set of ROOT names this template references. `${claims.items}` is a
+    # reference to `claims`. Computed once and read by both directions, so the
+    # demand check and the supply check can never disagree about what a template
+    # names. The demand loop below still iterates the placeholder LIST: it emits
+    # one issue per OCCURRENCE, and iterating the deduped set here would collapse
+    # `${bogus.a}` and `${bogus.b}` into a single issue.
+    referenced = {_placeholder_root(p) for p in placeholders}
+
+    _check_unreferenced_inputs(
+        node,
+        issues,
+        referenced=referenced,
+        is_inline=is_inline,
+        consumer_known=consumer_known,
+        node_label=node_label,
+    )
+
+    if not placeholders:
+        return
 
     for placeholder in placeholders:
         first_segment = placeholder.split(".")[0]

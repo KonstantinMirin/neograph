@@ -1735,8 +1735,11 @@ class TestMcpPromptSource:
         )
         issues = lint(bad, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
-        assert len(template_issues) == 1, (
-            f"the server template's {{deal_context}} must be flagged unresolvable: "
-            f"{[(i.kind, i.param) for i in issues]}"
-        )
-        assert template_issues[0].param == "deal_context"
+        # This node is mis-wired in BOTH directions, and lint reports both ends:
+        # the server template asks for `deal_context`, which nothing supplies,
+        # and the bound `summary` input reaches no placeholder (GH #10).
+        reported = sorted((i.kind, i.param) for i in template_issues)
+        assert reported == [
+            ("template_input_unreferenced", "summary"),
+            ("template_placeholder_unresolvable", "deal_context"),
+        ], f"expected both ends of the mis-wiring, got {reported}"

@@ -114,7 +114,8 @@ _KNOWN_LINT_KIND_FLOOR = frozenset({
     "loop_condition_unregistered",
     "resource_hydration_kind_unmatched",
     "template_placeholder_known_vars_only",
-    "template_placeholder_unresolvable",
+    "template_input_unreferenced",
+        "template_placeholder_unresolvable",
     "template_var_requires_async_driver",
     "tool_requires_async_driver",
 })

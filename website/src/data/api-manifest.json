@@ -126,6 +126,11 @@
       "severity": "ERROR"
     },
     {
+      "kind": "template_input_unreferenced",
+      "meaning": "A bound input, DI parameter, or context field that the node's own template never references. The value reaches the node and the model never sees it. Demand is read from the template text, so a `prompt_compiler` that composes the message may consume the name without naming it.",
+      "severity": "WARN"
+    },
+    {
       "kind": "template_placeholder_known_vars_only",
       "meaning": "Placeholder only resolvable via `known_template_vars`, not from actual `@node` parameter names. Advisory: verify the consumer bridge supplies it at runtime.",
       "severity": "WARN"
