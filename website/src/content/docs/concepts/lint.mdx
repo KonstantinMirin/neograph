@@ -1,9 +1,11 @@
 ---
 title: Static Linting (lint)
-description: Validate DI bindings and template placeholder resolution against a sample config before runtime — catch missing keys at check time.
+description: Check a graph's DI bindings and template placeholders before you run it. No config required.
 ---
 
-`lint()` walks every node in a Construct and verifies that each `FromInput`/`FromConfig` parameter has a matching key in the provided config dict and that prompt placeholders resolve to known input keys. It never raises -- it returns a list of `LintIssue` instances describing every binding problem it finds.
+`lint()` walks every node in a Construct, checks its DI bindings, and checks that prompt placeholders resolve to known input keys. It never raises -- it returns a list of `LintIssue` instances describing what it found.
+
+`lint()` needs no config. A graph checker should not have to be told what the world looks like to do its job, because when it does, its agreement with that description is not evidence.
 
 ## API
 
@@ -27,7 +29,7 @@ for issue in issues:
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `construct` | `Construct` | The pipeline to check |
-| `config` | `dict[str, Any] \| None` | Config dict to validate DI bindings against. When `None`, only structural checks run (required params are flagged as missing since no config is available). |
+| `config` | `dict[str, Any] \| None` | Optional. A specific caller payload to check the graph against. When `None`, `lint()` reports the graph's input contract instead of demanding one. |
 | `known_template_vars` | `set[str] \| None` | Set of extra variable names the consumer's prompt pipeline provides. Merged with framework extras (`node_id`, `project_root`, `human_feedback`). |
 | `template_resolver` | `Callable[[str], str \| None] \| None` | Callable mapping template-ref names to template text strings. Returns `None` if the template is not found. Required for template-ref placeholder validation; when absent, template-ref prompts are skipped. |
 
@@ -68,7 +70,20 @@ The `kind` field tells you where the parameter was expected to resolve from. Eve
 
 ### Per-parameter DI bindings
 
-For every node with `FromInput` or `FromConfig` parameters, `lint()` checks that the parameter name exists as a key in the config dict:
+## Two kinds of DI parameter
+
+A `FromInput` or `FromConfig` parameter falls into one of two categories, and `lint()` reports them differently:
+
+- **Supplied by the caller at runtime** — a question, a deal id, an auth handle. These are the graph's **input contract**. With no config, `lint()` reports them as informational: knowing what a caller must supply is useful, and reporting it as an error only says that the graph has inputs.
+- **Unsatisfiable by construction** — a parameter whose value is the `Each`-fanned item or the `Loop` carry. No caller can supply these, so `lint()` reports `from_input_unsatisfiable` as an ERROR, with no config needed.
+
+The second check reads the construct's structure and never reads a config, so no fixture can silence it. That matters: a lint config holding a key no caller could pass is not a fixture, it is the gate grading its own answer key. One such padded config hid an unsatisfiable binding, and the pipeline then fanned out correctly, keyed its results correctly, and computed every one of them from the padded placeholder value.
+
+Bind a fanned item or a loop carry as a **port parameter** instead: drop the DI marker and type the parameter as the sub-construct's `input=`.
+
+## Checking a specific payload
+
+Pass `config=` when you want a different question answered: does *this* caller payload satisfy *this* graph. Then `lint()` checks each parameter name against the keys you supplied:
 
 {/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python

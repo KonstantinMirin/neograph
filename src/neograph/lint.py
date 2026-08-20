@@ -25,13 +25,14 @@ from neograph._llm_runtime import (
     collect_llm_nodes,
     missing_runtime_kwargs,
 )
-from neograph._normalize import normalize_inputs
+from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._placeholders import DOLLAR_RE
 from neograph._runtime_registry import _decoration_registry
 from neograph._sidecar import _get_param_res, get_merge_fn_metadata
 from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.di import DI_TEMPLATE_KINDS, DIBinding, DIKind
+from neograph.modifiers import classify_modifiers
 from neograph.node import Node
 from neograph.tool import Tool, is_async_only_tool
 
@@ -114,6 +115,13 @@ LINT_KIND_META: dict[str, LintKindMeta] = {
         "config.",
     ),
     # Template placeholders.
+    "from_input_unsatisfiable": LintKindMeta(
+        "ERROR",
+        "A `FromInput`/`FromConfig` parameter whose value is the Each-fanned item "
+        "or the Loop carry. No caller can supply it, so the run fails in the DI "
+        "preflight -- and padding a config to silence it makes every branch "
+        "compute from the padded value. Bind it as a port parameter instead.",
+    ),
     "template_input_unreferenced": LintKindMeta(
         "WARN",
         "A bound input, DI parameter, or context field that the node's own "
@@ -211,15 +219,22 @@ def _check_binding(
                     )
                 )
         elif binding.required:
+            # No config supplied. This parameter is part of the graph's INPUT
+            # CONTRACT: a caller supplies it at run time, so reporting it as an
+            # error says only that the graph has inputs. Requiring a config to
+            # reach a clean gate is what pushed one consumer to pad the fixture
+            # with a key no caller could pass, which silenced a real
+            # unsatisfiable binding (GH #12, GH #13).
             issues.append(
                 LintIssue(
                     node_name=node_label,
                     param=binding.name,
                     kind=kind_str,
-                    required=True,
+                    required=False,
                     message=(
-                        f"{node_label}: required DI parameter '{binding.name}' "
-                        f"({kind_str}) has no config to resolve from"
+                        f"{node_label}: DI parameter '{binding.name}' ({kind_str}) "
+                        f"is part of this graph's input contract -- a caller supplies "
+                        f"it at run time. Pass config= to check a specific payload."
                     ),
                 )
             )
@@ -244,17 +259,19 @@ def _check_binding(
                         )
                     )
         elif required:
+            # Same input-contract reasoning as the scalar branch above.
             for fname in model_cls.model_fields:
                 issues.append(
                     LintIssue(
                         node_name=node_label,
                         param=fname,
                         kind=kind_str,
-                        required=True,
+                        required=False,
                         message=(
-                            f"{node_label}: required bundled model "
-                            f"field '{fname}' ({kind_str} via "
-                            f"{model_cls.__name__}) has no config"
+                            f"{node_label}: bundled model field '{fname}' "
+                            f"({kind_str} via {model_cls.__name__}) is part of "
+                            f"this graph's input contract -- a caller supplies it "
+                            f"at run time. Pass config= to check a payload."
                         ),
                     )
                 )
@@ -452,6 +469,100 @@ def _emit_missing_llm_kwargs_issue(
     )
 
 
+def _port_supplied_by_modifier(construct: Construct) -> tuple[type, str] | None:
+    """The sub-construct's port type, when a modifier supplies its value.
+
+    An ``Each`` fans one item into the port per branch and a ``Loop`` carries the
+    previous result back into it. In both cases the value comes from the
+    construct, never from the caller, so a ``FromInput`` on a parameter of that
+    type can never be satisfied (GH #12).
+    """
+    port = getattr(construct, "input", None)
+    if not isinstance(port, type):
+        return None
+    _, mods = classify_modifiers(construct)
+    if "each" in mods:
+        return (port, "Each-fanned item")
+    if "loop" in mods:
+        return (port, "Loop carry")
+    return None
+
+
+def _check_unsatisfiable_di(
+    node: Node,
+    issues: list[LintIssue],
+    *,
+    port_supplied: tuple[type, str] | None,
+) -> None:
+    """Report a DI binding that the enclosing modifier makes unsatisfiable.
+
+    Decided from the construct's structure alone. It takes no config, so no
+    fixture can silence it -- which is the point: the reported bug survived
+    because the lint config had been padded with a key no caller could pass, and
+    the gate then graded its own answer key (GH #12).
+    """
+    supplied: list[tuple[Any, str]] = []
+    if port_supplied is not None:
+        supplied.append(port_supplied)
+
+    # A node-level self-loop carries the node's OWN output back as its input, so
+    # that type is supplied by the construct too. `Construct.input` must be a
+    # BaseModel, so a bare `list[X]` carry can only arise this way.
+    _, node_mods = classify_modifiers(node)
+    if "loop" in node_mods:
+        carry = normalize_outputs(node.outputs).primary
+        if carry is not None:
+            supplied.append((carry, "Loop carry"))
+
+    if not supplied:
+        return
+    bindings = getattr(node, "_param_res", None) or {}
+
+    for param, binding in bindings.items():
+        if binding.kind not in DI_TEMPLATE_KINDS:
+            continue
+        inner = getattr(binding, "model_cls", None) or getattr(binding, "inner_type", None)
+        match = next(
+            (
+                (t, src)
+                for t, src in supplied
+                if inner is t or _unwrap_sequence(inner) is t
+            ),
+            None,
+        )
+        if match is None:
+            continue
+        port_type, source = match
+        issues.append(
+            LintIssue(
+                node_name=node.name,
+                param=param,
+                kind="from_input_unsatisfiable",
+                required=True,
+                message=(
+                    f"Node '{node.name}': parameter '{param}' is bound with "
+                    f"{binding.kind.value} but its value is the {source}, which no "
+                    f"caller can supply. The run fails in the DI preflight, and "
+                    f"padding a config to silence this makes every branch compute "
+                    f"from the padded value instead. Bind it as a PORT parameter: "
+                    f"drop the DI marker and type it as the sub-construct's "
+                    f"input={getattr(port_type, '__name__', port_type)}."
+                ),
+            )
+        )
+
+
+def _unwrap_sequence(annotation: Any) -> Any:
+    """``list[X]`` -> ``X``; anything else unchanged. A Loop carry may be either."""
+    from typing import get_args, get_origin
+
+    if get_origin(annotation) in (list, tuple, set, frozenset):
+        args = get_args(annotation)
+        if args:
+            return args[0]
+    return annotation
+
+
 def _walk(
     item: ConstructItem,
     config: dict[str, Any] | None,
@@ -464,14 +575,22 @@ def _walk(
     di_inputs_enabled: bool = False,
     context_enabled: bool = False,
     resource_producer_present: bool = False,
+    port_supplied: tuple[type, str] | None = None,
 ) -> None:
-    """Recursively walk a construct and check DI bindings + template placeholders."""
+    """Recursively walk a construct and check DI bindings + template placeholders.
+
+    ``port_supplied`` carries the enclosing sub-construct's ``input=`` type and
+    the modifier that feeds it, when that modifier supplies the value from the
+    construct rather than from the caller. A ``FromInput`` on a parameter of that
+    type is unsatisfiable by any caller (GH #12).
+    """
     if isinstance(item, Construct):
         # Check Loop condition on the Construct itself (Construct | Loop)
         _check_loop_condition(item, issues, conditions=conditions)
         # iter_with_arms expands _BranchNode sentinels so a bare arm Node's DI
         # bindings + template placeholders are linted like any other node. See
         # neograph-vn5f (site 3).
+        child_port = _port_supplied_by_modifier(item)
         for child in iter_with_arms(item):
             _walk(
                 child,
@@ -484,11 +603,14 @@ def _walk(
                 di_inputs_enabled=di_inputs_enabled,
                 context_enabled=context_enabled,
                 resource_producer_present=resource_producer_present,
+                port_supplied=child_port,
             )
         return
 
     if not isinstance(item, Node):
         return
+
+    _check_unsatisfiable_di(item, issues, port_supplied=port_supplied)
 
     param_res = _get_param_res(item)
     node_label = f"Node '{item.name}'"

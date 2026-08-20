@@ -94,7 +94,10 @@ class TestLint:
         assert issues == []
 
     def test_lint_no_config_still_validates_required(self):
-        """Without config, lint reports required=True params as errors."""
+        """Without config, a caller-suppliable param is the graph's INPUT
+        CONTRACT, not an error (GH #13). It is still reported, so nothing is
+        lost -- only its severity changes, which is what stops a consumer from
+        padding a fixture to reach a clean gate."""
 
         @node(outputs=RawText)
         def my_node(
@@ -104,8 +107,9 @@ class TestLint:
         pipeline = construct_from_functions("no-cfg", [my_node])
         issues = lint(pipeline)
         assert len(issues) == 1
-        assert issues[0].required is True
+        assert issues[0].required is False, "the input contract is not an error"
         assert "topic" in issues[0].param
+        assert "input contract" in issues[0].message
 
     def test_lint_required_false_no_issue_without_config(self):
         """Optional FromInput(required=False) params are NOT flagged without config."""
@@ -172,7 +176,8 @@ class TestLint:
         assert issues == []
 
     def test_lint_required_bundled_model_no_config(self):
-        """Required bundled model params are flagged when config is None."""
+        """Bundled model params are REPORTED when config is None, as the
+        graph's input contract rather than as errors (GH #13)."""
 
         class Ctx(BaseModel):
             node_id: str
@@ -186,8 +191,8 @@ class TestLint:
         assert len(issues) == 2
         params = {i.param for i in issues}
         assert params == {"node_id", "project_root"}
-        assert all(i.required for i in issues)
-        assert all("has no config" in i.message for i in issues)
+        assert not any(i.required for i in issues), "the input contract is not an error"
+        assert all("input contract" in i.message for i in issues)
 
     def test_lint_merge_fn_di_param_missing_from_config(self):
         """lint detects missing DI param in @merge_fn when config is provided."""
@@ -219,7 +224,8 @@ class TestLint:
         assert "not found in config" in merge_issues[0].message
 
     def test_lint_merge_fn_required_di_param_no_config(self):
-        """lint flags required @merge_fn DI params when config is None."""
+        """A @merge_fn DI param is reported when config is None, as the input
+        contract rather than as an error (GH #13). Symmetric with @node."""
         from neograph import merge_fn as merge_fn_deco
 
         @merge_fn_deco
@@ -244,8 +250,8 @@ class TestLint:
         merge_issues = [i for i in issues if "merge_fn" in i.node_name]
         assert len(merge_issues) == 1
         assert merge_issues[0].param == "secret"
-        assert merge_issues[0].required is True
-        assert "has no config" in merge_issues[0].message
+        assert merge_issues[0].required is False, "the input contract is not an error"
+        assert "input contract" in merge_issues[0].message
 
     def test_lint_merge_fn_bundled_model_fields_checked(self):
         """lint() checks from_input_model fields in @merge_fn (neograph-s2h8)."""
@@ -402,7 +408,10 @@ class TestLintObligationGaps:
 
         pipeline = construct_from_functions("w21-test", [gen_w21])
         issues = lint(pipeline)  # no config
-        required_issues = [i for i in issues if i.required and i.param == "limiter"]
+        # GH #13: with no config a FromConfig param is the graph's input
+        # contract, so it is reported without being an error. The binding is
+        # still SEEN, which is what this test guards.
+        required_issues = [i for i in issues if i.param == "limiter"]
         assert len(required_issues) == 1
         assert "from_config" in required_issues[0].kind
 
@@ -693,3 +702,228 @@ class TestActModeAllIdempotentToolsLint:
         issues = lint(construct)
 
         assert [i for i in issues if i.kind == self._ISSUE_KIND] == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Unsatisfiable bindings and the config demand (GH #12, GH #13)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestUnsatisfiableFromInput:
+    """A `FromInput` on an Each item or a Loop carry can never be satisfied.
+
+    `FromInput` claims the parameter for DI, so the fanned item never binds to
+    it. The graph then demands a key from the caller that no caller can
+    meaningfully supply, and the obvious way to make the gate pass is to pad the
+    lint config with it.
+
+    Padding does not merely hide the error. It makes the pipeline RUN, fan out
+    correctly, key its results correctly, and compute every one of them from the
+    fixture's placeholder value. The failure mode is a confident wrong answer,
+    not a crash (GH #12).
+    """
+
+    @staticmethod
+    def _each_over_port():
+
+        from neograph import Each, construct_from_functions, node
+
+        class Claim(BaseModel):
+            text: str
+
+        class Claims(BaseModel):
+            items: list[Claim]
+
+        @node(outputs=Claims)
+        def source() -> Claims:
+            return Claims(items=[Claim(text="REAL-a")])
+
+        @node(outputs=Claim)
+        def claim_of(claim_in: Annotated[Claim, FromInput]) -> Claim:
+            return claim_in
+
+        sub = construct_from_functions(
+            "verify", [claim_of], input=Claim, output=Claim
+        ) | Each(over="source.items", key="text")
+        return construct_from_functions("pipe", [source, sub])
+
+    def test_reports_unsatisfiable_when_from_input_binds_an_each_item(self):
+        """The direct check, decided from structure with no config at all."""
+        from neograph.lint import lint
+
+        issues = [
+            i for i in lint(self._each_over_port()) if i.kind == "from_input_unsatisfiable"
+        ]
+
+        assert issues, (
+            "a FromInput bound to the Each-fanned item is unsatisfiable by any "
+            "caller and must be reported without a config"
+        )
+        assert issues[0].required is True, "an unsatisfiable binding is an error"
+        assert "port" in issues[0].message.lower(), (
+            f"the message must name the port-parameter fix: {issues[0].message}"
+        )
+
+    def test_padding_the_config_cannot_silence_an_unsatisfiable_binding(self):
+        """The meta-check. The reported bug survived because the fixture was
+        padded with a key no caller could pass, so the gate graded its own
+        answer key. A config must not be able to make this finding disappear.
+        """
+        from neograph.lint import lint
+
+        padded = {"text": "PADDED-FIXTURE-VALUE"}
+        issues = [
+            i
+            for i in lint(self._each_over_port(), config=padded)
+            if i.kind == "from_input_unsatisfiable"
+        ]
+
+        assert issues, (
+            "padding the lint config silenced the finding; the check must be "
+            "derived from construct structure, not from the caller's assertion"
+        )
+
+    def test_reports_unsatisfiable_when_from_input_binds_a_loop_carry(self):
+        """The reporter named two shapes, not one. A Loop carries the previous
+        result back into the port as `list[X]`, which no caller supplies either.
+
+        Added because a mutation that deleted the Loop branch entirely left the
+        suite green: the Each case alone cannot prove the Loop case.
+        """
+
+        from neograph import construct_from_functions, node
+        from neograph.lint import lint
+
+        class Claim(BaseModel):
+            text: str
+
+        class ClaimsDelta(BaseModel):
+            added: list[Claim]
+
+        @node(outputs=ClaimsDelta, loop_when=lambda d: False, max_iterations=2)
+        def seed_claims(claims: Annotated[ClaimsDelta, FromInput]) -> ClaimsDelta:
+            return ClaimsDelta(added=[])
+
+        top = construct_from_functions("loop-pipe", [seed_claims])
+
+        issues = [i for i in lint(top) if i.kind == "from_input_unsatisfiable"]
+
+        assert issues, "a FromInput bound to the Loop carry is unsatisfiable too"
+        assert "Loop carry" in issues[0].message, issues[0].message
+
+    def test_reports_unsatisfiable_when_from_input_binds_a_construct_loop_port(self):
+        """The third shape: a Loop on a SUB-CONSTRUCT carries its output back
+        into the port, so the port type is supplied by the construct.
+
+        Added because deleting this branch left the suite green -- the Each case
+        and the node self-loop case cannot prove it.
+        """
+
+        from neograph import Loop, construct_from_functions, node
+        from neograph.lint import lint
+
+        class Draft(BaseModel):
+            body: str
+
+        @node(outputs=Draft)
+        def revise(draft: Annotated[Draft, FromInput]) -> Draft:
+            return draft
+
+        sub = construct_from_functions(
+            "refine-sub", [revise], input=Draft, output=Draft
+        ) | Loop(when=lambda d: False, max_iterations=2)
+        top = construct_from_functions("refine-pipe", [sub])
+
+        issues = [i for i in lint(top) if i.kind == "from_input_unsatisfiable"]
+
+        assert issues, "a FromInput on a Loop-modified sub-construct's port is unsatisfiable"
+        assert "Loop carry" in issues[0].message, issues[0].message
+
+    def test_reports_nothing_when_the_item_binds_as_a_port_parameter(self):
+        """The accept case, and the fix the message names: a bare parameter
+        typed as the construct's `input=` reads from the port."""
+        from neograph import Each, construct_from_functions, node
+        from neograph.lint import lint
+
+        class Claim(BaseModel):
+            text: str
+
+        class Claims(BaseModel):
+            items: list[Claim]
+
+        @node(outputs=Claims)
+        def source2() -> Claims:
+            return Claims(items=[Claim(text="a")])
+
+        @node(outputs=Claim)
+        def claim_of2(claim_in: Claim) -> Claim:
+            return claim_in
+
+        sub = construct_from_functions(
+            "verify2", [claim_of2], input=Claim, output=Claim
+        ) | Each(over="source2.items", key="text")
+        top = construct_from_functions("pipe2", [source2, sub])
+
+        assert [i for i in lint(top) if i.kind == "from_input_unsatisfiable"] == []
+
+
+class TestLintNeedsNoConfig:
+    """`lint()` must not require a config to check a graph (GH #13).
+
+    Every `FromInput` and `FromConfig` parameter reported as a required error
+    when no config was supplied. Those divide into two categories: bindings no
+    caller can satisfy, which are real errors, and the graph's own input
+    contract, which is not an error at all.
+
+    Reporting the second category forces a consumer to hand the linter a config
+    to reach a clean gate. Any config handed to the linter is an assertion the
+    linter cannot verify, and that is the door GH #12 walked through.
+    """
+
+    @staticmethod
+    def _caller_supplied():
+
+        from neograph import construct_from_functions, node
+
+        class Out(BaseModel):
+            text: str
+
+        @node(outputs=Out)
+        def answer(question: Annotated[str, FromInput], deal_id: Annotated[int, FromInput]) -> Out:
+            return Out(text="x")
+
+        return construct_from_functions("qa", [answer])
+
+    def test_caller_supplied_di_is_not_an_error_without_a_config(self):
+        """`question` and `deal_id` are the graph's input contract. A caller
+        supplies them at runtime, so reporting them says only that the graph has
+        inputs."""
+        from neograph.lint import lint
+
+        required = [i for i in lint(self._caller_supplied()) if i.required]
+
+        assert required == [], (
+            "lint demanded a config for parameters a caller supplies at runtime; "
+            f"got {[(i.kind, i.param) for i in required]}"
+        )
+
+    def test_the_input_contract_is_still_reported_informationally(self):
+        """Removing the error must not remove the information. The set of keys a
+        caller must supply is useful output in its own right."""
+        from neograph.lint import lint
+
+        reported = {i.param for i in lint(self._caller_supplied())}
+
+        assert {"question", "deal_id"} <= reported, (
+            f"the input contract vanished instead of becoming informational: {reported}"
+        )
+
+    def test_config_still_checks_a_specific_payload(self):
+        """`config=` stays supported as an optional, different question: does
+        THIS caller payload satisfy the graph."""
+        from neograph.lint import lint
+
+        issues = lint(self._caller_supplied(), config={"question": "q"})
+        missing = [i for i in issues if i.param == "deal_id" and i.required]
+
+        assert missing, "a config that omits a required key must still be reported"
