@@ -5,6 +5,12 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A union renders its members in error messages, not the word "Union"** (`neograph-oq2jk`). Python 3.14 gave `types.UnionType` a `__name__` of `"Union"`, and `type_display_name` trusted `__name__` — so on 3.14 a fan-in mismatch reported the producer as `Union` instead of `Claims | str`, losing the one detail the reader needs. On 3.12 `__name__` was absent and the `str(t)` fallback happened to be right, so the defect was latent until the interpreter bump. The check-fixture suite caught it: `test_should_fail[type_union_output]` asserts the message names `Claims | str`, and its `CHECK_ERROR` regex stopped matching. Unions now render their members, `NoneType` renders as `None`, and the dict-form branch recurses through `type_display_name` so all three paths share one rule. This also drops the module prefix 3.12's fallback leaked: `__main__.Claims | str` becomes `Claims | str`.
+
 ## [0.7.8] - 2026-08-20
 
 ### Added

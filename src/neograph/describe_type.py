@@ -34,8 +34,20 @@ def type_display_name(t: TypeSpecStatic) -> str:
     if t is None:
         return "None"
     if isinstance(t, dict):
-        parts = ", ".join(f"{k}: {getattr(v, '__name__', str(v))}" for k, v in t.items())
+        parts = ", ".join(f"{k}: {type_display_name(v)}" for k, v in t.items())
         return "{" + parts + "}"
+
+    # A union must render its MEMBERS. Python 3.14 gave `types.UnionType` a
+    # `__name__` of "Union", so trusting `__name__` degrades every error message
+    # that names a union: a fan-in mismatch reports the producer as "Union"
+    # rather than "Claims | str", which is the one detail the reader needs. On
+    # 3.12 `__name__` was absent and the `str(t)` fallback happened to be right,
+    # though it leaks the module prefix.
+    if get_origin(t) is Union or isinstance(t, types.UnionType):
+        return " | ".join(type_display_name(arg) for arg in get_args(t))
+
+    if t is type(None):
+        return "None"
     return getattr(t, "__name__", str(t))
 
 
