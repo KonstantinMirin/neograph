@@ -156,8 +156,10 @@ class TestLint:
         @node(outputs=RawText)
         def node_a(x: Annotated[str, FromInput]) -> RawText: ...
 
+        # node_b consumes node_a's output, so the pipeline carries no dead
+        # output field and this test stays about DI issues alone.
         @node(outputs=Claims)
-        def node_b(y: Annotated[str, FromConfig]) -> Claims: ...
+        def node_b(node_a: RawText, y: Annotated[str, FromConfig]) -> Claims: ...
 
         pipeline = construct_from_functions("multi", [node_a, node_b])
         issues = lint(pipeline, config={})
@@ -927,3 +929,105 @@ class TestLintNeedsNoConfig:
         missing = [i for i in issues if i.param == "deal_id" and i.required]
 
         assert missing, "a config that omits a required key must still be reported"
+
+
+class TestUnconsumedOutputField:
+    """Every field a node produces must have a consumer (GH #11).
+
+    The sibling of the unreferenced-input check at the other end of the pipe.
+    A node emits a typed output whose field is populated on every run, and
+    nothing downstream reads it. The field looks load-bearing, it costs tokens
+    on every call, and the model is asked to reason about a value that cannot
+    affect the answer.
+
+    Consumption has three axes with different granularity, and GH #11 warns that
+    deriving one reports false cleanliness. Each axis gets a case here.
+    """
+
+    KIND = "output_field_unconsumed"
+
+    @classmethod
+    def _dead(cls, issues):
+        return [i for i in issues if i.kind == cls.KIND]
+
+    def test_reports_a_field_no_downstream_template_reads(self):
+        """Axis 2, the only field-granular one. `${triage.severity}` consumes
+        `severity`; `rationale` is produced on every call and read by nothing."""
+        from neograph import construct_from_functions, node
+        from neograph.lint import lint
+
+        class Triage(BaseModel):
+            severity: str
+            rationale: str
+
+        class Out(BaseModel):
+            text: str
+
+        @node(outputs=Triage)
+        def triage() -> Triage:
+            return Triage(severity="high", rationale="because")
+
+        @node(outputs=Out, mode="think", model="fast", prompt="Act on ${triage.severity}")
+        def act(triage: Triage) -> Out: ...
+
+        issues = self._dead(
+            lint(
+                construct_from_functions("pipe", [triage, act]),
+                prompt_compiler=lambda t, d, **kw: [],
+                llm_factory=lambda tier: None,
+            )
+        )
+
+        assert [i.param for i in issues] == ["rationale"], (
+            f"expected 'rationale' dead, got {[(i.param) for i in issues]}"
+        )
+        assert issues[0].required is False
+
+    def test_reports_nothing_when_a_downstream_node_takes_the_whole_model(self):
+        """Axis 1. A consumer declaring `triage: Triage` receives the whole
+        model, and which fields its body reads is not derivable. Treating that
+        as consuming every field is deliberate over-approximation: the opposite
+        would flag every scripted consumer in every pipeline."""
+        from neograph import construct_from_functions, node
+        from neograph.lint import lint
+
+        class Triage(BaseModel):
+            severity: str
+            rationale: str
+
+        class Out(BaseModel):
+            text: str
+
+        @node(outputs=Triage)
+        def triage2() -> Triage:
+            return Triage(severity="high", rationale="because")
+
+        @node(outputs=Out)
+        def act2(triage2: Triage) -> Out:
+            return Out(text=triage2.rationale)
+
+        assert self._dead(lint(construct_from_functions("pipe2", [triage2, act2]))) == []
+
+    def test_reports_nothing_for_the_terminal_node(self):
+        """Axis 3. The last node's output IS the graph's output, so its fields
+        have a consumer by construction. Derived from topology, declared by
+        nobody."""
+        from neograph import construct_from_functions, node
+        from neograph.lint import lint
+
+        class Seed(BaseModel):
+            value: str
+
+        class Verdict(BaseModel):
+            decision: str
+            explanation: str
+
+        @node(outputs=Seed)
+        def seed3() -> Seed:
+            return Seed(value="x")
+
+        @node(outputs=Verdict)
+        def decide3(seed3: Seed) -> Verdict:
+            return Verdict(decision="yes", explanation="why")
+
+        assert self._dead(lint(construct_from_functions("pipe3", [seed3, decide3]))) == []

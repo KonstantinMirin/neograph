@@ -81,6 +81,15 @@ The second check reads the construct's structure and never reads a config, so no
 
 Bind a fanned item or a loop carry as a **port parameter** instead: drop the DI marker and type the parameter as the sub-construct's `input=`.
 
+## Supply-side checks
+
+`lint()` also checks the direction most linters miss: not only that every demand has a source, but that every supply has a consumer.
+
+- `template_input_unreferenced` — an LLM-mode node binds an input, a DI parameter, or a context field that its own template never names. The value reaches the node and the model never sees it.
+- `output_field_unconsumed` — a node produces a field that nothing reads: no downstream node takes the model, no template reads it by name, and it is not the graph's terminal output.
+
+Both are WARN. Demand is read from template text, so a `prompt_compiler` that composes the final message can consume a name the template never spells.
+
 ## Checking a specific payload
 
 Pass `config=` when you want a different question answered: does *this* caller payload satisfy *this* graph. Then `lint()` checks each parameter name against the keys you supplied:
