@@ -43,7 +43,7 @@ from neograph._runtime_registry import _decoration_registry
 from neograph._sidecar import _get_param_res  # noqa: E402,F401
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
-from neograph._trace import named
+from neograph._trace import named, subgraph_metadata
 from neograph._wiring import (
     _add_agent_cycle,
     _add_branch_to_graph,
@@ -430,17 +430,10 @@ def _add_subgraph(
 
     # Build the subgraph node function via factory. compile() returns the
     # CompiledNeograph facade; make_subgraph_fn drives the raw LangGraph graph.
-    # `named` binds run_name=sub.name here (not inside make_subgraph_fn, whose
-    # bare dual-path return is pinned by the async guard) so the sub-construct's
-    # engine span reads as the construct name across every modifier branch below
-    # (bare / oracle-redirect / each-redirect / loop). See neograph-3fm1.
-    subgraph_fn = named(
-        make_subgraph_fn(sub, sub_graph.graph),
-        sub.name,
-        mode="subgraph",
-        output_type=sub.output.__name__ if sub.output is not None else None,
-    )
-
+    # Deliberately unbound -- see `_trace.add_traced_node` for why a runnable
+    # holding a Pregel must not be config-bound (neograph-xunot / GH #6).
+    subgraph_fn = make_subgraph_fn(sub, sub_graph.graph)
+    subgraph_meta = subgraph_metadata(sub.name, sub.output)
     from typing import assert_never
 
     combo, mods = classify_modifiers(sub)
@@ -478,19 +471,24 @@ def _add_subgraph(
                 runtime=runtime,
                 scripted_lookup=scripted_lookup,
             )
-            last_name = _wire_oracle(graph, sub.name, redirect_fn, merge_fn, oracle, prev_node)
+            last_name = _wire_oracle(
+                graph, sub.name, redirect_fn, merge_fn, oracle, prev_node,
+                subgraph_meta=subgraph_meta,
+            )
         case PrimaryShape.EACH:
             # EACH_ORACLE folds here in the table but is rejected above, so only
             # EACH/EACH_OPERATOR reach this arm.
             each = mods["each"]
             each_fn = make_each_redirect_fn(subgraph_fn, field_name, each, item=sub)
-            last_name = _wire_each(graph, sub.name, each_fn, each, prev_node)
+            last_name = _wire_each(
+                graph, sub.name, each_fn, each, prev_node, subgraph_meta=subgraph_meta
+            )
         case PrimaryShape.LOOP:
             loop = mods["loop"]
             last_name = _add_subgraph_loop(graph, sub, subgraph_fn, loop, prev_node, condition_lookup=condition_lookup)
         case PrimaryShape.BARE:
             # Plain subgraph — no modifiers (or Operator only)
-            graph.add_node(sub.name, subgraph_fn)
+            graph.add_node(sub.name, subgraph_fn, metadata=subgraph_meta)
             if prev_node:
                 graph.add_edge(prev_node, sub.name)
             else:

@@ -92,7 +92,7 @@ ALLOWLIST: dict[str, int] = {
     "_oracle.py": 517,
     "_tool_loop.py": 548,
     "_wiring.py": 773,
-    "compiler.py": 688,
+    "compiler.py": 686,
     "decorators.py": 644,
     "factory.py": 617,
     "forward.py": 1022,
