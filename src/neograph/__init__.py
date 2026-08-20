@@ -31,6 +31,7 @@ from neograph._llm import (
     render_prompt,
 )
 from neograph._rendered import PromptInput, Rendered
+from neograph._spec_dump import dump_spec
 from neograph._tool_ledger import ToolLedger
 from neograph.compiler import compile, describe_graph
 from neograph.conditions import parse_condition
@@ -68,7 +69,6 @@ from neograph.errors import (
 from neograph.forward import ForwardConstruct
 from neograph.hitl import ask_human
 from neograph.lint import LintIssue, lint
-from neograph._spec_dump import dump_spec
 from neograph.loader import from_agent_spec, load_spec
 from neograph.modifiers import (
     HANDOFF_END,

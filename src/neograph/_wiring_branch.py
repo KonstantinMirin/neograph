@@ -18,7 +18,7 @@ from neograph._ir_branch import _BranchNode
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._state_bus import adapt_state
 from neograph._subconstruct import make_subgraph_fn
-from neograph._trace import named, subgraph_metadata
+from neograph._trace import subgraph_metadata
 from neograph.construct import Construct
 from neograph.errors import ExecutionError
 from neograph.factory import make_node_fn

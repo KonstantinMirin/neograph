@@ -61,7 +61,7 @@ class TestTemplatePlaceholderLint:
                 Node.scripted("seed", fn="noop", outputs=Claims),
                 Node(
                     "summarize",
-                    prompt="Summarize: ${nonexistent}",
+                    prompt="Summarize: ${seed} ${nonexistent}",
                     model="default",
                     outputs=Summary,
                     inputs={"seed": Claims},
@@ -401,7 +401,7 @@ class TestTemplatePlaceholderLint:
         )
 
         def resolver(name):
-            return "ID: {node_id}" if name == "rw/proc" else None
+            return "ID: {node_id} for {seed}" if name == "rw/proc" else None
 
         issues = lint(c, known_template_vars={"node_id"}, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
@@ -450,7 +450,7 @@ class TestTemplatePlaceholderLint:
             "test",
             nodes=[
                 Node.scripted("seed", fn="noop", outputs=A),
-                Node("proc", prompt="Val: ${bad.field}", model="default", outputs=B, inputs={"seed": A}),
+                Node("proc", prompt="Val: ${seed} ${bad.field}", model="default", outputs=B, inputs={"seed": A}),
             ],
         )
         issues = lint(c)
@@ -533,7 +533,7 @@ class TestTemplatePlaceholderLint:
             "test",
             nodes=[
                 Node.scripted("seed", fn="noop", outputs=A),
-                Node("proc", prompt="Just a plain instruction", model="default", outputs=B, inputs={"seed": A}),
+                Node("proc", prompt="Just a plain instruction", model="default", outputs=B),
             ],
         )
         issues = lint(c)
@@ -1014,7 +1014,7 @@ class TestTemplateRefLint:
             ],
         )
         # Template references {existing_si} — a field inside UCComposite, not the param name "seed"
-        resolver = self._resolver({"rw/write-si": "Write SI for: {existing_si}\nTitle: {title}"})
+        resolver = self._resolver({"rw/write-si": "Given {seed}, write SI for: {existing_si}\nTitle: {title}"})
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         assert len(template_issues) == 2  # both {existing_si} and {title}
@@ -1412,3 +1412,398 @@ class TestContextTemplateRefColumn:
             return [{"role": "user", "content": template}]
 
         assert "template_placeholder_unresolvable" in self._kinds(compiler)
+
+
+class TestUnreferencedInputLint:
+    """Every bound name of an LLM-mode node must appear in that node's template.
+
+    The linter checked one direction of the dataflow. Every kind it emitted
+    reported a reference with no source, or a missing config value. None reported
+    a value that arrives and reaches nothing.
+
+    A node binds an input, the data arrives, and the prompt never names it. The
+    model never sees the value. The graph compiles, the linter passes, and the run
+    computes an answer without the evidence meant to inform it.
+
+    Three axes supply an LLM-mode node: upstream inputs, DI parameters, and
+    context fields. Each gets its own case, so a change that breaks one axis
+    cannot hide behind the other two.
+    """
+
+    KIND = "template_input_unreferenced"
+
+    @classmethod
+    def _unref(cls, issues):
+        return [i for i in issues if i.kind == cls.KIND]
+
+    @staticmethod
+    def _module(name, build):
+        import types
+
+        mod = types.ModuleType(name)
+        build(mod)
+        return construct_from_module(mod)
+
+    # ── axis 1: an upstream input ───────────────────────────────────────
+
+    def test_reports_upstream_input_when_template_names_only_the_other(self):
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Scores(BaseModel):
+            value: float
+
+        class Out(BaseModel):
+            text: str
+
+        def build(mod):
+            @node(outputs=Claims)
+            def claims() -> Claims: ...
+
+            @node(outputs=Scores)
+            def scores() -> Scores: ...
+
+            @node(outputs=Out, mode="think", model="fast", prompt="judge")
+            def verdict(claims: Claims, scores: Scores) -> Out: ...
+
+            mod.claims, mod.scores, mod.verdict = claims, scores, verdict
+
+        issues = self._unref(
+            lint(
+                self._module("test_unref_inputs_mod", build),
+                template_resolver=lambda n: "Weigh {claims}." if n == "judge" else None,
+                prompt_compiler=lambda t, d, **kw: [],
+                llm_factory=lambda tier: None,
+                config={},
+            )
+        )
+
+        assert [i.param for i in issues] == ["scores"], (
+            f"expected one issue naming 'scores', got {[(i.param) for i in issues]}"
+        )
+        assert issues[0].required is False, "the check ships as a warning first"
+
+    def test_reports_nothing_when_template_names_every_upstream_input(self):
+        """The accept case. Without it the check could pass by always firing."""
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Out(BaseModel):
+            text: str
+
+        def build(mod):
+            @node(outputs=Claims)
+            def claims() -> Claims: ...
+
+            @node(outputs=Out, mode="think", model="fast", prompt="judge")
+            def verdict(claims: Claims) -> Out: ...
+
+            mod.claims, mod.verdict = claims, verdict
+
+        assert (
+            self._unref(
+                lint(
+                    self._module("test_unref_ok_mod", build),
+                    template_resolver=lambda n: "Weigh {claims}." if n == "judge" else None,
+                    prompt_compiler=lambda t, d, **kw: [],
+                    llm_factory=lambda tier: None,
+                    config={},
+                )
+            )
+            == []
+        )
+
+    # ── axis 2: a DI parameter ──────────────────────────────────────────
+
+    def test_reports_di_param_when_template_never_names_it(self):
+        """A resolved `FromInput` value that no placeholder spells reaches nothing.
+
+        DI bindings live in the decorator sidecar, so this axis is `@node`-only.
+        That is the documented three-surface exemption, not a coverage gap.
+        """
+        from typing import Annotated
+
+        from neograph import FromInput
+        from neograph.lint import lint
+
+        class Out(BaseModel):
+            text: str
+
+        def build(mod):
+            @node(outputs=Out, mode="think", model="fast", prompt="leaf")
+            def analyze(domain: Annotated[str, FromInput]) -> Out: ...
+
+            mod.analyze = analyze
+
+        issues = self._unref(
+            lint(
+                self._module("test_unref_di_mod", build),
+                template_resolver=lambda n: "Analyze it." if n == "leaf" else None,
+                prompt_compiler=lambda t, d, *, di_inputs=None, **kw: [],
+                llm_factory=lambda tier: None,
+                config={"domain": "oncology"},
+            )
+        )
+
+        assert [i.param for i in issues] == ["domain"]
+
+    # ── axis 3: a context field ─────────────────────────────────────────
+
+    def test_reports_context_field_when_template_never_names_it(self):
+        from neograph.lint import lint
+
+        class Catalog(BaseModel):
+            rows: list[str]
+
+        class Out(BaseModel):
+            text: str
+
+        def build(mod):
+            @node(outputs=Catalog)
+            def catalog() -> Catalog: ...
+
+            @node(outputs=Out, mode="think", model="fast", prompt="leaf", context=["catalog"])
+            def analyze() -> Out: ...
+
+            mod.catalog, mod.analyze = catalog, analyze
+
+        issues = self._unref(
+            lint(
+                self._module("test_unref_ctx_mod", build),
+                template_resolver=lambda n: "Analyze it." if n == "leaf" else None,
+                prompt_compiler=lambda t, d, *, context=None, **kw: [],
+                llm_factory=lambda tier: None,
+                config={},
+            )
+        )
+
+        assert [i.param for i in issues] == ["catalog"]
+
+    # ── real demand the check must not mistake for a defect ─────────────
+
+    def test_reports_nothing_for_a_scripted_node(self):
+        """A scripted node has no template, and its body genuinely runs."""
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Out(BaseModel):
+            text: str
+
+        def build(mod):
+            @node(outputs=Claims)
+            def claims() -> Claims: ...
+
+            @node(outputs=Out)
+            def summarize(claims: Claims) -> Out: ...
+
+            mod.claims, mod.summarize = claims, summarize
+
+        assert self._unref(lint(self._module("test_unref_scripted_mod", build), config={})) == []
+
+    def test_reports_nothing_for_a_skip_when_node(self):
+        """`skip_when` receives the extracted input dict on the think path and on
+        the agent path, so an input a skip predicate reads is real demand.
+
+        The predicate is opaque, which makes suppressing the inputs axis the only
+        sound disposition. Without it the check flags working pipelines.
+        """
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Out(BaseModel):
+            text: str
+
+        def build(mod):
+            @node(outputs=Claims)
+            def claims() -> Claims: ...
+
+            @node(
+                outputs=Out,
+                mode="think",
+                model="fast",
+                prompt="judge",
+                skip_when=lambda d: False,
+            )
+            def verdict(claims: Claims) -> Out: ...
+
+            mod.claims, mod.verdict = claims, verdict
+
+        issues = self._unref(
+            lint(
+                self._module("test_unref_skip_mod", build),
+                template_resolver=lambda n: "Decide." if n == "judge" else None,
+                prompt_compiler=lambda t, d, **kw: [],
+                llm_factory=lambda tier: None,
+                config={},
+            )
+        )
+
+        assert issues == [], f"skip_when consumes the input; expected silence, got {issues}"
+
+    def test_reports_nothing_when_an_oracle_merge_prompt_names_the_input(self):
+        """`_build_upstream_context` injects one entry per `node.inputs` key into
+        the merge prompt, so that prompt is a second demand surface over the same
+        keys. Every Oracle node would otherwise report a bogus issue per input.
+        """
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Out(BaseModel):
+            text: str
+
+        def build(mod):
+            @node(outputs=Claims)
+            def claims() -> Claims: ...
+
+            @node(
+                outputs=Out,
+                mode="think",
+                model="fast",
+                prompt="judge",
+                ensemble_n=2,
+                merge_prompt="Combine ${variants} using ${claims}.",
+            )
+            def verdict(claims: Claims) -> Out: ...
+
+            mod.claims, mod.verdict = claims, verdict
+
+        issues = self._unref(
+            lint(
+                self._module("test_unref_oracle_mod", build),
+                template_resolver=lambda n: "Decide." if n == "judge" else None,
+                prompt_compiler=lambda t, d, **kw: [],
+                llm_factory=lambda tier: None,
+                config={},
+            )
+        )
+
+        assert issues == [], f"the merge prompt consumes 'claims'; got {issues}"
+
+    def test_reports_nothing_for_the_fan_out_receiver(self):
+        """An `Each` receiver arrives as the per-item value, not by name."""
+        from neograph.lint import lint
+
+        class Group(BaseModel):
+            label: str
+
+        class Groups(BaseModel):
+            groups: list[Group]
+
+        class Out(BaseModel):
+            text: str
+
+        def build(mod):
+            @node(outputs=Groups)
+            def source() -> Groups: ...
+
+            @node(
+                outputs=Out,
+                mode="think",
+                model="fast",
+                prompt="judge",
+                map_over="source.groups",
+                map_key="label",
+            )
+            def verdict(group: Group) -> Out: ...
+
+            mod.source, mod.verdict = source, verdict
+
+        issues = self._unref(
+            lint(
+                self._module("test_unref_fanout_mod", build),
+                template_resolver=lambda n: "Decide." if n == "judge" else None,
+                prompt_compiler=lambda t, d, **kw: [],
+                llm_factory=lambda tier: None,
+                config={},
+            )
+        )
+
+        assert [i.param for i in issues] == [], f"the fan-out receiver is exempt; got {issues}"
+
+    def test_reports_nothing_when_the_template_ref_cannot_be_resolved(self):
+        """With no resolver there is no template text, so there is no demand to
+        compare against. Reporting here would flag every node in a codebase that
+        keeps its templates outside the repo.
+        """
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Out(BaseModel):
+            text: str
+
+        def build(mod):
+            @node(outputs=Claims)
+            def claims() -> Claims: ...
+
+            @node(outputs=Out, mode="think", model="fast", prompt="judge")
+            def verdict(claims: Claims) -> Out: ...
+
+            mod.claims, mod.verdict = claims, verdict
+
+        issues = self._unref(
+            lint(
+                self._module("test_unref_unresolved_mod", build),
+                prompt_compiler=lambda t, d, **kw: [],
+                llm_factory=lambda tier: None,
+                config={},
+            )
+        )
+
+        assert issues == []
+
+    # ── three-surface parity ────────────────────────────────────────────
+
+    def test_reports_upstream_input_on_the_declarative_surface(self):
+        """`node.inputs` and `node.context` exist identically on all three
+        surfaces, so both axes must report there. `_param_res` is decorator-only,
+        so the DI axis is exempt by construction."""
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Out(BaseModel):
+            text: str
+
+        from tests.fakes import register_scripted
+
+        register_scripted("unref_decl_src", lambda i, c: Claims(items=["a"]))
+
+        c = Construct(
+            "decl-pipe",
+            nodes=[
+                Node.scripted("claims", fn="unref_decl_src", outputs=Claims),
+                Node(
+                    name="verdict",
+                    mode="think",
+                    outputs=Out,
+                    model="fast",
+                    prompt="judge",
+                    inputs={"claims": Claims},
+                ),
+            ],
+        )
+
+        issues = self._unref(
+            lint(
+                c,
+                template_resolver=lambda n: "Decide." if n == "judge" else None,
+                prompt_compiler=lambda t, d, **kw: [],
+                llm_factory=lambda tier: None,
+                config={},
+            )
+        )
+
+        assert [i.param for i in issues] == ["claims"]

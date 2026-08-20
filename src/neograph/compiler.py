@@ -43,7 +43,7 @@ from neograph._runtime_registry import _decoration_registry
 from neograph._sidecar import _get_param_res  # noqa: E402,F401
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
-from neograph._trace import named, subgraph_metadata
+from neograph._trace import subgraph_metadata
 from neograph._wiring import (
     _add_agent_cycle,
     _add_branch_to_graph,
