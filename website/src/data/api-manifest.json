@@ -106,6 +106,11 @@
       "severity": "varies"
     },
     {
+      "kind": "from_input_unsatisfiable",
+      "meaning": "A `FromInput`/`FromConfig` parameter whose value is the Each-fanned item or the Loop carry. No caller can supply it, so the run fails in the DI preflight -- and padding a config to silence it makes every branch compute from the padded value. Bind it as a port parameter instead.",
+      "severity": "ERROR"
+    },
+    {
       "kind": "llm_kwargs_missing",
       "meaning": "LLM-mode nodes require `llm_factory` and `prompt_compiler` at `compile()` time. Pass these kwargs to `compile()` (or configure via `configure_llm()`, legacy).",
       "severity": "WARN"
@@ -121,9 +126,19 @@
       "severity": "ERROR"
     },
     {
+      "kind": "output_field_unconsumed",
+      "meaning": "A field of a node's typed output that nothing reads: no downstream node takes the model, no template reads it by name, and it is not the graph's terminal output. It costs tokens on every call and cannot affect the answer.",
+      "severity": "WARN"
+    },
+    {
       "kind": "resource_hydration_kind_unmatched",
       "meaning": "A node hydrates a manifest kind via `FromResource(ref=...)` but the construct has no upstream `agent`/`act` node that can emit a `resource_link`, so the manifest is guaranteed empty at runtime.",
       "severity": "ERROR"
+    },
+    {
+      "kind": "template_input_unreferenced",
+      "meaning": "A bound input, DI parameter, or context field that the node's own template never references. The value reaches the node and the model never sees it. Demand is read from the template text, so a `prompt_compiler` that composes the message may consume the name without naming it.",
+      "severity": "WARN"
     },
     {
       "kind": "template_placeholder_known_vars_only",

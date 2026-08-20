@@ -495,11 +495,16 @@ def _add_subgraph(
                 runtime=runtime,
                 scripted_lookup=scripted_lookup,
             )
-            last_name = _wire_oracle(graph, sub.name, redirect_fn, merge_fn, oracle, prev_node)
+            last_name = _wire_oracle(
+                graph, sub.name, redirect_fn, merge_fn, oracle, prev_node,
+                subgraph_meta=subgraph_meta,
+            )
         case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
             each = mods["each"]
             each_fn = make_each_redirect_fn(subgraph_fn, field_name, each, item=sub)
-            last_name = _wire_each(graph, sub.name, each_fn, each, prev_node)
+            last_name = _wire_each(
+                graph, sub.name, each_fn, each, prev_node, subgraph_meta=subgraph_meta
+            )
         case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
             loop = mods["loop"]
             last_name = _add_subgraph_loop(graph, sub, subgraph_fn, loop, prev_node, condition_lookup=condition_lookup)

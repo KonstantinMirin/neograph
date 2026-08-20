@@ -74,12 +74,36 @@ class TestLossIdsAreRegistered:
         )
 
     def test_every_registered_id_is_reachable_from_the_dumper(self):
-        """The other direction: no stale entry claiming coverage that is gone."""
-        source = DUMP_MODULE.read_text()
+        """The other direction: no stale entry claiming coverage that is gone.
+
+        Only ``lose("id", ...)`` CALL SITES count. Scanning every string constant
+        in the module -- the obvious implementation -- is vacuous here, because
+        each id also appears as its own key in the ``DUMP_LOSS_META`` literal, so
+        an entry whose emitting branch had been deleted still looked "cited".
+        That exact false pass happened while widening dict-form outputs.
+        """
+        tree = ast.parse(DUMP_MODULE.read_text())
+
+        # The registry literal's own keys are excluded; every OTHER string
+        # constant counts, because an id legitimately reaches `lose()` through a
+        # tuple loop or a default argument, not only as a literal call arg.
+        registry_keys: set[int] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AnnAssign | ast.Assign) and isinstance(node.value, ast.Dict):
+                targets = (
+                    [node.target] if isinstance(node, ast.AnnAssign) else list(node.targets)
+                )
+                if any(
+                    isinstance(t, ast.Name) and t.id == "DUMP_LOSS_META" for t in targets
+                ):
+                    registry_keys = {id(k) for k in node.value.keys}
+
         cited = {
             node.value
-            for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in registry_keys
         }
 
         stale = sorted(set(DUMP_LOSS_META) - cited)

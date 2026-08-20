@@ -227,8 +227,18 @@
           "title": "Inputs"
         },
         "outputs": {
-          "title": "Outputs",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          ],
+          "title": "Outputs"
         },
         "prompt": {
           "anyOf": [

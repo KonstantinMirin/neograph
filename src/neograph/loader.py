@@ -171,9 +171,50 @@ def _resolve_tool(t: str | ToolSpec) -> Tool:
     return Tool(name=spec.name, budget=spec.budget, config=spec.config)
 
 
+def _resolve_type_ref(ref: str) -> Any:
+    """Resolve one spec type reference to a Python annotation.
+
+    The inverse of ``_spec_dump._Dump.type_ref``, and deliberately written
+    beside its counterpart's shapes so the two cannot drift:
+
+        ``"Model"``        -> ``Model``
+        ``"[Model]"``      -> ``list[Model]``
+        ``"{str: Model}"`` -> ``dict[str, Model]``
+        ``"Model?"``       -> ``Model | None``
+
+    Without this the loader accepts a dumped spec's dict-form outputs but chokes
+    on the container members inside it -- a half-working reload, which is worse
+    than a documented one-way dump.
+    """
+    ref = ref.strip()
+    if ref.startswith("[") and ref.endswith("]"):
+        return list[_resolve_type_ref(ref[1:-1])]  # type: ignore[misc]
+    if ref.startswith("{") and ref.endswith("}") and ":" in ref:
+        key, _, value = ref[1:-1].partition(":")
+        if key.strip() != "str":
+            raise ConfigurationError.build(
+                "unsupported spec mapping key type",
+                found=key.strip(),
+                hint="spec mappings are keyed by 'str'.",
+            )
+        return dict[str, _resolve_type_ref(value)]  # type: ignore[misc]
+    if ref.endswith("?"):
+        return _resolve_type_ref(ref[:-1]) | None
+    return lookup_type(ref)
+
+
 def _build_node(node_spec: NodeSpec) -> Node:
     """Build a Node from a typed NodeSpec."""
-    outputs = lookup_type(node_spec.outputs)
+    # Discriminates the SPEC form (``str | dict[str, str]`` -- type NAMES), not
+    # the IR form, so ``normalize_outputs`` does not apply here; it maps types,
+    # not names. Bound to a local first, exactly as the ``inputs`` block below
+    # already does for the identical spec-side discrimination.
+    spec_outputs = node_spec.outputs
+    outputs: Any
+    if isinstance(spec_outputs, dict):
+        outputs = {k: _resolve_type_ref(v) for k, v in spec_outputs.items()}
+    else:
+        outputs = _resolve_type_ref(spec_outputs)
 
     inputs: Any
     spec_inputs = node_spec.inputs

@@ -160,7 +160,12 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     for var_name, construct in constructs:
         label = f"{construct.name} ({var_name})"
-        errors = []
+        # `blocking` decides the exit code. `advisory` prints and does not.
+        # A compile error always blocks; a lint issue blocks only when it is
+        # required. Collapsing the two makes the WARN label decorative, which
+        # removes the option of shipping a new check as a warning first.
+        blocking: list[str] = []
+        advisory: list[str] = []
 
         # 1. Compile (auto-supply MemorySaver for Operator constructs)
         checkpointer = None
@@ -182,7 +187,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         try:
             compile(construct, checkpointer=checkpointer, **compile_kwargs)
         except (CompileError, ConstructError) as exc:
-            errors.append(f"compile: {exc}")
+            blocking.append(f"compile: {exc}")
 
         # 2. Lint
         lint_kwargs: dict[str, Any] = {
@@ -198,16 +203,18 @@ def cmd_check(args: argparse.Namespace) -> int:
             lint_kwargs["conditions"] = compile_kwargs["conditions"]
         issues = lint(construct, **lint_kwargs)
         for issue in issues:
-            severity = "ERROR" if issue.required else "WARN"
-            errors.append(f"lint [{severity}]: {issue.message}")
+            if issue.required:
+                blocking.append(f"lint [ERROR]: {issue.message}")
+            else:
+                advisory.append(f"lint [WARN]: {issue.message}")
 
-        if errors:
+        if blocking:
             print(f"FAIL  {label}")
-            for err in errors:
-                print(f"      {err}")
             failed += 1
         else:
             print(f"OK    {label}")
+        for line in blocking + advisory:
+            print(f"      {line}")
 
     n = len(constructs)
     print()

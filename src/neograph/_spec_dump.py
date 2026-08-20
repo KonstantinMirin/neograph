@@ -42,7 +42,8 @@ from __future__ import annotations
 
 import inspect
 import pathlib
-from typing import Any, NamedTuple
+import types
+from typing import Any, NamedTuple, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
@@ -87,9 +88,6 @@ DUMP_LOSS_META: dict[str, DumpLossMeta] = {
     "renderer": DumpLossMeta("NO_REPR", "renderer is a live Renderer instance"),
     "oracle_merge_hook": DumpLossMeta(
         "NO_REPR", "Oracle merge_pre_process/merge_post_process/merge_fallback are Python callables"
-    ),
-    "dict_form_outputs": DumpLossMeta(
-        "NO_SLOT", "NodeSpec.outputs is a bare str; dict-form multi-output has no spec slot"
     ),
     "absent_outputs": DumpLossMeta("NO_SLOT", "NodeSpec.outputs is required; Node.outputs is None"),
     "unregistered_type": DumpLossMeta(
@@ -180,18 +178,70 @@ class _Dump:
     def type_ref(self, annotation: Any, path: str, *, loss_id: str = "unregistered_type") -> Any:
         """A spec type reference for *annotation*: a name, or a sentinel.
 
+        Containers over a model resolve rather than being refused --
+        ``list[X]`` -> ``"[X]"``, ``dict[str, X]`` -> ``"{str: X}"``,
+        ``X | None`` -> ``"X?"`` -- because those are the shapes real pipelines
+        declare (a tool log is a ``list[Entry]``), and refusing them meant every
+        agent node lost its output contract (GH #9). Each member model is
+        recursed into, so its schema lands in ``types:`` too.
+
         The schema is ALWAYS emitted alongside the name, so the document is
         self-contained -- a bare registry name is only meaningful to a process
         that already imported the project, and the stated consumer is an
         external viewer.
         """
-        if not (isinstance(annotation, type) and issubclass(annotation, BaseModel)):
-            return self.lose(loss_id, path, annotation)
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            name = _registered_name(annotation) or annotation.__name__
+            if name not in self.types:
+                self.types[name] = annotation.model_json_schema()
+            return name
 
-        name = _registered_name(annotation) or annotation.__name__
-        if name not in self.types:
-            self.types[name] = annotation.model_json_schema()
-        return name
+        rendered = self._container_ref(annotation, path)
+        if rendered is not None:
+            return rendered
+
+        return self.lose(loss_id, path, annotation)
+
+    def _container_ref(self, annotation: Any, path: str) -> str | None:
+        """Render a container/union over models, or None when unrecognised.
+
+        Deliberately narrow: only the shapes whose members can themselves be
+        resolved. Anything else falls through to a sentinel rather than being
+        rendered as a repr a consumer could mistake for a real type name.
+        """
+        origin = get_origin(annotation)
+        args = get_args(annotation)
+        if origin is None or not args:
+            return None
+
+        def member(arg: Any) -> str | None:
+            if arg is type(None):
+                return None
+            resolved = self.type_ref(arg, path)
+            # A member that is itself unrepresentable makes the whole container
+            # unrepresentable -- do not paper over it with a partial name.
+            return resolved if isinstance(resolved, str) else None
+
+        if origin is Union or origin is types.UnionType:
+            non_none = [a for a in args if a is not type(None)]
+            rendered = [member(a) for a in non_none]
+            if any(r is None for r in rendered):
+                return None
+            body = " | ".join(r for r in rendered if r)
+            return f"{body}?" if len(non_none) != len(args) else body
+
+        if origin in (list, set, frozenset, tuple):
+            inner = member(args[0])
+            return None if inner is None else f"[{inner}]"
+
+        if origin is dict and len(args) == 2:
+            key = args[0].__name__ if isinstance(args[0], type) else None
+            value = member(args[1])
+            if key is None or value is None:
+                return None
+            return f"{{{key}: {value}}}"
+
+        return None
 
 
 def _registered_name(cls: type) -> str | None:
@@ -269,7 +319,10 @@ def _dump_node(node: Node, dump: _Dump, path: str) -> dict[str, Any]:
     if outputs.is_none:
         out["outputs"] = dump.lose("absent_outputs", f"{path}.outputs")
     elif outputs.is_dict_form:
-        out["outputs"] = dump.lose("dict_form_outputs", f"{path}.outputs")
+        out["outputs"] = {
+            key: dump.type_ref(value, f"{path}.outputs.{key}")
+            for key, value in outputs.all_keys.items()
+        }
     else:
         out["outputs"] = dump.type_ref(outputs.primary, f"{path}.outputs")
 

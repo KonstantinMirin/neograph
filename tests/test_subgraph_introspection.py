@@ -16,9 +16,10 @@ These tests drive the LangGraph API a Studio/Langfuse consumer actually calls.
 
 from __future__ import annotations
 
+import pytest
 from pydantic import BaseModel
 
-from neograph import Construct, Loop, Node, compile, construct_from_functions, node
+from neograph import Construct, Each, Loop, Node, Oracle, compile, construct_from_functions, node
 from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
 from tests.fakes import build_test_compile_kwargs, register_scripted
 
@@ -201,3 +202,208 @@ class TestSubgraphTraceHygiene:
         assert meta.get("neograph_node") == "verify"
         assert meta.get("neograph_mode") == "subgraph"
         assert meta.get("neograph_output_type") == "Finding"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Every modifier placement (GH #6 follow-up, neograph-4o1cn)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 0.7.7 fixed the two make_subgraph_fn call sites and PROVED the modifier'd
+# paths with a single Loop case, then generalised to the whole family. Loop
+# recovers because _add_subgraph_loop passes subgraph_fn through unwrapped;
+# Each does NOT -- it re-wraps at its own `named()` site in _wire_each, which is
+# shared between the Node and Construct paths. So Each-modified sub-constructs
+# stayed invisible through 0.7.7.
+#
+# The lesson is the parametrization: prove EVERY placement, not a representative.
+
+
+class Group(BaseModel):
+    label: str
+
+
+class Groups(BaseModel):
+    groups: list[Group]
+
+
+def _sub(name: str, fn_key: str) -> Construct:
+    from tests.fakes import register_scripted
+
+    register_scripted(fn_key, lambda _in, _cfg: Finding(note="n"))
+    return Construct(
+        name,
+        input=Group,
+        output=Finding,
+        nodes=[Node.scripted(f"{name}-inner", fn=fn_key, outputs=Finding)],
+    )
+
+
+def _each_placement() -> tuple[Construct, str]:
+    """A top-level Each-modified sub-construct -- the reporter's `fan_outer`."""
+    from tests.fakes import register_scripted
+
+    register_scripted("intro_src", lambda _in, _cfg: Groups(groups=[Group(label="a")]))
+    sub = _sub("faneach", "intro_each_inner") | Each(over="source.groups", key="label")
+    return (
+        Construct(
+            "each-outer",
+            nodes=[Node.scripted("source", fn="intro_src", outputs=Groups), sub],
+        ),
+        "faneach",
+    )
+
+
+def _oracle_placement() -> tuple[Construct, str]:
+    """An Oracle-modified sub-construct -- the sibling redirect path, which the
+    0.7.7 sweep also never probed."""
+    from tests.fakes import register_scripted
+
+    register_scripted("intro_ora_seed", lambda _in, _cfg: Group(label="a"))
+    register_scripted("intro_ora_merge", lambda variants, _cfg: Finding(note="merged"))
+    sub = _sub("oraclesub", "intro_oracle_inner") | Oracle(n=2, merge_fn="intro_ora_merge")
+    return (
+        Construct(
+            "oracle-outer",
+            nodes=[Node.scripted("seed", fn="intro_ora_seed", outputs=Group), sub],
+        ),
+        "oraclesub",
+    )
+
+
+def _loop_placement() -> tuple[Construct, str]:
+    from tests.fakes import register_scripted
+
+    register_scripted("intro_loop_seed", lambda _in, _cfg: Group(label="a"))
+    register_scripted("intro_loop_inner", lambda _in, _cfg: Group(label="a"))
+    sub = Construct(
+        "loopsub",
+        input=Group,
+        output=Group,
+        nodes=[Node.scripted("loopsub-inner", fn="intro_loop_inner", outputs=Group)],
+    ) | Loop(when=lambda d: False, max_iterations=2)
+    return (
+        Construct(
+            "loop-outer",
+            nodes=[Node.scripted("seed", fn="intro_loop_seed", outputs=Group), sub],
+        ),
+        "loopsub",
+    )
+
+
+def _plain_placement() -> tuple[Construct, str]:
+    from tests.fakes import register_scripted
+
+    register_scripted("intro_plain_seed", lambda _in, _cfg: Group(label="a"))
+    return (
+        Construct(
+            "plain-outer",
+            nodes=[
+                Node.scripted("seed", fn="intro_plain_seed", outputs=Group),
+                _sub("plainsub", "intro_plain_inner"),
+            ],
+        ),
+        "plainsub",
+    )
+
+
+PLACEMENTS = [
+    ("plain", _plain_placement),
+    ("loop", _loop_placement),
+    ("each", _each_placement),
+    ("oracle", _oracle_placement),
+]
+
+
+class TestEveryModifierPlacementStaysVisible:
+    """A sub-construct must be enumerable wherever it is wired.
+
+    Parametrized deliberately: 0.7.7 shipped a regression precisely because one
+    placement was proved and the family was reported (neograph-4o1cn / GH #6).
+    """
+
+    @pytest.mark.parametrize(
+        ("label", "factory"), PLACEMENTS, ids=[p[0] for p in PLACEMENTS]
+    )
+    def test_sub_construct_is_enumerated(self, label: str, factory):
+        pipeline, expected = factory()
+
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        found = [name for name, _ in graph.graph.get_subgraphs()]
+
+        assert expected in found, (
+            f"the {label}-modified sub-construct {expected!r} is invisible to "
+            f"LangGraph (get_subgraphs -> {found}). Something on that wiring path "
+            "config-binds the runnable that holds the nested Pregel."
+        )
+
+
+class TestNestedAndRecursiveDiscovery:
+    """The reporter's exact shape on GH #6: an Each nested inside a Loop
+    sub-construct, plus a second Each at top level. ``recurse=True`` must reach
+    the inner one -- 0.7.7 returned only the Loop."""
+
+    def _nested(self) -> Construct:
+        from tests.fakes import register_scripted
+
+        register_scripted("nest_src", lambda _in, _cfg: Groups(groups=[Group(label="a")]))
+        register_scripted("nest_inner", lambda _in, _cfg: Group(label="a"))
+        register_scripted("nest_leaf", lambda _in, _cfg: Group(label="a"))
+
+        # fan_inner: an Each sub-construct living INSIDE loop_sub.
+        fan_inner = Construct(
+            "fan_inner",
+            input=Group,
+            output=Group,
+            nodes=[Node.scripted("fan-inner-leaf", fn="nest_leaf", outputs=Group)],
+        ) | Each(over="neo_subgraph_input.groups", key="label")
+
+        loop_sub = Construct(
+            "loop_sub",
+            input=Groups,
+            output=Groups,
+            nodes=[Node.scripted("loop-head", fn="nest_inner", outputs=Groups)],
+        ) | Loop(when=lambda d: False, max_iterations=2)
+
+        fan_outer = Construct(
+            "fan_outer",
+            input=Group,
+            output=Group,
+            nodes=[Node.scripted("fan-outer-leaf", fn="nest_leaf", outputs=Group)],
+        ) | Each(over="source.groups", key="label")
+
+        return Construct(
+            "nested-outer",
+            nodes=[
+                Node.scripted("source", fn="nest_src", outputs=Groups),
+                loop_sub,
+                fan_outer,
+            ],
+        )
+
+    def test_top_level_each_and_loop_are_both_enumerated(self):
+        graph = compile(self._nested(), **build_test_compile_kwargs())
+
+        found = {name for name, _ in graph.graph.get_subgraphs()}
+
+        assert {"loop_sub", "fan_outer"} <= found, (
+            f"expected both the Loop and the Each sub-construct, got {sorted(found)}"
+        )
+
+    def test_recursive_discovery_reaches_them(self):
+        """``get_subgraphs(recurse=True)`` returned only the Loop in 0.7.7."""
+        graph = compile(self._nested(), **build_test_compile_kwargs())
+
+        found = {name for name, _ in graph.graph.get_subgraphs(recurse=True)}
+
+        assert "fan_outer" in found, (
+            f"recursive discovery missed the Each sub-construct: {sorted(found)}"
+        )
+
+    def test_xray_expands_the_each_interior(self):
+        graph = compile(self._nested(), **build_test_compile_kwargs())
+
+        nodes = set(graph.graph.get_graph(xray=True).nodes)
+
+        assert any("fan-outer-leaf" in n for n in nodes), (
+            f"the Each fan-out's interior is still an opaque box: {sorted(nodes)}"
+        )

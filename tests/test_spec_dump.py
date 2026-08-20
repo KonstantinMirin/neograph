@@ -39,6 +39,11 @@ class Finding(BaseModel):
     score: float = 0.0
 
 
+class LogEntry(BaseModel):
+    tool: str
+    ok: bool = True
+
+
 def _pipeline() -> Construct:
     """seed -> analyze -> refine, where refine carries a CALLABLE Loop.when.
 
@@ -244,3 +249,123 @@ class TestThreeSurfaceParity:
         json.dumps(payload)
         # A REGISTERED-NAME loop condition is data and must round-trip as a string.
         assert payload["nodes"][0]["loop"]["when"] == "always_false"
+
+
+class TestAgentNodeOutputContract:
+    """The canonical agent shape must survive the dump (GH #9 follow-up).
+
+    ``outputs={"result": ResultModel, "tool_log": list[LogEntry]}`` is documented
+    in CLAUDE.md as a first-class IR capability and is what every tool-binding
+    node declares. 0.7.7 lost BOTH halves -- the dict form had no NodeSpec slot,
+    and ``list[LogEntry]`` is not a BaseModel so the type resolver refused it --
+    so the spec carried a sentinel exactly where the output contract belongs,
+    and ``strict=True`` refused the construct outright. On the reporter's
+    pipeline those two ids were 10 of 11 losses, which defeats the graph-viewer
+    use case the whole ticket exists for.
+    """
+
+    def _agent_pipeline(self) -> Construct:
+        register_scripted("agent_seed", lambda _in, _cfg: Claim(text="c"))
+        register_scripted("agent_body", lambda _in, _cfg: Finding(note="n"))
+
+        seed = Node.scripted("seed", fn="agent_seed", outputs=Claim)
+        agent = Node.scripted(
+            "agent",
+            fn="agent_body",
+            inputs=Claim,
+            outputs={"result": Finding, "tool_log": list[LogEntry]},
+        )
+        return Construct("agentic", nodes=[seed, agent])
+
+    def test_dict_form_outputs_survive_as_real_type_references(self):
+        from neograph import dump_spec
+
+        payload = dump_spec(self._agent_pipeline())
+        agent = next(n for n in payload["nodes"] if n["name"] == "agent")
+
+        assert agent["outputs"] == {"result": "Finding", "tool_log": "[LogEntry]"}, (
+            f"the agent's output contract did not survive: {agent['outputs']!r}"
+        )
+
+    def test_both_output_models_reach_the_types_map(self):
+        """A viewer must be able to render what the node returns, which means
+        the element model of the tool log too."""
+        from neograph import dump_spec
+
+        types = dump_spec(self._agent_pipeline())["types"]
+
+        assert "Finding" in types
+        assert "LogEntry" in types, f"the list element model is missing: {sorted(types)}"
+
+    def test_the_agent_shape_produces_no_losses_at_all(self):
+        from neograph import dump_spec
+
+        losses = dump_spec(self._agent_pipeline())["neograph/losses"]
+
+        assert losses == [], f"the canonical agent shape still reports losses: {losses}"
+
+    def test_strict_no_longer_refuses_the_canonical_agent_shape(self):
+        """strict=True refusing every tool-binding pipeline made the flag useless."""
+        from neograph import dump_spec
+
+        payload = dump_spec(self._agent_pipeline(), strict=True)
+
+        assert payload["nodes"]
+
+    def test_generic_annotations_resolve_rather_than_becoming_sentinels(self):
+        """``list[X]`` / ``dict[str, X]`` / ``X | None`` -- the shapes the GH #8
+        fix already taught describe_type to render."""
+        from neograph import dump_spec
+
+        register_scripted("gen_a", lambda _in, _cfg: Claim(text="c"))
+        register_scripted("gen_b", lambda _in, _cfg: Finding(note="n"))
+        seed = Node.scripted("seed", fn="gen_a", outputs=Claim)
+        wide = Node.scripted(
+            "wide",
+            fn="gen_b",
+            inputs=Claim,
+            outputs={
+                "as_list": list[LogEntry],
+                "as_map": dict[str, LogEntry],
+                "as_opt": Finding | None,
+            },
+        )
+        payload = dump_spec(Construct("wide-c", nodes=[seed, wide]))
+        node = next(n for n in payload["nodes"] if n["name"] == "wide")
+
+        assert node["outputs"] == {
+            "as_list": "[LogEntry]",
+            "as_map": "{str: LogEntry}",
+            "as_opt": "Finding?",
+        }, node["outputs"]
+        assert payload["neograph/losses"] == []
+
+
+class TestAgentShapeRoundTrips:
+    """Widening the loader for dict-form outputs opened a half-working reload:
+    ``"Finding"`` resolved but ``"[LogEntry]"`` did not. A loader that accepts
+    half of what the dumper emits is a worse seam than a documented one-way
+    dump, so ``_resolve_type_ref`` inverts the container notation."""
+
+    def test_dict_form_outputs_survive_a_full_round_trip(self):
+        from neograph import dump_spec, load_spec, register_type
+
+        register_scripted("rt_seed", lambda _in, _cfg: Claim(text="c"))
+        register_scripted("rt_agent", lambda _in, _cfg: Finding(note="n"))
+        for name, cls in (("Claim", Claim), ("Finding", Finding), ("LogEntry", LogEntry)):
+            register_type(name, cls)
+
+        original = {"result": Finding, "tool_log": list[LogEntry]}
+        pipeline = Construct(
+            "rt",
+            nodes=[
+                Node.scripted("seed", fn="rt_seed", outputs=Claim),
+                Node.scripted("agent", fn="rt_agent", inputs=Claim, outputs=original),
+            ],
+        )
+
+        payload = dump_spec(pipeline)
+        spec = {k: v for k, v in payload.items() if k != "neograph/losses"}
+        rebuilt = load_spec(spec)
+
+        assert rebuilt.nodes[1].outputs == original

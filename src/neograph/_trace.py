@@ -26,6 +26,8 @@ inert, so there is zero runtime cost.
 
 from __future__ import annotations
 
+from typing import Any
+
 from langchain_core.runnables import Runnable
 
 #: Tag stamped on every neograph graph-node span so backends can filter to
@@ -73,6 +75,40 @@ def named(
         metadata["neograph_node_id"] = node_id
 
     return runnable.with_config(run_name=name, tags=tags, metadata=metadata)
+
+
+def add_traced_node(
+    graph: Any,
+    name: str,
+    runnable: Any,
+    *,
+    mode: str,
+    output_type: str | None = None,
+    subgraph_meta: dict[str, str] | None = None,
+    **add_node_kwargs: Any,
+) -> None:
+    """``graph.add_node`` with the right naming strategy for this runnable.
+
+    ONE decision point for the whole compiler. Whether a graph node may be
+    config-bound is not a property of the wiring path -- it is a property of
+    WHAT IS INSIDE the runnable -- so the choice belongs here rather than being
+    re-made at each of the ~6 ``named()`` call sites. It was re-made per site
+    before, and two of them (Each and Oracle) were missed when the others were
+    fixed, which is the whole reason this function exists.
+
+    * ``subgraph_meta`` given -- the runnable holds a compiled Pregel. Adding the
+      node UNBOUND keeps LangGraph able to walk into it; the metadata rides
+      ``add_node(metadata=...)`` instead of the binding. Callers know this
+      statically: they are inside the ``isinstance(item, Construct)`` branch.
+    * ``subgraph_meta`` omitted -- an ordinary wrapper. Bind it via
+      :func:`named` and keep the full run_name + tags + metadata.
+    """
+    if subgraph_meta is not None:
+        graph.add_node(name, runnable, metadata=subgraph_meta, **add_node_kwargs)
+        return
+    graph.add_node(
+        name, named(runnable, name, mode=mode, output_type=output_type), **add_node_kwargs
+    )
 
 
 def subgraph_metadata(name: str, output: type | None) -> dict[str, str]:

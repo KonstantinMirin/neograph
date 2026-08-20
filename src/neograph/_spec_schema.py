@@ -81,7 +81,10 @@ class NodeSpec(BaseModel):
     name: str
     mode: Literal["think", "agent", "act", "scripted", "raw"] = "scripted"
     inputs: str | dict[str, str] | None = None
-    outputs: str
+    # Dict form mirrors ``inputs`` above: the canonical tool-binding node
+    # declares ``{"result": Model, "tool_log": list[Entry]}``, which had no spec
+    # slot at all before (GH #9).
+    outputs: str | dict[str, str]
     prompt: str | None = None
     model: str | None = None
     scripted_fn: str | None = None
