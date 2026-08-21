@@ -1,4 +1,4 @@
-.PHONY: quality test lint typecheck fix live mcp examples website skipcheck release-gate
+.PHONY: quality test lint typecheck fix live mcp examples website skipcheck release-gate forward-port-check
 
 # Run all quality checks — tests, linter, type checker.
 # NOTE: live external checks (tests/test_observe_trace_live.py) SKIP here when
@@ -59,6 +59,15 @@ website:
 # in tests/skip_allowlist.txt (which is empty by design).
 skipcheck:
 	uv run python scripts/check_skips.py -m "not live"
+
+# Forward-port check — run on `develop` AFTER merging a release branch back.
+# A green test run cannot tell "the docs merged" from "the docs were discarded";
+# this asks the question the suite structurally cannot. Override the refs with
+# SOURCE=/TARGET= when porting between other branches.
+SOURCE ?= origin/main
+TARGET ?= HEAD
+forward-port-check:
+	uv run python scripts/check_forward_port.py --source $(SOURCE) --target $(TARGET)
 
 # THE RELEASE GATE — mandatory on merged `main` AFTER the merge and BEFORE the
 # tag.

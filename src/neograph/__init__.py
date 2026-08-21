@@ -19,6 +19,7 @@ sub-constructs), see Node and Construct directly.
 """
 
 from neograph._image import configure_image, resolve_image
+from neograph._lint_di import InputBinding, input_contract
 from neograph._llm import (
     CostCallback,
     LlmFactory,
@@ -185,6 +186,10 @@ __all__ = [
     # Lint
     "lint",
     "LintIssue",
+    # Input contract -- what a caller supplies, reported positively rather than
+    # as lint issues, so a correct graph lints to zero.
+    "input_contract",
+    "InputBinding",
     # Verify
     "verify_compiled",
     "VerifyIssue",
@@ -200,4 +205,4 @@ __all__ = [
     "RawNodeFn",
 ]
 
-__version__ = "0.7.8"
+__version__ = "0.7.9"

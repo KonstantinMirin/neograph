@@ -257,6 +257,30 @@ FromResource(uri: 'str | None' = None, *, ref: 'str | None' = None, mime: 'str |
 inject_schema(vars: 'dict[str, Any]', output_model: 'type[BaseModel] | None' = None, *, output_schema: 'str | None' = None, key: 'str' = 'json_schema') -> 'dict[str, Any]'
 ```
 
+### input_contract
+
+{/* test-skip: generated API signature (declaration, not runnable) */}
+```python
+input_contract(construct: 'Construct') -> 'list[InputBinding]'
+```
+
+### InputBinding
+
+{/* test-skip: generated API signature (declaration, not runnable) */}
+```python
+InputBinding(node_name: 'str', param: 'str', kind: 'str', source: 'str', type_name: 'str', required: 'bool', model_name: 'str | None' = None) -> None
+```
+
+| Field | Type | Required | Default |
+|-------|------|----------|---------|
+| <span id="inputbinding-node_name"></span>`node_name` | `str` | yes |  |
+| <span id="inputbinding-param"></span>`param` | `str` | yes |  |
+| <span id="inputbinding-kind"></span>`kind` | `str` | yes |  |
+| <span id="inputbinding-source"></span>`source` | `str` | yes |  |
+| <span id="inputbinding-type_name"></span>`type_name` | `str` | yes |  |
+| <span id="inputbinding-required"></span>`required` | `bool` | yes |  |
+| <span id="inputbinding-model_name"></span>`model_name` | `str | None` | no | `None` |
+
 ### JsonRenderer
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
@@ -636,6 +660,7 @@ XmlRenderer(*, include_field_info: "Literal['once', 'always', 'never']" = 'once'
 |------|----------|---------|
 | `act_mode_all_idempotent_tools` | WARN | `mode='act'` (mutations) but all tools are `idempotent=True` (read-only) -- probably a misclassification; use `mode='agent'` unless a tool is a genuinely idempotent mutation. |
 | `ask_human_in_mutating_node` | WARN | An `act`-mode (mutating) tool calls `ask_human()`; a non-idempotent side effect before the mid-loop pause can double-fire on resume. Make any pre-pause mutation idempotent, or move it after the pause. |
+| `config_key_unmatched` | ERROR | A key in the `config=` passed to `lint()` that matches no DI binding in the construct, so nothing reads it. A key accepted because it is present rather than because a binding names it is how a padded config silences a real unsatisfiable binding: the linter then agrees with a description of the world it was handed, not with the graph. |
 | `from_config` | varies | `Annotated[T, FromConfig]` -- resolved from `config['configurable']`, passed directly in `config=`. |
 | `from_config_model` | varies | Bundled `BaseModel` via `FromConfig` -- each model field must exist in config. |
 | `from_input` | varies | `Annotated[T, FromInput]` -- resolved from `config['configurable']`, originally from `run(input={...})`. |
