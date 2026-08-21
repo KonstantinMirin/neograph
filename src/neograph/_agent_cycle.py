@@ -35,7 +35,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, NoReturn, cast
 
 import structlog
@@ -69,6 +69,7 @@ from neograph._tool_loop import (
     _unparseable_args_raw,
 )
 from neograph.describe_type import type_display_name
+from neograph.di import read_upstream
 from neograph.errors import ConfigurationError
 from neograph.naming import field_name_for
 from neograph.node import Node, TypeSpecStatic
@@ -109,6 +110,9 @@ class _TurnPrep:
     output_model: Any
     effective_model: str
     effective_renderer: Any
+    # {tool_name: {arg: value}} -- the framework-owned tool arguments, resolved
+    # ONCE per turn in the shared pre-prep so the twins cannot resolve differently.
+    bound_args: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def _turn_prep_kwargs(
@@ -117,10 +121,11 @@ def _turn_prep_kwargs(
     tool_factory_lookup: dict[str, Callable],
     state: BaseModel,
     config: RunnableConfig,
-) -> tuple[dict[str, Any], Any, str, Any]:
+) -> tuple[dict[str, Any], Any, str, Any, dict[str, dict[str, Any]]]:
     """Shared pre-prep for both turn-prep twins: extract + render input, resolve
     the generation type, and assemble the kwargs passed to (a)prepare_tool_loop.
-    Returns (prepare_kwargs, gen_type, effective_model, effective_renderer).
+    Returns (prepare_kwargs, gen_type, effective_model, effective_renderer,
+    bound_args).
 
     ``config`` MUST already carry the di_inputs injection — each twin runs its own
     driver-matched injector (sync ``_inject_di_inputs`` / async ``_ainject_di_inputs``)
@@ -131,6 +136,7 @@ def _turn_prep_kwargs(
     raw_input = _extract_input(bus, node)
     rendered = _render_input(node, raw_input, runtime=runtime)
     context = _extract_context(bus, node)
+    bound_args = _resolve_bound_args(node, bus)
 
     output_model, primary_key = _resolve_primary_output(node)
     no = normalize_outputs(node.outputs)
@@ -154,7 +160,7 @@ def _turn_prep_kwargs(
         "context": context,
         "tool_factory_lookup": tool_factory_lookup,
     }
-    return prepare_kwargs, gen_type, effective_model, effective_renderer
+    return prepare_kwargs, gen_type, effective_model, effective_renderer, bound_args
 
 
 def _build_turn_prep(
@@ -171,12 +177,16 @@ def _build_turn_prep(
     # Sync injector: fails loud on a FROM_RESOURCE template var (its fetch is
     # awaited); resolves FromInput/FromConfig into config before _compile_prompt.
     config = _inject_di_inputs(node, config)
-    prepare_kwargs, gen_type, effective_model, effective_renderer = _turn_prep_kwargs(
+    prepare_kwargs, gen_type, effective_model, effective_renderer, bound_args = _turn_prep_kwargs(
         node, runtime, tool_factory_lookup, state, config
     )
     prep = _prepare_tool_loop(**prepare_kwargs)
     return _TurnPrep(
-        prep=prep, output_model=gen_type, effective_model=effective_model, effective_renderer=effective_renderer
+        prep=prep,
+        output_model=gen_type,
+        effective_model=effective_model,
+        effective_renderer=effective_renderer,
+        bound_args=bound_args,
     )
 
 
@@ -193,12 +203,16 @@ async def _abuild_turn_prep(
     # Async injector twin: awaits FROM_RESOURCE bindings so a fetched resource's
     # text reaches the cycle's _compile_prompt as a template var. See neograph-3q6j.
     config = await _ainject_di_inputs(node, config)
-    prepare_kwargs, gen_type, effective_model, effective_renderer = _turn_prep_kwargs(
+    prepare_kwargs, gen_type, effective_model, effective_renderer, bound_args = _turn_prep_kwargs(
         node, runtime, tool_factory_lookup, state, config
     )
     prep = await _aprepare_tool_loop(**prepare_kwargs)
     return _TurnPrep(
-        prep=prep, output_model=gen_type, effective_model=effective_model, effective_renderer=effective_renderer
+        prep=prep,
+        output_model=gen_type,
+        effective_model=effective_model,
+        effective_renderer=effective_renderer,
+        bound_args=bound_args,
     )
 
 
@@ -380,10 +394,68 @@ def _raise_sync_tool_async(node_name: str, tool_name: str, exc: Exception) -> No
     ) from exc
 
 
+def _resolve_bound_args(node: Node, bus: Any) -> dict[str, dict[str, Any]]:
+    """``{tool_name: {arg: value}}`` for every ``Tool.bound_args`` on *node*.
+
+    Resolved ONCE per turn from state, so a path is read at the point the run
+    reached rather than per tool call. A dotted path navigates the resolved
+    VALUE after the first segment, matching how ``Each(over=...)`` reads its
+    collection -- one navigation rule, not two.
+    """
+    bound: dict[str, dict[str, Any]] = {}
+    for tool_spec in node.tools or []:
+        # A raw LangChain BaseTool carries no neograph declaration, so there is
+        # nothing to bind on it.
+        bindings = getattr(tool_spec, "bound_args", None)
+        if not bindings:
+            continue
+        resolved: dict[str, Any] = {}
+        for arg_name, path in bindings.items():
+            root, _, rest = path.partition(".")
+            # read_upstream, not bus.get: reading an upstream is a RULE, not a
+            # line -- it unwraps a Loop append-list and an Each result dict.
+            # A bound argument off a Loop-modified producer would otherwise
+            # resolve to the whole history rather than the latest value, which
+            # is the half-rule failure that guard exists to stop.
+            # required=False: assembly already proved the root has a producer,
+            # so absence here means an untaken branch arm, not a wiring bug.
+            value = read_upstream(
+                bus, root, object, required=False, node_label=getattr(node, "name", "")
+            )
+            for part in rest.split(".") if rest else []:
+                if value is None:
+                    break
+                value = getattr(value, part, None)
+            resolved[arg_name] = value
+        bound[getattr(tool_spec, "name", "")] = resolved
+    return bound
+
+
+def _apply_bound_args(tc: dict, bound_by_tool: dict[str, dict[str, Any]]) -> None:
+    """Overwrite the framework-owned arguments the model composed.
+
+    Applied inside the pre-invoke check so BOTH twins get it from one site --
+    the sync and async invoke calls are two sinks and a fix at each would drift.
+    It must also land BEFORE ``_idempotent_repeat_key`` reads ``tc["args"]``,
+    or two calls differing only in an overridden argument collapse in the repeat
+    cache: a correctness fix turning into a caching bug.
+
+    Arguments not named in ``bound_args`` are left exactly as the model wrote
+    them.
+    """
+    bound = bound_by_tool.get(tc.get("name", ""))
+    if not bound:
+        return
+    args = tc.get("args")
+    if isinstance(args, dict):
+        args.update(bound)
+
+
 def _tool_call_precheck(
     tc: dict,
     tracker: ToolBudgetTracker,
     tool_instances: dict,
+    bound_by_tool: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[str, Any]:
     """Pure pre-invoke check for one tool call. Returns ``("msg", ToolMessage)``
     to short-circuit (unparseable args / budget exhausted / unknown tool) or
@@ -412,6 +484,10 @@ def _tool_call_precheck(
     tool_fn = tool_instances.get(name)
     if tool_fn is None:
         return "msg", ToolMessage(content=f"Unknown tool: {name}", tool_call_id=tc["id"])
+    # Last thing before the call is cleared to run, and before the caller takes
+    # the repeat key: a framework-owned argument is not the model's to choose.
+    if bound_by_tool:
+        _apply_bound_args(tc, bound_by_tool)
     return "run", tool_fn
 
 
@@ -658,7 +734,7 @@ def make_agent_cycle_bodies(
         interactions: list = []
         refs: list = []
         for tc in tool_calls:
-            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances)
+            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances, tp.bound_args)
             if kind == "msg":
                 new_msgs.append(payload)
                 continue
@@ -699,7 +775,7 @@ def make_agent_cycle_bodies(
         plan: list[tuple[str, Any]] = []  # ("msg", ToolMessage) | ("run", tc)
         coros = []
         for tc in tool_calls:
-            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances)
+            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances, tp.bound_args)
             if kind == "msg":
                 plan.append(("msg", payload))
                 continue
