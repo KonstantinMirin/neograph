@@ -520,7 +520,14 @@ def node(
         ):
             # Explicit outputs= AND return annotation — must match.
             # Dict-form outputs= is exempt (multi-output, annotation is partial).
-            if outputs is not ret_hint:
+            #
+            # EQUALITY, never identity. Every evaluation of a subscripted
+            # generic builds a fresh types.GenericAlias, so `list[X] is
+            # list[X]` is False while `==` is True. A plain class compares
+            # equal by identity anyway, which is why only generics broke --
+            # and they broke precisely when the author did the more correct
+            # thing and annotated the return type.
+            if outputs != ret_hint:
                 out_name = type_display_name(outputs)
                 ret_name = type_display_name(ret_hint)
                 raise ConstructError.build(

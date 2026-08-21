@@ -48,6 +48,20 @@ def type_display_name(t: TypeSpecStatic) -> str:
 
     if t is type(None):
         return "None"
+
+    # A subscripted generic must render its PARAMETER. `__name__` is the bare
+    # origin -- "list" for list[Claims] -- so trusting it produced messages that
+    # said `expected: list, found: list`, telling the author that list differs
+    # from list. The parameter is the entire information the message carries.
+    # Recurses, so list[dict[str, Claims]] renders in full, and reuses the union
+    # branch above for a member like Claims | None.
+    origin = get_origin(t)
+    if origin is not None:
+        args = get_args(t)
+        if args:
+            rendered = ", ".join("..." if a is Ellipsis else type_display_name(a) for a in args)
+            return f"{type_display_name(origin)}[{rendered}]"
+
     return getattr(t, "__name__", str(t))
 
 

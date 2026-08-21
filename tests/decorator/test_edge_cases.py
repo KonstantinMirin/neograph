@@ -1067,3 +1067,63 @@ class TestNodeImmutabilityDuringAssembly:
         assert verify.fan_out_param == original_fan_out, (
             f"Node.fan_out_param was mutated during assembly. Before: {original_fan_out}, After: {verify.fan_out_param}"
         )
+
+
+class TestGenericOutputsMatchTheirAnnotation:
+    """`outputs=list[X]` with a matching `-> list[X]` is accepted.
+
+    The comparison used `is not` -- IDENTITY -- and every evaluation of a
+    subscripted generic builds a fresh `types.GenericAlias`:
+
+        list[Reading] is  list[Reading]   -> False
+        list[Reading] ==  list[Reading]   -> True
+        Reading       is  Reading         -> True    <- why only generics broke
+
+    So declaration, storage and downstream binding already handled `list[X]`;
+    only the equality check did not, and it fired precisely when the author did
+    the MORE correct thing and annotated the return type (GH #14).
+    """
+
+    @staticmethod
+    def _shapes():
+        """Container shapes an author can legitimately declare."""
+        return [
+            ("list", list[Claims]),
+            ("dict", dict[str, Claims]),
+            ("tuple", tuple[Claims, ...]),
+            ("optional", Claims | None),
+            ("nested", list[dict[str, Claims]]),
+            ("plain", Claims),
+        ]
+
+    @pytest.mark.parametrize("label,declared", _shapes.__func__())
+    def test_a_matching_generic_pair_is_accepted(self, label, declared):
+        """Parametrized over every shape, because proving one and generalising
+        is what produced the bug family this belongs to."""
+
+        @node(outputs=declared)
+        def emits(topic: str) -> declared: ...
+
+        assert emits.outputs == declared, f"{label}: outputs did not survive as {declared}"
+
+    def test_a_genuinely_mismatched_generic_pair_still_raises(self):
+        """The check must keep doing its job: `==` is not `always True`."""
+
+        with pytest.raises(ConstructError, match="differs from return annotation"):
+
+            @node(outputs=list[Claims])
+            def emits(topic: str) -> list[RawText]: ...
+
+    def test_the_mismatch_message_names_both_element_types(self):
+        """`expected: list, found: list` tells the author that list differs from
+        list, which is unactionable. The parameter is the whole information."""
+
+        with pytest.raises(ConstructError) as exc:
+
+            @node(outputs=list[Claims])
+            def emits(topic: str) -> list[RawText]: ...
+
+        message = str(exc.value)
+        assert "Claims" in message and "RawText" in message, (
+            f"the element types are not named: {message}"
+        )
