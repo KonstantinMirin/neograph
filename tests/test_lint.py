@@ -1349,3 +1349,221 @@ class TestPaddedConfigKeysAreRejected:
         issues = lint(self._graph(), config={"question": "q", "node_id": "n", "project_root": "/p"})
 
         assert [i for i in issues if i.kind == "config_key_unmatched"] == []
+
+
+class TestOutputFieldFrameworkConsumers:
+    """A field the FRAMEWORK reads is not dead.
+
+    The GH #11 check derived three consumer axes -- a downstream node input, a
+    dotted template placeholder, and the terminal projection -- and none of them
+    sees a reader that is the framework itself. Found by running lint() over the
+    whole should_pass check-fixture corpus rather than over the examples: 18
+    reports on graphs the fixture suite calls correct.
+
+    Every reader below is DECLARED, by name, in the IR the check already walks.
+    """
+
+    def _lint_fixture(self, stem: str):
+        """Lint the should_pass fixture *stem* and return its output kinds."""
+        import importlib.util
+        import pathlib
+        import sys
+
+        from neograph import Construct
+        from neograph.lint import lint
+
+        path = pathlib.Path(__file__).parent / "check_fixtures" / "should_pass" / f"{stem}.py"
+        spec = importlib.util.spec_from_file_location(f"_lintfix_{stem}", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+            construct = next(v for v in vars(module).values() if isinstance(v, Construct))
+            return [i for i in lint(construct) if i.kind == "output_field_unconsumed"]
+        finally:
+            sys.modules.pop(spec.name, None)
+
+    def test_a_portal_dispatch_reads_its_declared_spec_and_input_fields(self):
+        """`Portal(spec_field='spec', input_field='dispatch_input')` names both
+        readers in the modifier itself."""
+        dead = {i.param for i in self._lint_fixture("portal_dispatch_route_to_error")}
+
+        assert dead == set(), f"fields a Portal declares by name reported dead: {dead}"
+
+    def test_a_portal_mesh_reads_its_routing_field(self):
+        """`Portal.route` defaults to 'goto' and IS the field the mesh routes on."""
+        dead = {i.param for i in self._lint_fixture("portal_mesh_minimal")}
+
+        assert dead == set(), f"the mesh routing field reported dead: {dead}"
+
+    def test_an_each_reads_the_field_its_over_names(self):
+        """`Each(over='clusters.groups')` reads field `groups` of `clusters`."""
+        dead = {i.param for i in self._lint_fixture("list_consumer_of_each")}
+
+        assert dead == set(), f"the field Each fans over reported dead: {dead}"
+
+    def test_a_branch_condition_and_a_boundary_output_are_consumers(self):
+        """The branch condition's `attr_chain` reads `text`, and `value` is the
+        sub-construct's declared `output=` surfacing to the parent."""
+        dead = {i.param for i in self._lint_fixture("branch_output_boundary_every_arm")}
+
+        assert dead == set(), f"a branch-condition read or a boundary output reported dead: {dead}"
+
+    def test_an_optional_single_type_input_still_consumes_the_model(self):
+        """`inputs=Claims | None` is a single-type input wearing a union."""
+        dead = {i.param for i in self._lint_fixture("type_optional_consumer")}
+
+        assert dead == set(), f"an Optional-wrapped consumer was not seen: {dead}"
+
+    def test_a_sub_construct_inside_a_branch_arm_is_descended_into(self):
+        """The arm descent, proven rather than assumed.
+
+        Deleting the arm expansion left every other test green, because no
+        corpus fixture puts anything inside an arm that the derivation must
+        look through -- the exact shape of proving one placement and
+        generalising to the rest.
+
+        A modifier-carrying NODE cannot be in an arm at all: assembly raises
+        `ConstructError` ("arm items are wired without any modifier dispatch")
+        and directs the author to wrap it in a sub-Construct. So the arm
+        descent exists for that sub-Construct, which carries both its own
+        boundary output and any modifier inside it.
+        """
+        from neograph import Construct, Each, Node
+        from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
+        from neograph._lint_consumers import _framework_field_reads
+        from tests.fakes import register_scripted
+
+        class Seed(BaseModel, frozen=True):
+            flag: str
+
+        class Bundle(BaseModel, frozen=True):
+            rows: list[str]
+
+        class Row(BaseModel, frozen=True):
+            label: str
+
+        register_scripted("armd_seed", lambda i, c: Seed(flag="go"))
+        register_scripted("armd_bundle", lambda i, c: Bundle(rows=["a"]))
+        register_scripted("armd_row", lambda i, c: Row(label="a"))
+
+        seed = Node.scripted("seed", fn="armd_seed", outputs=Seed)
+        # The Each lives inside a sub-Construct, which is what an arm may hold.
+        arm_sub = Construct(
+            "arm-sub",
+            nodes=[
+                Node.scripted("bundle", fn="armd_bundle", outputs=Bundle),
+                Node.scripted("fan", fn="armd_row", inputs=str, outputs=Row)
+                | Each(over="bundle.rows", key="label"),
+                Node.scripted("collect", fn="armd_row", inputs={"fan": list[Row]}, outputs=Row),
+            ],
+            output=Row,
+        )
+        meta = _BranchMeta(
+            condition_spec=_ConditionSpec(
+                source_node=seed,
+                attr_chain=["flag"],
+                op_fn=lambda v, _t: bool(v),
+                op_str="route",
+                threshold=None,
+            ),
+            true_arm_nodes=[arm_sub],
+            false_arm_nodes=[Node.scripted("alt", fn="armd_row", outputs=Row)],
+        )
+        construct = Construct("arm-descent", nodes=[seed, _BranchNode(meta, 0)])
+
+        field_reads, whole_roots = _framework_field_reads(construct)
+
+        assert ("bundle", "rows") in field_reads, (
+            f"an Each inside an arm's sub-construct did not register `over`: {field_reads}"
+        )
+        assert ("seed", "flag") in field_reads, "the branch condition's own read is missing"
+        assert "collect" in whole_roots, "the arm sub-construct's boundary producer was not seen"
+
+    # The residue after this fix, pinned BY NAME so a new false positive shows up
+    # as a new entry rather than as a number nobody reads. Every one is a TRUE
+    # positive: the consumer is an LLM-mode node whose prompt is the stub
+    # `"test"`, which names nothing, so the input genuinely never reaches the
+    # model. That is exactly what the check is for, and it is why the kind is
+    # WARN -- a custom prompt_compiler may render an input the template omits.
+    KNOWN_STUB_PROMPT_FIXTURES = {
+        "node_modifier_kwarg_parity.py": {"label", "ok"},
+        "oracle_over_agent_multiple_inputs.py": {"a", "b"},
+        "oracle_over_agent_with_inputs.py": {"text"},
+    }
+
+    @staticmethod
+    def _corpus_reports():
+        """Every output_field_unconsumed report across the should_pass corpus."""
+        import importlib.util
+        import pathlib
+        import sys
+
+        from neograph import Construct
+        from neograph.lint import lint
+
+        root = pathlib.Path(__file__).parent / "check_fixtures" / "should_pass"
+        sys.path.insert(0, str(root))
+        reports: dict[str, list] = {}
+        try:
+            for path in sorted(root.glob("*.py")):
+                spec = importlib.util.spec_from_file_location(f"_corpus_{path.stem}", path)
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[spec.name] = module
+                try:
+                    spec.loader.exec_module(module)
+                except Exception:
+                    continue
+                finally:
+                    sys.modules.pop(spec.name, None)
+                constructs = [v for v in vars(module).values() if isinstance(v, Construct)]
+                if not constructs:
+                    continue
+                try:
+                    issues = lint(constructs[0])
+                except Exception:
+                    continue
+                dead = [i for i in issues if i.kind == "output_field_unconsumed"]
+                if dead:
+                    reports[path.name] = [(constructs[0], i) for i in dead]
+        finally:
+            sys.path.remove(str(root))
+        return reports
+
+    def test_no_corpus_report_names_a_field_the_framework_reads(self):
+        """The capstone, and the actual claim -- the corpus is NOT clean, and
+        asserting that it is would have to be walked back the first time a
+        fixture legitimately reported.
+
+        What must hold is narrower and checkable: no report names a field whose
+        reader is the framework. That is the bug class, and it stays pinned as a
+        property rather than as a count.
+        """
+        from neograph._lint_consumers import _framework_field_reads
+
+        offenders = []
+        for fixture, entries in self._corpus_reports().items():
+            for construct, issue in entries:
+                field_reads, whole_roots = _framework_field_reads(construct)
+                read_fields = {field for _, field in field_reads}
+                if issue.param in read_fields or issue.node_name in whole_roots:
+                    offenders.append((fixture, issue.node_name, issue.param))
+
+        assert offenders == [], (
+            f"{len(offenders)} report(s) name a field the framework itself reads: {offenders}"
+        )
+
+    def test_the_corpus_residue_is_exactly_the_known_stub_prompt_set(self):
+        """Ratchet. 18 reports before this fix, 5 after, and those 5 are true
+        positives on fixtures whose prompt is a stub. A NEW entry here means a
+        new blind spot, not a bigger number."""
+        actual = {
+            fixture: {issue.param for _, issue in entries}
+            for fixture, entries in self._corpus_reports().items()
+        }
+
+        assert actual == self.KNOWN_STUB_PROMPT_FIXTURES, (
+            f"corpus dead-field reports changed.\n  expected: {self.KNOWN_STUB_PROMPT_FIXTURES}\n"
+            f"  actual:   {actual}\n"
+            f"A NEW fixture here is a false positive to fix, not a line to add."
+        )

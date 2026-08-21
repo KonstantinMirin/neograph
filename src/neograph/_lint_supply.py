@@ -9,33 +9,29 @@ asks the pipeline author for an annotation:
 
 - ``_check_unreferenced_inputs`` -- a bound input, DI parameter, or context
   field that the node's own template never names (GH #10).
-- ``_check_unconsumed_outputs`` -- a produced field that nothing reads (GH #11).
+
+``_check_unconsumed_outputs`` (GH #11) moved to ``_lint_consumers`` when this
+file crossed its size ceiling; the two split along the seam the checks already
+had -- supply here, demand there.
 - ``_check_unsatisfiable_di`` -- a ``FromInput`` bound to an Each item or a Loop
   carry, which no caller can satisfy (GH #12).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
-from pydantic import BaseModel
-
-from neograph._ir_branch import iter_with_arms
 from neograph._lint_kind_registry import LintIssue
 from neograph._lint_predict import (
     _di_resource_template_var_names,
     _di_template_var_names,
-    _extract_format_placeholders,
     _get_flattened_field_names,
 )
 from neograph._normalize import normalize_inputs, normalize_outputs
-from neograph._placeholders import DOLLAR_RE as _PLACEHOLDER_RE
 from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.di import DI_TEMPLATE_KINDS
 from neograph.modifiers import classify_modifiers
-from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
 
@@ -131,174 +127,6 @@ def _unwrap_sequence(annotation: Any) -> Any:
         if args:
             return args[0]
     return annotation
-
-
-def _template_roots(node: Node, template_resolver: Any) -> set[str]:
-    """Every ROOT name a node's template references, dotted or bare."""
-    prompt = node.prompt
-    if not prompt or node.mode == "scripted":
-        return set()
-    if " " in prompt or "${" in prompt:
-        placeholders = _PLACEHOLDER_RE.findall(prompt)
-    else:
-        if template_resolver is None:
-            return set()
-        text = template_resolver(prompt)
-        if text is None:
-            return set()
-        placeholders = _extract_format_placeholders(text)
-    return {p.split(".")[0] for p in placeholders}
-
-
-def _dotted_field_reads(node: Node, template_resolver: Any) -> set[tuple[str, str]]:
-    """``(root, field)`` pairs a node's template reads, e.g. ``${triage.severity}``.
-
-    The only FIELD-granular consumer axis. The other two -- a downstream node
-    taking the whole model, and the terminal projection -- consume at model
-    granularity.
-    """
-    prompt = node.prompt
-    if not prompt or node.mode == "scripted":
-        return set()
-
-    if " " in prompt or "${" in prompt:
-        placeholders = _PLACEHOLDER_RE.findall(prompt)
-    else:
-        if template_resolver is None:
-            return set()
-        text = template_resolver(prompt)
-        if text is None:
-            return set()
-        placeholders = _extract_format_placeholders(text)
-
-    reads: set[tuple[str, str]] = set()
-    for placeholder in placeholders:
-        # `${image:seed.photo}` reads field `photo` of `seed`. The `image:`
-        # prefix is a rendering directive, not part of the name, and
-        # `_placeholder_root` already strips it -- both readers must agree or a
-        # referenced field looks unread.
-        body = placeholder.split(":", 1)[1] if placeholder.startswith("image:") else placeholder
-        parts = body.split(".")
-        if len(parts) >= 2:
-            reads.add((parts[0], parts[1]))
-    return reads
-
-
-def _check_unconsumed_outputs(
-    construct: Construct,
-    issues: list[LintIssue],
-    *,
-    template_resolver: Callable[[str], str | None] | None = None,
-) -> None:
-    """Report an output field that nothing in the graph reads (GH #11).
-
-    Construct-level, not per-node: a field is dead only when EVERY consumer axis
-    misses it, so the decision needs the whole graph. Three axes:
-
-    1. A downstream node input. A consumer declaring ``triage: Triage`` receives
-       the whole model, and which fields its body reads is not derivable, so
-       whole-model consumption marks every field consumed. This over-approximates
-       deliberately: the opposite flags every scripted consumer in every pipeline.
-    2. A dotted template placeholder. ``${triage.severity}`` reads one field, and
-       this is the axis that gives the check its resolution.
-    3. The terminal projection. The last node's output is the graph's output.
-
-    Deriving fewer axes reports false cleanliness, which is worse than reporting
-    nothing, because a guard that cannot fire is evidence of nothing.
-    """
-    members = list(iter_with_arms(construct))
-    nodes = [n for n in members if isinstance(n, Node)]
-    if not nodes:
-        return
-    # The LAST member is the terminal, whether it is a Node or a sub-construct.
-    # When a sub-construct is last, no leaf node is terminal.
-    terminal = members[-1].name if members else None
-
-    # A member sub-construct consumes its port BY TYPE: `_scan_subgraph_input`
-    # matches any upstream value whose type is the declared `input=`. It is not a
-    # Node, so filtering to Node alone makes it invisible as a consumer and every
-    # producer feeding it looks dead.
-    port_types = {
-        m.input
-        for m in members
-        if isinstance(m, Construct) and isinstance(m.input, type)
-    }
-
-    consumed_whole: set[str] = set()
-    consumed_fields: set[tuple[str, str]] = set()
-    consumed_types: set[type] = set()
-
-    for node in nodes:
-        inputs = normalize_inputs(node.inputs)
-        declared_names: set[str] = set()
-        if inputs.is_dict_form:
-            declared_names = set(inputs.by_name)
-        elif not inputs.is_none and isinstance(inputs.single_type, type):
-            # A single-type input is resolved by TYPE at runtime, not by the
-            # producer's name.
-            declared_names = {inputs.single_type.__name__}
-            consumed_types.add(inputs.single_type)
-
-        if node.mode == "scripted" or not node.prompt:
-            # A scripted body can read any field, and which ones is not
-            # derivable, so taking the model consumes all of it. The opposite
-            # would flag every scripted consumer in every pipeline.
-            consumed_whole |= declared_names
-            continue
-
-        # An LLM-mode body never runs, so the TEMPLATE is the only reader. A
-        # bare `${triage}` consumes the whole model; `${triage.severity}`
-        # consumes one field. This is the same reasoning that scopes the
-        # unreferenced-input check to LLM-mode nodes.
-        reads = _dotted_field_reads(node, template_resolver)
-        consumed_fields |= reads
-        dotted_roots = {root for root, _ in reads}
-        bare = _template_roots(node, template_resolver) - dotted_roots
-        consumed_whole |= declared_names & bare
-        if node.skip_when is not None:
-            # A skip predicate receives the extracted input dict, so it can read
-            # any field of it. Same opacity as a scripted body.
-            consumed_whole |= declared_names
-
-    for node in nodes:
-        if node.name == terminal:
-            continue
-        outputs = normalize_outputs(node.outputs)
-        for key, declared in (outputs.all_keys or {}).items() or (
-            {node.name: outputs.primary}.items() if outputs.primary is not None else ()
-        ):
-            if not (isinstance(declared, type) and issubclass(declared, BaseModel)):
-                continue
-            # `@node` kebab-cases the function name, while a consumer's PARAM
-            # keeps the underscore form. field_name_for owns that contract, so
-            # both sides are compared in the same form.
-            base = field_name_for(node.name)
-            root = base if key == node.name else output_field_name(base, key)
-            if root in consumed_whole or base in consumed_whole:
-                continue
-            if any(declared is t or issubclass(declared, t) for t in port_types):
-                continue
-            if any(declared is t or issubclass(declared, t) for t in consumed_types):
-                continue
-            for fname in declared.model_fields:
-                if (root, fname) in consumed_fields or (base, fname) in consumed_fields:
-                    continue
-                issues.append(
-                    LintIssue(
-                        node_name=node.name,
-                        param=fname,
-                        kind="output_field_unconsumed",
-                        required=False,
-                        message=(
-                            f"Node '{node.name}': output field '{fname}' of "
-                            f"{declared.__name__} has no consumer. No downstream "
-                            f"node takes the model, no template reads "
-                            f"${{{root}.{fname}}}, and this is not the graph's "
-                            f"terminal output. The field costs tokens on every "
-                            f"call and cannot affect the answer."
-                        ),
-                    )
-                )
 
 
 def _placeholder_root(placeholder: str) -> str:

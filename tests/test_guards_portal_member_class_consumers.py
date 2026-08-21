@@ -147,6 +147,14 @@ EXEMPT_FILES: dict[str, str] = {
     # verdict about a specific PRODUCT, never to name a member class. Migrating
     # it would be a category error (dgbqv.3 disease-scan row 9).
     "modifiers.py": "pair-legality (_DYNAMIC_RULES), the jtawq.3/P3 axis -- not a member-class question",
+    # The lint framework-consumer derivation reads is_dispatch to know WHICH
+    # attribute holds a field NAME -- spec_field/input_field in dispatch mode,
+    # route in peer mode. The answer is a string to look up in the node's own
+    # output model, never a member class, and the two peer-mode member classes
+    # are indistinguishable to it: both name their routing field the same way.
+    # Migrating it to portal_member_class would be a category error, the same
+    # one modifiers.py is exempt for.
+    "_lint_consumers.py": "which Portal attribute names an output field -- not a member-class question",
 }
 
 #: Site-level exemptions inside MIGRATED files, keyed

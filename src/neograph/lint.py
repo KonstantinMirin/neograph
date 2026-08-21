@@ -21,6 +21,7 @@ import structlog
 
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
+from neograph._lint_consumers import _check_unconsumed_outputs
 from neograph._lint_di import _check_binding, _check_unmatched_config_keys, iter_di_bindings
 
 # --- extracted clusters (neograph-3ffdg.10), re-exported so existing
@@ -39,7 +40,6 @@ from neograph._lint_predict import (  # noqa: E402,F401
     _resolve_return_type,
 )
 from neograph._lint_supply import (
-    _check_unconsumed_outputs,
     _check_unreferenced_inputs,
     _check_unsatisfiable_di,
     _placeholder_root,

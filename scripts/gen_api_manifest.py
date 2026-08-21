@@ -392,17 +392,20 @@ _DI_KIND_NAMES: frozenset[str] = frozenset(k.value for k in DI_TEMPLATE_KINDS)
 
 # neograph-3ffdg.10 split lint.py; LintIssue emission sites now live across the
 # lint cluster, so every walk over them must cover the whole set -- missing one
-# makes a real kind look unemitted. SINGLE SOURCE for the file list: the guard in
+# makes a real kind look unemitted. DERIVED, not listed: a hand-maintained tuple
+# is invisible to the next split, and `_lint_consumers.py`
+# proved it -- carving the output-consumer checks out of `_lint_supply.py` took
+# `output_field_unconsumed` out of the manifest while every list said it was
+# covered. SINGLE SOURCE for the file list: the guard in
 # tests/test_guards_api_manifest.py imports this tuple rather than repeating it,
 # while keeping its own independent AST walk as the cross-check.
-LINT_CLUSTER_MODULES = (
-    "lint.py",
-    "_lint_tool_checks.py",
-    "_lint_predict.py",
-    "_lint_kind_registry.py",
-    "_lint_supply.py",
-    "_lint_di.py",
-)
+def _lint_cluster_modules() -> tuple[str, ...]:
+    """Every module in the lint cluster: `lint.py` plus every `_lint_*.py`."""
+    src_dir = REPO_ROOT / "src" / "neograph"
+    return ("lint.py", *sorted(p.name for p in src_dir.glob("_lint_*.py")))
+
+
+LINT_CLUSTER_MODULES = _lint_cluster_modules()
 
 
 def _literal_kind_required_sites() -> dict[str, set[bool]]:

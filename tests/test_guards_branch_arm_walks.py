@@ -82,6 +82,14 @@ _ALLOWLIST: Counter = Counter(
         # Peer-field set for fan_out inference: intentionally TOP-LEVEL only
         # (arm-sibling fan-in unsupported; documented in normalize_ir).
         ("_ir_normalize.py", "for item in construct.nodes:"): 1,
+        # _lint_supply's framework-consumer derivation needs the _BranchNode
+        # SENTINEL itself: the branch condition's attr_chain is a field read,
+        # and iter_with_arms drops the sentinel that carries it, so through the
+        # arm-aware primitive that read is invisible and the field it reads gets
+        # reported dead (neograph-rwnz0). The walk expands each sentinel's arms
+        # inline, so arm nodes' own modifiers are still visited -- it is
+        # sentinel-aware, not arm-blind.
+        ("_lint_consumers.py", "for member in construct.nodes:"): 1,
         # Graph-build dispatch loop — already arm-aware (dispatches _BranchNode to
         # _add_branch_to_graph).
         ("compiler.py", "for item in construct.nodes:"): 1,
