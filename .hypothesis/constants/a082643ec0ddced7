@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph-release-0.7.9/src/neograph/_lint_di.py
+# hypothesis_version: 6.151.12
+
+['InputBinding', '_', '__name__', 'checkpoint_id', 'checkpoint_ns', 'config', 'config_key_unmatched', 'input', 'input_contract', 'run_id', 'run_name', 'thread_id']

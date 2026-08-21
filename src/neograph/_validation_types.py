@@ -245,11 +245,33 @@ def _loop_aware_compatible(producer: Producer, target: TypeSpecStatic) -> bool:
 
 
 def _extract_list_element(tp: TypeSpecStatic) -> TypeSpecStatic:
-    """If tp is list[X], Optional[list[X]], or list[X] | None, return X."""
+    """Element type of a homogeneous collection annotation, else ``None``.
+
+    Accepts ``list[X]``, ``tuple[X, ...]``, a fixed tuple whose members are all
+    ``X``, and any of those wrapped in ``Optional``/``X | None``.
+
+    ``tuple`` is included because a FROZEN pydantic model naturally uses tuple
+    fields -- ``list`` is mutable and defeats the freeze -- and refusing it made
+    the framework dictate a mutability choice inside the consumer's own domain
+    model, purely to satisfy a fan-out. The runtime never required a list:
+    ``_collect_each_items`` iterates ``list(obj)``, which takes any iterable.
+
+    A HETEROGENEOUS ``tuple[X, Y]`` still returns ``None``. It has no single
+    element type, so fanning over it is ambiguous -- widening must not collapse
+    into "accept any tuple".
+    """
     origin = get_origin(tp)
     if origin is list:
         args = get_args(tp)
         return args[0] if args else None
+    if origin is tuple:
+        args = get_args(tp)
+        if not args:
+            return None
+        members = [a for a in args if a is not Ellipsis]
+        if members and all(m == members[0] for m in members):
+            return members[0]
+        return None
     # Handle Union / Optional / X | None. `requires-python >= 3.11` guarantees
     # types.UnionType exists, so no hasattr guard needed.
     if origin is Union or origin is types.UnionType:

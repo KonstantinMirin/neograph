@@ -175,6 +175,18 @@ The plural/singular split reflects the structural difference: a Node can consume
 
 **@node decorator**: `@node(outputs={"result": X, "tool_log": list[ToolInteraction]})` passes through. Return annotation inference: `def f() -> X` infers `outputs=X` (single type). Parameters named `{upstream}_{output_key}` are resolved via `_resolve_dict_output_param` in `construct_from_module`.
 
+### A container output type is a first-class declaration
+
+`outputs=list[Reading]` is supported, and so is `dict[str, Reading]`. A node whose whole output IS a collection says so directly; nothing new needs to enter the domain model to give it something declarable.
+
+This was decided rather than inherited (`neograph-tp8dj`). Until 0.7.9 it was a road with three potholes and no signposts: the decorator compared `outputs=` to the return annotation by IDENTITY, so a matching `list[X]` pair was rejected; the json_mode parse tail called `model_validate_json`, which only a `BaseModel` SUBCLASS has, so the declaration failed at runtime on every row; and `outputs=list[X]` appeared zero times across every example, while `_llm_retry`'s bare-array auto-wrap catered specifically to the container-model idiom. All three are fixed and `examples/32_list_output_type.py` exercises the direct road end to end.
+
+**The container model is still right when the collection travels WITH something else** — a summary, a confidence, a cursor — or when the container is a domain concept you would have written anyway. `Each(over="node.items")` fans over its field, which is the shape examples 04, 10 and 17 use.
+
+**The failure mode to watch is minting one container PER NODE during a bug fix.** A downstream consumer measured seven such classes, four introduced while fixing something else, taking an agreed ten-class domain model to eighteen — and a reviewer asking when `RoundDelta` joined the ontology got the answer that it had not, it was minted to satisfy an output declaration. If the container is not a concept you would name on a whiteboard, declare the list.
+
+Both strategies accept a container type: `structured` through constrained decoding, `json_mode` through `TypeAdapter`. They must keep agreeing — a strategy that cannot parse a type the other accepts is the defect this section exists to prevent recurring.
+
 ### `Node.outputs` (plural) vs `Construct.output` (singular)
 
 Same pattern as inputs/input:

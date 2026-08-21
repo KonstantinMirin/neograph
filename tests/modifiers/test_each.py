@@ -1095,3 +1095,98 @@ class TestFlatRouterEmptyBypassWhenSourceAbsent:
         assert gen_calls == []
         assert summarize_calls == [[]]
         assert result["summarize"].final_text == "n=0"
+
+
+class TestEachOverATupleField:
+    """`Each` fans over a `tuple[X, ...]` field, not only `list[X]`.
+
+    A frozen pydantic domain model naturally uses tuple fields -- `list` is
+    mutable and defeats the freeze. Rejecting `tuple` forced a mutable `list`
+    into the consumer's domain model purely to satisfy the fan-out, which is
+    the framework dictating a mutability choice inside someone else's domain
+    (GH #14, section 5).
+
+    The runtime never needed this: `_collect_each_items` iterates `list(obj)`,
+    which accepts any iterable. The narrowing was validation-only.
+    """
+
+    from pydantic import BaseModel as _BM
+
+    class Claim(_BM, frozen=True):
+        text: str
+
+    class TupleSeed(_BM, frozen=True):
+        claims: tuple[TestEachOverATupleField.Claim, ...]
+
+    class Out(_BM, frozen=True):
+        ok: str
+
+    @staticmethod
+    def _pipeline(seed_model, payload):
+        register_scripted("tup_seed", lambda i, c: seed_model(claims=payload))
+        register_scripted("tup_fan", lambda i, c: TestEachOverATupleField.Out(ok=i.text))
+        return Construct(
+            "tuple-each",
+            nodes=[
+                Node.scripted("seed", fn="tup_seed", outputs=seed_model),
+                Node.scripted("fan", fn="tup_fan", inputs=TestEachOverATupleField.Claim, outputs=TestEachOverATupleField.Out)
+                | Each(over="seed.claims", key="text"),
+            ],
+        )
+
+    def test_a_tuple_field_assembles(self):
+        """The reported shape."""
+        payload = (self.Claim(text="a"), self.Claim(text="b"))
+
+        self._pipeline(self.TupleSeed, payload)  # must not raise
+
+    def test_a_tuple_field_actually_fans_out(self):
+        """Assembly is not the acceptance -- the fan must RUN, since the claim
+        is that the runtime never needed the narrowing."""
+        payload = (self.Claim(text="a"), self.Claim(text="b"))
+        graph = compile(self._pipeline(self.TupleSeed, payload), **build_test_compile_kwargs())
+
+        result = run(graph, input={"node_id": "t"})
+
+        assert set(result["fan"]) == {"a", "b"}, f"the tuple did not fan per item: {result['fan']}"
+
+    def test_a_heterogeneous_tuple_is_still_refused(self):
+        """`tuple[X, Y]` has no single element type, so fanning over it is
+        ambiguous. Widening must not become 'accept any tuple'."""
+        from pydantic import BaseModel
+
+        class Mixed(BaseModel, frozen=True):
+            claims: tuple[TestEachOverATupleField.Claim, int]
+
+        register_scripted("tup_mixed", lambda i, c: None)
+        register_scripted("tup_fan2", lambda i, c: TestEachOverATupleField.Out(ok="x"))
+
+        with pytest.raises(ConstructError, match="terminal field is not a collection"):
+            Construct(
+                "mixed-each",
+                nodes=[
+                    Node.scripted("seed", fn="tup_mixed", outputs=Mixed),
+                    Node.scripted("fan", fn="tup_fan2", inputs=TestEachOverATupleField.Claim, outputs=TestEachOverATupleField.Out)
+                    | Each(over="seed.claims", key="text"),
+                ],
+            )
+
+    def test_a_scalar_field_is_still_refused(self):
+        """The check must keep doing its job."""
+        from pydantic import BaseModel
+
+        class Scalar(BaseModel, frozen=True):
+            claims: str
+
+        register_scripted("tup_scalar", lambda i, c: None)
+        register_scripted("tup_fan3", lambda i, c: TestEachOverATupleField.Out(ok="x"))
+
+        with pytest.raises(ConstructError, match="terminal field is not a collection"):
+            Construct(
+                "scalar-each",
+                nodes=[
+                    Node.scripted("seed", fn="tup_scalar", outputs=Scalar),
+                    Node.scripted("fan", fn="tup_fan3", inputs=TestEachOverATupleField.Claim, outputs=TestEachOverATupleField.Out)
+                    | Each(over="seed.claims", key="text"),
+                ],
+            )

@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph-release-0.7.9/src/neograph/modifiers.py
+# hypothesis_version: 6.151.12
+
+["'error' or 'last'", '.', '?', 'Each', 'Loop', 'Operator', 'Oracle', '_', '_FallbackResult', '_PostResult', '_Variant', '_neo_path', 'collect', 'each', 'empty list', 'error', 'get_modifier', 'last', 'loop', 'modifier_set', 'n', 'name', 'neither provided', 'operator', 'oracle', 'over', 'raise', 'reason']

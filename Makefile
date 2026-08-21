@@ -44,7 +44,8 @@ mcp:
 examples:
 	@set -e; for f in examples/01_*.py examples/01c_*.py examples/02_*.py \
 	    examples/03_*.py examples/04_*.py examples/05_*.py examples/06_*.py \
-	    examples/08_*.py examples/09_*.py examples/10_*.py examples/11_*.py; do \
+	    examples/08_*.py examples/09_*.py examples/10_*.py examples/11_*.py \
+	    examples/32_*.py; do \
 	  printf '  %s ... ' "$$f"; \
 	  uv run python "$$f" >/dev/null 2>&1 && echo ok || { echo FAILED; exit 1; }; \
 	done

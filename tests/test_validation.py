@@ -108,7 +108,7 @@ class TestConstructValidation:
         """Each whose terminal field isn't a list is flagged."""
         a = _producer("a", RawText)
         b = _consumer("b", ClusterGroup, MatchResult) | Each(over="a.text", key="label")
-        with pytest.raises(ConstructError, match="not a list"):
+        with pytest.raises(ConstructError, match="not a collection of one type"):
             Construct("bad-each-terminal", nodes=[a, b])
 
     def test_each_raises_when_list_element_type_wrong(self):
@@ -366,10 +366,10 @@ class TestCheckEachPathErrors:
         """Each(over="a") with no dot — root matches upstream but no field to walk.
         split_each_path returns root='a', segments=(). The path resolves to the
         raw upstream type, which must be a list for validation to pass. Since
-        Clusters is NOT a list, this should raise 'not a list'."""
+        Clusters is NOT a collection, so this must still be refused."""
         a = _producer("a", Clusters)
         b = _consumer("b", ClusterGroup, MatchResult) | Each(over="a", key="label")
-        with pytest.raises(ConstructError, match="not a list"):
+        with pytest.raises(ConstructError, match="not a collection of one type"):
             Construct("single-seg", nodes=[a, b])
 
     def test_single_segment_path_raises_when_root_unknown(self):
@@ -419,14 +419,14 @@ class TestCheckEachPathErrors:
             Construct("deep-missing", nodes=[a, b])
 
     def test_path_raises_when_terminal_is_non_list_primitive(self):
-        """Path resolving to a primitive (int) raises 'not a list'."""
+        """Path resolving to a primitive (int) is still refused."""
 
         class WithInt(BaseModel, frozen=True):
             count: int
 
         a = _producer("a", WithInt)
         b = _consumer("b", ClusterGroup, MatchResult) | Each(over="a.count", key="label")
-        with pytest.raises(ConstructError, match="not a list"):
+        with pytest.raises(ConstructError, match="not a collection of one type"):
             Construct("prim-terminal", nodes=[a, b])
 
     def test_each_key_raises_when_field_missing_on_item_type(self):

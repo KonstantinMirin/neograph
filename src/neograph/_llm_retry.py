@@ -16,7 +16,7 @@ from typing import Any
 import structlog
 from json_repair import repair_json
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 # --- name _llm_retry.py imported and RE-EXPORTED before the split; the
 # --- null-default cluster was its only local consumer here.
@@ -37,13 +37,13 @@ from neograph._null_defaults import (  # noqa: E402,F401
     _unwrap_optional,
 )
 from neograph._usage import _usage_dict
-from neograph.describe_type import describe_type
+from neograph.describe_type import describe_type, type_display_name
 from neograph.errors import ExecutionError
 
 log = structlog.get_logger()
 
 
-def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
+def _parse_json_response(text: str, output_model: Any) -> Any:
     """Parse LLM response text into a Pydantic model.
 
     Uses json_repair to handle common LLM JSON malformations (control
@@ -53,6 +53,7 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
     Raises ExecutionError with a clear message when the LLM produces non-JSON
     content (e.g., XML tool-call markup from DeepSeek R1 after budget exhaustion).
     """
+    name = type_display_name(output_model)
     extracted = _extract_json(text)
 
     # Detect non-JSON content: empty result or XML-like tool-call markup.
@@ -61,7 +62,7 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
     if not stripped or (not stripped.startswith(("{", "[")) and contains_dsml(text)):
         raise ExecutionError.build(
             "LLM returned non-JSON content instead of structured output",
-            expected=f"JSON object for {output_model.__name__}",
+            expected=f"JSON object for {name}",
             found=f"XML tool-call markup (first 200 chars): {text[:200]!r}",
             hint="Check model compatibility with structured output; some models emit XML tool-call markup after budget exhaustion.",
         )
@@ -75,8 +76,8 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
         repaired = repair_json(extracted, return_objects=False)
     except Exception as exc:
         raise ExecutionError.build(
-            f"JSON repair failed for {output_model.__name__} response",
-            expected=f"repairable JSON for {output_model.__name__}",
+            f"JSON repair failed for {name} response",
+            expected=f"repairable JSON for {name}",
             found=f"content json_repair could not process (first 200 chars): {extracted[:200]!r}",
             hint=f"Underlying error: {type(exc).__name__}: {exc}",
         ) from exc
@@ -97,9 +98,9 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
                 repaired = _json.dumps(wrapped)
             else:
                 raise ExecutionError.build(
-                    f"LLM returned a bare JSON array but {output_model.__name__} "
+                    f"LLM returned a bare JSON array but {name} "
                     f"has {len(list_fields)} list fields (expected exactly 1 for auto-wrap)",
-                    expected=f"JSON object for {output_model.__name__}",
+                    expected=f"JSON object for {name}",
                     found=f"bare array (first 200 chars): {repaired[:200]!r}",
                     hint="Either make the LLM return a JSON object, or ensure the model has exactly one list field.",
                 )
@@ -108,21 +109,23 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
     except (ValueError, TypeError):
         pass
 
+    # TypeAdapter, never output_model.model_validate_json: only a BaseModel
+    # SUBCLASS has that, so a declared list[Claim] failed on every row.
     try:
-        return output_model.model_validate_json(repaired)
+        return TypeAdapter(output_model).validate_json(repaired)
     except ValidationError as exc:
         details = _validation_error_details(exc)
         raise ExecutionError.build(
-            f"Validation failed for {output_model.__name__}",
-            expected=f"valid {output_model.__name__} fields",
+            f"Validation failed for {name}",
+            expected=f"valid {name} fields",
             found=details,
             hint="Check that the LLM response matches the output model schema.",
             validation_errors=str(exc),
         ) from exc
     except Exception as exc:
         raise ExecutionError.build(
-            f"Failed to parse LLM response as {output_model.__name__}",
-            expected=f"valid JSON for {output_model.__name__}",
+            f"Failed to parse LLM response as {name}",
+            expected=f"valid JSON for {name}",
             found=f"unparseable content (first 200 chars): {repaired[:200]!r}",
             hint=f"Underlying error: {exc}",
         ) from exc

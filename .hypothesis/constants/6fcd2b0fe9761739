@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph-release-0.7.9/src/neograph/_spec_dump.py
+# hypothesis_version: 6.151.12
+
+[' | ', '1', 'DUMP_LOSS_META', 'NO_REPR', 'NO_SLOT', '__module__', '__qualname__', 'absent_outputs', 'branch_node', 'budget', 'callable_loop_when', 'callable_skip_value', 'callable_skip_when', 'config', 'constructs', 'context', 'description', 'dump_spec', 'each', 'gate_tools_when', 'id', 'input', 'inputs', 'key', 'loop', 'max_iterations', 'meaning', 'merge_fallback', 'merge_fn', 'merge_model', 'merge_post_process', 'merge_pre_process', 'merge_prompt', 'mode', 'model', 'models', 'n', 'name', 'neograph/losses', 'nodes', 'on_exhaust', 'operator', 'oracle', 'oracle_merge_hook', 'output', 'outputs', 'over', 'path', 'pipeline', 'prompt', 'raw_fn', 'ref', 'renderer', 'scripted_fn', 'skip_value', 'skip_when', 'source', 'tier', 'tools', 'types', 'unregistered_type', 'version', 'when']

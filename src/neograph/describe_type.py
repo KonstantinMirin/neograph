@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
+from neograph._describe_counting import _count_annotation, _count_classes, _stable_sort
+
 # --- extracted cluster (neograph-3ffdg.17), re-exported so existing
 # --- `from neograph.describe_type import describe_value` keeps resolving.
 # --- _field_comment is imported BACK: it moved with the value renderer but
@@ -67,6 +69,20 @@ def type_display_name(t: TypeSpecStatic) -> str:
 
     if t is type(None):
         return "None"
+
+    # A subscripted generic must render its PARAMETER. `__name__` is the bare
+    # origin -- "list" for list[Claims] -- so trusting it produced messages that
+    # said `expected: list, found: list`, telling the author that list differs
+    # from list. The parameter is the entire information the message carries.
+    # Recurses, so list[dict[str, Claims]] renders in full, and reuses the union
+    # branch above for a member like Claims | None.
+    origin = get_origin(t)
+    if origin is not None:
+        args = get_args(t)
+        if args:
+            rendered = ", ".join("..." if a is Ellipsis else type_display_name(a) for a in args)
+            return f"{type_display_name(origin)}[{rendered}]"
+
     return getattr(t, "__name__", str(t))
 
 
@@ -215,86 +231,6 @@ def describe_type(
 
 # ---------------------------------------------------------------------------
 # Pass 1: count class occurrences
-# ---------------------------------------------------------------------------
-
-
-def _count_classes(
-    model: type[BaseModel],
-    counts: dict[type, int],
-    enum_classes: set[type],
-    recursive: set[type],
-    visited: set[type],
-    path: set[type],
-) -> None:
-    """Recursively count how many times each nested BaseModel/Enum appears.
-
-    ``visited`` is a global dedup set (each model's subtree is walked once, so
-    counts stay accurate for repeated siblings). ``path`` is the current
-    ancestor chain, used to detect back-edges — a model reachable from itself is
-    recorded in ``recursive`` and later force-hoisted.
-    """
-    if model in visited:
-        return
-    visited.add(model)
-    path.add(model)
-
-    for _name, field_info in model.model_fields.items():
-        if field_info.exclude or output_markers(field_info)[0]:
-            continue
-        _count_annotation(field_info.annotation, counts, enum_classes, recursive, visited, path)
-
-    path.discard(model)
-
-
-def _count_annotation(
-    annotation: Any,
-    counts: dict[type, int],
-    enum_classes: set[type],
-    recursive: set[type],
-    visited: set[type],
-    path: set[type],
-) -> None:
-    """Count occurrences within a single type annotation."""
-    if annotation is None or annotation is type(None):
-        return
-
-    origin = get_origin(annotation)
-    args = get_args(annotation)
-
-    if origin is Union or origin is types.UnionType:
-        for arg in args:
-            _count_annotation(arg, counts, enum_classes, recursive, visited, path)
-        return
-
-    if origin is Literal:
-        return
-
-    if origin in (list, tuple, frozenset, set):
-        for arg in args:
-            _count_annotation(arg, counts, enum_classes, recursive, visited, path)
-        return
-
-    if origin is dict:
-        for arg in args:
-            _count_annotation(arg, counts, enum_classes, recursive, visited, path)
-        return
-
-    if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
-        enum_classes.add(annotation)
-        counts[annotation] = counts.get(annotation, 0) + 1
-        return
-
-    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        counts[annotation] = counts.get(annotation, 0) + 1
-        # A back-edge to an ancestor currently on the path is a recursion cycle.
-        if annotation in path:
-            recursive.add(annotation)
-        _count_classes(annotation, counts, enum_classes, recursive, visited, path)
-        return
-
-
-# ---------------------------------------------------------------------------
-# Pass 2: render
 # ---------------------------------------------------------------------------
 
 
@@ -510,11 +446,3 @@ def _render_enum_declaration(cls: type, indent: str) -> str:
     return f"enum {cls.__name__} {{ {', '.join(members)} }}"
 
 
-def _stable_sort(classes: set[type]) -> list[type]:
-    """Sort classes by name for deterministic output."""
-    return sorted(classes, key=lambda c: c.__name__)
-
-
-# ---------------------------------------------------------------------------
-# describe_value: BAML-style instance renderer
-# ---------------------------------------------------------------------------

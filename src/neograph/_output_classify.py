@@ -140,6 +140,13 @@ def project_output_model(model: type[BaseModel]) -> type[BaseModel]:
     ``lru_cache``-bounded (not a module-level mutable registry) -- pure
     function of the model class.
     """
+    # A declared CONTAINER type (list[Claim], dict[str, Claim]) has no fields
+    # of its own to project, so it passes through unchanged. Same assumption as
+    # the parse tail once made -- that a declared output type is always a
+    # BaseModel SUBCLASS -- and the same failure when it is not.
+    if not (isinstance(model, type) and issubclass(model, BaseModel)):
+        return model
+
     fields: dict[str, Any] = {}
     changed = False
     for name, info in model.model_fields.items():
@@ -211,6 +218,13 @@ def splice_carried(
     value splices as ``None`` when the declared field is ``Optional``, raises
     otherwise -- "missing" and "legitimately None" are different failures.
     """
+    # A declared CONTAINER type has no fields, so nothing was ever projected out
+    # of it and there is nothing to splice back in. Checked before the identity
+    # test below, which can never hold for one: type([...]) is `list`, while
+    # `declared` is `list[Claim]`.
+    if not (isinstance(declared, type) and issubclass(declared, BaseModel)):
+        return projected_result
+
     if type(projected_result) is declared:
         return projected_result  # nothing was projected -- already the declared class
 

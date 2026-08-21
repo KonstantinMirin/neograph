@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph-release-0.7.9/src/neograph/_lint_tool_checks.py
+# hypothesis_version: 6.151.12
+
+[', ', '?', '__code__', '__func__', '_arun', '_bound_tool', '_run', 'act', 'agent', 'ainvoke', 'ask_human', 'coroutine', 'func', 'invoke', 'mode', 'name']

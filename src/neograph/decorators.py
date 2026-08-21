@@ -488,9 +488,9 @@ def node(
             and ret_hint is not type(None)
             and not isinstance(ret_hint, str)  # unresolved string annotation — can't compare
         ):
-            # Explicit outputs= AND return annotation — must match.
-            # Dict-form outputs= is exempt (multi-output, annotation is partial).
-            if outputs is not ret_hint:
+            # Explicit outputs= AND return annotation must match. Dict-form is
+            # exempt. EQUALITY, never identity: `list[X] is list[X]` is False.
+            if outputs != ret_hint:
                 out_name = type_display_name(outputs)
                 ret_name = type_display_name(ret_hint)
                 raise ConstructError.build(

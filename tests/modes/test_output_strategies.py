@@ -1039,3 +1039,64 @@ class TestStructuredSilentNoneSource:
                 config={"configurable": {}},
                 node_name="hypothesize",
             )
+
+
+class TestContainerOutputTypeEndToEnd:
+    """A node declaring a container output type runs, under json_mode.
+
+    The acceptance for GH #14 is a RUN, not a parse: the reporter's pipeline
+    assembled cleanly and then produced no decision on any of 71 rows, because
+    the parse tail called `model_validate_json` on a type that has no such
+    method. A unit test of the parser proves the sub-claim; this drives the
+    declared type through compile + run, which is where the failure was seen.
+
+    `structured` is unaffected -- it takes the constrained-decoding path -- so
+    the pair below is also the statement of the defect: the two strategies
+    disagreed about which declared output types are usable at all.
+    """
+
+    @staticmethod
+    def _claim_model():
+        from pydantic import BaseModel
+
+        class Claim(BaseModel):
+            text: str
+
+        return Claim
+
+    def test_a_bare_list_output_runs_under_json_mode(self):
+        """The reported shape, end to end."""
+        Claim = self._claim_model()
+        _llm_kw = configure_fake_llm(lambda tier: TextFake('[{"text": "a"}, {"text": "b"}]'))
+
+        node = Node(
+            name="extract",
+            mode="think",
+            outputs=list[Claim],
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "json_mode"},
+        )
+        graph = compile(Construct("list-out", nodes=[node]), **_llm_kw, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["extract"] == [Claim(text="a"), Claim(text="b")]
+
+    def test_a_dict_form_list_output_runs_under_json_mode(self):
+        """The reporter's own workaround -- dict-form -- was accepted at
+        assembly and failed at runtime just the same."""
+        Claim = self._claim_model()
+        _llm_kw = configure_fake_llm(lambda tier: TextFake('[{"text": "x"}]'))
+
+        node = Node(
+            name="extract",
+            mode="think",
+            outputs={"result": list[Claim]},
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "json_mode"},
+        )
+        graph = compile(Construct("dict-list-out", nodes=[node]), **_llm_kw, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["extract_result"] == [Claim(text="x")]

@@ -19,6 +19,7 @@ import pathlib
 SRC_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
 LLM_MODULE = SRC_DIR / "_llm.py"
 DESCRIBE_TYPE_MODULE = SRC_DIR / "describe_type.py"
+DESCRIBE_COUNTING_MODULE = SRC_DIR / "_describe_counting.py"
 
 
 def _project_output_model_call_count(tree: ast.Module, func_name: str) -> int:
@@ -59,20 +60,29 @@ class TestBothStructuredCallTwinsProjectBeforeCalling:
 
 
 class TestDescribeTypeUsesTheSharedPredicate:
-    """Positive + negative: both internal strip sites in `describe_type.py`
-    call the SHARED `output_markers` predicate (covers `Carried` too, not
-    just `ExcludeFromOutput`) -- never a re-derived, local marker check."""
+    """Positive + negative: both internal strip sites call the SHARED
+    `output_markers` predicate (covers `Carried` too, not just
+    `ExcludeFromOutput`) -- never a re-derived, local marker check.
+
+    The two sites are the renderer's two PASSES, which is why there must be
+    exactly two and why they must agree: pass 1 counts which nested classes
+    appear, pass 2 emits them, and a class stripped by one but not the other
+    is hoisted-but-never-rendered or rendered-but-never-declared. They live in
+    separate modules since the counting pass was split out, so the scan spans
+    both -- the claim is about the passes, not about a file."""
 
     def test_two_strip_sites_call_output_markers(self):
-        tree = ast.parse(DESCRIBE_TYPE_MODULE.read_text())
+        source = DESCRIBE_TYPE_MODULE.read_text() + "\n" + DESCRIBE_COUNTING_MODULE.read_text()
+        tree = ast.parse(source)
         calls = [
             n
             for n in ast.walk(tree)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "output_markers"
         ]
         assert len(calls) == 2, (
-            f"expected exactly 2 output_markers(...) calls in describe_type.py "
-            f"(_count_classes + _render_model_body) -- found {len(calls)}"
+            f"expected exactly 2 output_markers(...) calls across the renderer's two passes "
+            f"(_count_classes in _describe_counting.py + _render_model_body in describe_type.py) "
+            f"-- found {len(calls)}"
         )
 
     def test_no_re_derived_marker_check_in_describe_type(self):
