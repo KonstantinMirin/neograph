@@ -89,6 +89,13 @@ ALLOWLIST: dict[str, int] = {
     # because the boundary now belongs to the module that already owned the
     # outermost one.
     "_agent_spec_modifier_lowering.py": 648,
+    # Restored, not grown: the 0.7.8 forward-port dropped _admits_none and the
+    # non-BaseModel boundary check (GH #7, GH #8) off develop along with both
+    # of their guards, so the file shrank below the limit by losing code and
+    # the suite stayed green. This entry records the file at its correct size.
+    # Splitting it is tracked separately -- doing it inside a forward-port
+    # merge would mix a refactor with a recovery.
+    "describe_type.py": 520,
     "_oracle.py": 517,
     "_tool_loop.py": 548,
     "_wiring.py": 773,

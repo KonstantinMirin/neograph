@@ -1414,6 +1414,11 @@ class TestContextTemplateRefColumn:
         assert "template_placeholder_unresolvable" in self._kinds(compiler)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Supply-side lint: an input arrives and no template names it (GH #10)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
 class TestUnreferencedInputLint:
     """Every bound name of an LLM-mode node must appear in that node's template.
 

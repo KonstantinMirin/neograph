@@ -122,19 +122,32 @@ Declares extra template variable names that should be accepted as valid during p
 neograph check my_pipeline.py --known-vars topic,json_schema
 ```
 
-These are merged with any variables returned by `get_known_template_vars()` in the setup module. Use this flag when you need to whitelist a few names without creating a full setup module.
+These are merged with any variables returned by `get_known_template_vars()` in the setup module. Use this flag when you need to allowlist a few names without creating a full setup module.
+
+## Severity
+
+Every lint issue carries a severity, and the severity decides the exit code:
+
+- **ERROR** blocks. The construct fails the check and the command exits `1`.
+- **WARN** advises. The command prints the issue and leaves the exit code alone.
+
+A compile failure always blocks, whatever the lint result. The reference table in
+[Lint issue kinds](/reference/api/#lint-issue-kinds) gives the severity of each kind.
+
+This split lets a new check land as a warning first. Consumers see the finding
+and their build stays green until the check is promoted to ERROR.
 
 ## Exit codes
 
 | Code | Meaning |
 |------|---------|
-| 0    | All constructs compiled and linted cleanly |
-| 1    | One or more constructs failed compilation or lint |
+| 0    | Every construct compiled, and no construct reported an ERROR lint issue. WARN issues may still print. |
+| 1    | At least one construct failed to compile, or reported an ERROR lint issue |
 | 2    | Usage error (file not found, invalid JSON, missing `get_check_config`) |
 
 ## CI integration
 
-Add a check step to your CI pipeline. The non-zero exit code fails the build on any validation error:
+Add a check step to your CI pipeline. The non-zero exit code fails the build on a compile failure or an ERROR lint issue:
 
 ```yaml
 # .github/workflows/check.yml

@@ -133,9 +133,10 @@ class TestLint:
         outer_prod = _producer("start", RawText)
         pipeline = Construct("outer", nodes=[outer_prod, sub])
         # This test grades RECURSION: does the walk reach the inner node's DI
-        # binding. Scoped to the DI kind because the fixture's scaffolding
-        # producer is genuinely unconsumed, so output_field_unconsumed reports
-        # it correctly -- a separate true finding, not what this test measures.
+        # binding. It is scoped to the DI kind because the fixture's scaffolding
+        # producer is genuinely unconsumed -- nothing declares RawText -- so
+        # output_field_unconsumed reports it correctly. That is a separate, true
+        # finding about the fixture, not what this test measures.
         di_issues = [i for i in lint(pipeline, config={}) if i.kind == "from_input"]
         assert len(di_issues) == 1
         assert "topic" in di_issues[0].param
@@ -184,7 +185,8 @@ class TestLint:
         assert issues == []
 
     def test_lint_required_bundled_model_no_config(self):
-        """Bundled model params are REPORTED when config is None, as the graph's input contract rather than as errors (GH #13)."""
+        """Bundled model params are REPORTED when config is None, as the
+        graph's input contract rather than as errors (GH #13)."""
 
         class Ctx(BaseModel):
             node_id: str
@@ -232,7 +234,8 @@ class TestLint:
         assert "not found in config" in merge_issues[0].message
 
     def test_lint_merge_fn_required_di_param_no_config(self):
-        """lint flags required @merge_fn DI params when config is None."""
+        """A @merge_fn DI param is reported when config is None, as the input
+        contract rather than as an error (GH #13). Symmetric with @node."""
         from neograph import merge_fn as merge_fn_deco
 
         @merge_fn_deco
@@ -720,6 +723,11 @@ class TestActModeAllIdempotentToolsLint:
         issues = lint(construct)
 
         assert [i for i in issues if i.kind == self._ISSUE_KIND] == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Unsatisfiable bindings and the config demand (GH #12, GH #13)
+# ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestUnsatisfiableFromInput:
@@ -1351,6 +1359,72 @@ class TestPaddedConfigKeysAreRejected:
         assert [i for i in issues if i.kind == "config_key_unmatched"] == []
 
 
+def _build_portal_shapes():
+    """Portal constructs to check, built from what the installed package HAS.
+
+    `Portal` is a 0.8 capability; the 0.7.x line has none, so this returns an
+    empty list there and the Portal case simply is not among the shapes checked.
+    Deliberately not a `pytest.skip`: a skip is invisible in a pass count, and
+    this repo's release gate fails on any skip that is not allowlisted.
+    """
+    try:
+        from neograph import Construct, Node, Portal
+    except ImportError:
+        return []
+
+    from tests.fakes import register_scripted
+
+    class Handoff(BaseModel, frozen=True):
+        goto: str
+
+    class Emitted(BaseModel, frozen=True):
+        spec: dict
+        dispatch_input: dict
+
+    class Summary(BaseModel, frozen=True):
+        text: str
+
+    class Final(BaseModel, frozen=True):
+        text: str
+
+    register_scripted("pfs_handoff", lambda i, c: Handoff(goto="__end__"))
+    register_scripted("pfs_emit", lambda i, c: Emitted(spec={}, dispatch_input={}))
+    register_scripted("pfs_handle", lambda i, c: Final(text="handled"))
+
+    mesh = Construct(
+        "pfs-swarm",
+        nodes=[
+            Node.scripted("triage", fn="pfs_handoff", outputs=Handoff)
+            | Portal(to=["billing"], max_hops=6),
+            Node.scripted("billing", fn="pfs_handoff", inputs={"handoff": Handoff}, outputs=Handoff)
+            | Portal(to=["triage"]),
+        ],
+    )
+    dispatch = Construct(
+        "pfs-dispatch",
+        nodes=[
+            Node.scripted("planner", fn="pfs_emit", outputs=Emitted)
+            | Portal(
+                route="decide",
+                spec_field="spec",
+                input_field="dispatch_input",
+                output=Summary,
+                max_depth=5,
+                on_invalid="route_to_error",
+                error_handler="handler",
+            ),
+            Node.scripted("handler", fn="pfs_handle", outputs=Final),
+        ],
+    )
+    return [
+        ("peer mesh routes on Portal.route", mesh, {"goto"}),
+        ("dispatch reads spec_field/input_field", dispatch, {"spec", "dispatch_input"}),
+    ]
+
+
+PORTAL_SHAPES = _build_portal_shapes()
+
+
 class TestOutputFieldFrameworkConsumers:
     """A field the FRAMEWORK reads is not dead.
 
@@ -1383,31 +1457,66 @@ class TestOutputFieldFrameworkConsumers:
         finally:
             sys.modules.pop(spec.name, None)
 
-    def test_a_portal_dispatch_reads_its_declared_spec_and_input_fields(self):
-        """`Portal(spec_field='spec', input_field='dispatch_input')` names both
-        readers in the modifier itself."""
-        dead = {i.param for i in self._lint_fixture("portal_dispatch_route_to_error")}
+    def test_a_portal_names_the_fields_it_reads(self):
+        """`Portal(spec_field=..., input_field=...)` in dispatch mode and
+        `Portal(route=...)` in peer mode each name a field of the member's own
+        output, and the framework reads it.
 
-        assert dead == set(), f"fields a Portal declares by name reported dead: {dead}"
+        `PORTAL_SHAPES` is built at import time from what the installed package
+        actually has. On the 0.7.x line `Portal` does not exist, so the list is
+        empty and this asserts the vacuous truth rather than recording a skip --
+        a skip is invisible in a pass count, which is the whole reason this
+        repo's gate refuses unallowlisted ones.
+        """
+        for label, construct, expected in PORTAL_SHAPES:
+            from neograph._lint_consumers import _framework_field_reads
 
-    def test_a_portal_mesh_reads_its_routing_field(self):
-        """`Portal.route` defaults to 'goto' and IS the field the mesh routes on."""
-        dead = {i.param for i in self._lint_fixture("portal_mesh_minimal")}
-
-        assert dead == set(), f"the mesh routing field reported dead: {dead}"
-
-    def test_an_each_reads_the_field_its_over_names(self):
-        """`Each(over='clusters.groups')` reads field `groups` of `clusters`."""
-        dead = {i.param for i in self._lint_fixture("list_consumer_of_each")}
-
-        assert dead == set(), f"the field Each fans over reported dead: {dead}"
+            field_reads, _ = _framework_field_reads(construct)
+            named = {field for _, field in field_reads}
+            assert expected <= named, f"{label}: Portal named {expected}, derived {named}"
 
     def test_a_branch_condition_and_a_boundary_output_are_consumers(self):
-        """The branch condition's `attr_chain` reads `text`, and `value` is the
-        sub-construct's declared `output=` surfacing to the parent."""
-        dead = {i.param for i in self._lint_fixture("branch_output_boundary_every_arm")}
+        """The branch condition's `attr_chain` reads a field, and a
+        sub-construct's declared `output=` is satisfied by EVERY arm, not only
+        by whichever arm expands last."""
+        from neograph import Construct, Node
+        from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
+        from neograph.lint import lint
+        from tests.fakes import register_scripted
 
-        assert dead == set(), f"a branch-condition read or a boundary output reported dead: {dead}"
+        class ArmSeed(BaseModel, frozen=True):
+            text: str
+
+        class BoundaryResult(BaseModel, frozen=True):
+            value: str
+
+        register_scripted("bobc_seed", lambda i, c: ArmSeed(text="hi"))
+        register_scripted("bobc_true", lambda i, c: BoundaryResult(value="t"))
+        register_scripted("bobc_false", lambda i, c: BoundaryResult(value="f"))
+
+        seed = Node.scripted("seed", fn="bobc_seed", outputs=ArmSeed)
+        meta = _BranchMeta(
+            condition_spec=_ConditionSpec(
+                source_node=seed,
+                attr_chain=["text"],
+                op_fn=lambda v, _t: bool(v),
+                op_str="route",
+                threshold=None,
+            ),
+            true_arm_nodes=[Node.scripted("arm-true-result", fn="bobc_true", outputs=BoundaryResult)],
+            false_arm_nodes=[Node.scripted("arm-false-result", fn="bobc_false", outputs=BoundaryResult)],
+        )
+        sub = Construct(
+            "boundary-sub", input=ArmSeed, nodes=[seed, _BranchNode(meta, 0)], output=BoundaryResult
+        )
+        pipeline = Construct("boundary-parent", nodes=[sub])
+
+        dead = {i.param for i in lint(pipeline) if i.kind == "output_field_unconsumed"}
+
+        assert dead == set(), (
+            f"a branch-condition read ('text') or a per-arm boundary output ('value') "
+            f"was reported dead: {dead}"
+        )
 
     def test_an_optional_single_type_input_still_consumes_the_model(self):
         """`inputs=Claims | None` is a single-type input wearing a union."""

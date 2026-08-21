@@ -100,7 +100,7 @@ def _load_gen_api_manifest():
     return module
 
 
-# The 10 verified kind= string literals in src/neograph/lint.py today (grep
+# Every verified kind= string literal across the lint cluster (grep
 # `kind="[a-z_]+"` | sort -u). The extractor must yield AT LEAST these -- the
 # floor catches kind=variable drift (an AST walk for string-literal kwargs
 # silently misses a variable assignment).
@@ -527,7 +527,7 @@ class TestLintIssueKindEnrichment:
         missing = _COMPLETE_LINT_KIND_SET - kinds
         assert not missing, (
             f"manifest lint_issue_kinds is INCOMPLETE, missing {sorted(missing)} "
-            f"(expected all 14 = 10 literal + 4 DI kinds "
+            f"(expected all {len(_COMPLETE_LINT_KIND_SET)} = the literal floor + 4 DI kinds "
             f"{sorted(_DI_KIND_NAMES)}). The AST walk cannot see kind=variable DI "
             f"emissions; they must be unioned in from neograph.di.DI_TEMPLATE_KINDS."
         )

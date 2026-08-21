@@ -352,18 +352,16 @@ When a pipeline runs with a checkpointer and the same `thread_id`, neograph dete
 lint(construct, *, config=None, known_template_vars=None, template_resolver=None)
 ```
 
-**Framework consumers.** `output_field_unconsumed` decides deadness across four axes, and the fourth is the one a reader forgets: the FRAMEWORK reads fields too. `_framework_field_reads` (`_lint_consumers.py`) is the SINGLE derivation of those readers, every one of them a name already sitting in the IR — `Each(over="clusters.groups")`, `Portal(route=...)` in peer mode, `Portal(spec_field=..., input_field=...)` in dispatch mode, a branch condition's `attr_chain`, and `Construct.output` (every arm that satisfies the boundary is a terminal producer, not just `nodes[-1]`). **Rule for a new modifier that names a field: teach that one function.** Deriving a reader at a second site is how four of these were missed one at a time, and the miss is silent — the check reports a live field as dead. Pinned by `TestOutputFieldFrameworkConsumers`, whose capstone asserts no report across the whole `should_pass` corpus names a framework-read field. A `Loop`/`Operator` `when=` callable is deliberately absent: a lambda's field reads are not derivable.
+**One enumeration, two readers.** `iter_di_bindings(item)` in `_lint_di.py` is the single definition of where DI bindings live — a node's own `_param_res` plus its Oracle `merge_fn`'s. Both `lint()`'s payload check and `input_contract()` walk it, so a new binding site reaches both surfaces or neither. Do NOT re-enumerate bindings in a new caller; that is how the two drift.
+
+**Framework consumers.** `output_field_unconsumed` decides deadness across four axes, and the fourth is the one a reader forgets: the FRAMEWORK reads fields too. `_framework_field_reads` (`_lint_consumers.py`) is the SINGLE derivation of those readers, every one of them a name already sitting in the IR — `Each(over="clusters.groups")`, `Portal(route=...)` in peer mode, `Portal(spec_field=..., input_field=...)` in dispatch mode, a branch condition's `attr_chain`, and `Construct.output` (every arm that satisfies the boundary is a terminal producer, not just `nodes[-1]`). **Rule for a new modifier that names a field: teach that one function.** Deriving a reader at a second site is how four of these were missed one at a time, and the miss is silent — the check reports a live field as dead. A `Loop`/`Operator` `when=` callable is deliberately absent: a lambda's field reads are not derivable.
 
 **Two directions.** The linter historically checked one: every kind reported a reference with no source, or a missing config value. None reported a value that arrives and reaches nothing. The supply-side kinds close that asymmetry — `template_input_unreferenced` (a bound input, DI parameter, or context field the node's own template never names) and `output_field_unconsumed` (a produced field nothing reads). Both are WARN, because demand is read from template TEXT and a custom `prompt_compiler` can consume a name the template never spells.
 
-**`lint()` returns defects, and nothing else.** A `FromInput`/`FromConfig` parameter a caller supplies at run time is the graph's INPUT CONTRACT, which is not a defect — so it does not travel in the issue list at all. Read it from `input_contract(construct)`, which returns `InputBinding` records (`node_name`, `param`, `kind`, `source`, `type_name`, `required`, `model_name`), and which `neograph check` prints as its own section outside the lists that decide the exit code. A correct graph therefore lints to ZERO, which is what makes an all-output-fails gate reachable; before that, the strictest available policy was "fails on `required` only", the same trust-the-classification posture a padded config exploits (GH #12, GH #13).
-
-Only a binding no caller can satisfy is an error: `from_input_unsatisfiable` fires when an `Each` item or a `Loop` carry is bound with `FromInput`, and it is derived from construct structure so no config can silence it. Demanding a config is what pushed one consumer to pad a fixture with a key no caller could pass, which silenced a real defect while the pipeline computed every fanned branch from the padded value. Pass `config=` to check a specific payload — a different, optional question.
-
-**One enumeration, two readers.** `iter_di_bindings(item)` in `_lint_di.py` is the single definition of where DI bindings live — a node's own `_param_res` plus its Oracle `merge_fn`'s. Both `lint()`'s payload check and `input_contract()` walk it, so a new binding site reaches both surfaces or neither. Do NOT re-enumerate bindings in a new caller; that is how the two drift.
+**`lint()` returns defects, and nothing else.** A `FromInput`/`FromConfig` parameter a caller supplies at run time is the graph's INPUT CONTRACT, which is not a defect — so it does not travel in the issue list at all. Read it from `input_contract(construct)`, which returns `InputBinding` records (`node_name`, `param`, `kind`, `source`, `type_name`, `required`, `model_name`), and which `neograph check` prints as its own section outside the lists that decide the exit code. A correct graph therefore lints to ZERO, which is what makes an all-output-fails gate reachable; before that, the strictest available policy was "fails on `required` only", the same trust-the-classification posture a padded config exploits. A config key that matches NO binding is itself an ERROR (`config_key_unmatched`), because a key accepted for being present rather than for being named is how a padded config silences a real defect. Only a binding no caller can satisfy is an error: `from_input_unsatisfiable` fires when an `Each` item or a `Loop` carry is bound with `FromInput`, and it is derived from construct structure so no config can silence it. Demanding a config is what pushed one consumer to pad a fixture with a key no caller could pass, which silenced a real defect while the pipeline computed every fanned branch from the padded value. Pass `config=` to check a specific payload — a different, optional question.
 
 **Three check categories**:
-1. DI binding checks — `FromInput`/`FromConfig` params. Only when `config=` is passed: an unsatisfied key is an ERROR. With no config there is nothing to check, and the contract is reported by `input_contract()`.
+1. DI binding checks — `FromInput`/`FromConfig` params. Only when `config=` is passed: an unsatisfied key is an ERROR, and a key matching no binding is an ERROR. With no config there is nothing to check, and the contract is reported by `input_contract()`.
 2. Inline prompt placeholder checks — `${var}` against predicted input dict keys (no flattened, no framework extras)
 3. Template-ref placeholder checks — `{var}` against predicted input keys + flattened fields + known extras (requires `template_resolver`)
 
@@ -453,15 +451,30 @@ An LLM-mode node (`think`/`agent`/`act`) never runs its body, so — unlike scri
 ```bash
 git checkout main && git merge --no-ff release/X.Y.Z -m "release: merge X.Y.Z (...)"
 set -a && . .env && set +a          # live credentials
-make release-gate                    # quality + live; refuses to pass without keys
+make release-gate                    # quality + live + mcp + examples + website + skipcheck
 git tag -a vX.Y.Z -m "..." && git push origin main && git push origin vX.Y.Z
 ```
 
-**`make quality` is NOT sufficient to tag.** It deselects the `live`-marked tests, so it is silent about anything that only fails against a real external service. `make release-gate` runs `quality` *and* `live`, and sets `NEOGRAPH_REQUIRE_LIVE=1` so absent credentials are a hard collection ERROR rather than a skip — the gate cannot report success without actually reaching Langfuse.
+**`make quality` is NOT sufficient to tag**, and neither was `quality + live`. Both report success while an arbitrary subset of the suite does not run. `make release-gate` runs six targets:
+
+| target | covers |
+|---|---|
+| `quality` | the offline suite, ruff, mypy |
+| `live` | the real Langfuse checks, with `NEOGRAPH_REQUIRE_LIVE=1` so absent credentials are a hard ERROR rather than a skip |
+| `mcp` | the suite with `--extra mcp --extra mcp-examples`, so `neograph[mcp]` — a second shipped top-level package — is exercised instead of importorskipped |
+| `examples` | every keyless example end to end, plus the MCP e2e harness |
+| `website` | `npm ci && npm run build`, because the api-manifest guard couples page content to the public API |
+| `skipcheck` | `scripts/check_skips.py`, which fails on any skip whose reason is not in `tests/skip_allowlist.txt` |
+
+**A skip is invisible in a pass count.** `tests/skip_allowlist.txt` is EMPTY by design and may only shrink: with every extra installed, nothing should need to skip. That file is the ratchet. Adding a line records a surface the gate knowingly does not exercise.
 
 **Tag the commit you gated.** Not a later one, and not the branch tip if it moved.
 
-This exists because 0.7.4 was tagged after a green `make quality` on merged `main` that had silently skipped the two live tests for want of exported keys; one of them was flaky and the tag went out with it. The build was caught at the manual-approval gate and the tag was moved before anything reached PyPI, but only by luck of the reviewer gate. The rule is now mechanical, not remembered.
+This exists because the same failure happened twice, in the same shape: a success signal compatible with the thing you care about not running.
+
+0.7.4 was tagged after a green `make quality` on merged `main` that had silently skipped the two live tests for want of exported keys; one of them was flaky and the tag went out with it. The build was caught at the manual-approval gate and the tag was moved before anything reached PyPI, but only by luck of the reviewer gate.
+
+0.7.7 was then tagged through a green `quality + live` gate while 74 `mcp` tests skipped for a missing extra, the examples were never run, and the website was never built. Measured afterwards: with every extra installed the suite is 3338 passed and 0 skipped, where that gate saw 3224 passed and 86 skipped. 114 tests contributed nothing. The rule is now mechanical, not remembered, and `skipcheck` is what makes it so.
 
 **Never publish directly.** The GitHub Actions workflow is the only publish path. This gives us a pypi.org Trusted Publisher gate + an optional manual-approval environment reviewer.
 

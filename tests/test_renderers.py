@@ -5,7 +5,7 @@ render_prompt inspector, and three-surface parity.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
@@ -349,6 +349,178 @@ class TestDescribeType:
     """Tests for describe_type() — two-pass Pydantic model walker that emits
     TypeScript-style schema notation."""
 
+    def test_container_over_a_model_renders_through_the_nested_dispatch(self):
+        """A container or union over a BaseModel renders at the top level the
+        same way it would as a nested field -- ``list[M]``, ``dict[str, M]``,
+        ``M | None`` -- instead of dying on ``model_fields``.
+
+        neograph-vduhp / GH issue #8. ``describe_type`` promised
+        ``type[BaseModel]``, enforced nothing, and let the value reach
+        ``model.model_fields``, so a caller walking a node's dict-form outputs
+        got ``AttributeError: type object 'list' has no attribute
+        'model_fields'`` -- a Pydantic internal naming a builtin rather than
+        the annotation they passed.
+        """
+        from neograph import describe_type
+
+        class Item(BaseModel):
+            a: str
+            b: int
+
+        body = "{\n  a: string\n  b: int\n}"
+
+        assert describe_type(list[Item], prefix="") == f"[{body}]"
+        assert describe_type(dict[str, Item], prefix="") == f"object<string, {body}>"
+        assert describe_type(Item | None, prefix="") == f"{body} or null"
+        assert describe_type(str, prefix="") == "string"
+
+    def test_top_level_container_still_hoists_its_member(self):
+        """The hoisting contract survives the container: ``hoist_classes='all'``
+        must emit the ``type M = {...}`` declaration ahead of ``[M]``, not
+        inline the body and lose it (neograph-vduhp / GH issue #8)."""
+        from neograph import describe_type
+
+        class Item(BaseModel):
+            a: str
+
+        result = describe_type(list[Item], prefix="", hoist_classes="all")
+
+        assert result == "type Item = {\n  a: string\n}\n\n[Item]"
+
+    def test_undescribable_annotation_is_refused_by_name(self):
+        """The discriminating case for the hybrid shape.
+
+        ``_render_type``'s fallthrough returns ``str(annotation)``. A pure
+        dispatch fix would expose that at the top level, so
+        ``describe_type(SomeClass)`` would return ``"<class '...'>"`` and ship
+        it to a model as though it were a schema -- a silent wrong answer in
+        place of a loud one. The boundary refuses instead, and the message
+        names what was passed rather than a Pydantic internal.
+
+        The GH issue asked for a ``TypeError``; the refusal is a
+        ``ConfigurationError`` because ``tests/test_guards_any_audit.py``
+        requires every raise in ``src/neograph`` to be a ``NeographError``
+        subclass, and growing that allowlist to spell one exception the other
+        way is not worth it. The reported shapes (``list[M]``, ``str``) now
+        RENDER, so this path is only reached by annotations the issue never
+        raised.
+        """
+        import pytest
+
+        from neograph import describe_type
+        from neograph.errors import ConfigurationError
+
+        class NotAModel:
+            pass
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            describe_type(NotAModel)
+
+        message = str(excinfo.value)
+        assert "NotAModel" in message
+        assert "model_fields" not in message
+
+    def test_basemodel_path_is_byte_identical_after_the_container_branch(self):
+        """The container branch must not perturb a single existing render.
+
+        Specifically it must NOT be 'simplified' by routing BaseModel input
+        through ``_count_annotation`` too: that counts the top model itself, so
+        a model which also appears nested reaches 2 and silently starts being
+        hoisted under ``hoist_classes='auto'``.
+        """
+        from neograph import describe_type
+
+        class Leaf(BaseModel):
+            v: str
+
+        class Root(BaseModel):
+            here: Leaf
+            items: list[Leaf]
+
+        result = describe_type(Root, prefix="")
+
+        # Leaf appears twice, so 'auto' hoists it -- and Root, the top model,
+        # must NOT be hoisted despite also being the render target.
+        assert result == (
+            "type Leaf = {\n  v: string\n}\n"
+            "\n"
+            "{\n  here: Leaf\n  items: [Leaf]\n}"
+        )
+
+    def test_hoist_all_does_not_hoist_the_render_target_itself(self):
+        """The other half of the byte-identical guarantee, and the case that
+        catches the tempting 'simplification'.
+
+        Routing BaseModel input through ``_count_annotation`` as well would
+        register the TOP model in ``class_counts``, so ``hoist_classes='all'``
+        would emit a ``type Root = {...}`` declaration alongside the body it is
+        already rendering. The two counters stay separate for exactly this
+        reason (neograph-vduhp / GH issue #8).
+        """
+        from neograph import describe_type
+
+        class Leaf(BaseModel):
+            v: str
+
+        class Root(BaseModel):
+            here: Leaf
+
+        result = describe_type(Root, prefix="", hoist_classes="all")
+
+        assert result == "type Leaf = {\n  v: string\n}\n\n{\n  here: Leaf\n}"
+        assert "type Root" not in result
+
+    def test_nested_undescribable_annotation_still_renders_leniently(self):
+        """``strict`` must not leak into recursion.
+
+        A field whose annotation this module has no notation for has always
+        rendered as its ``repr``; making that raise would be a silent breaking
+        change for existing pipelines, so the refusal is scoped to the
+        top-level boundary only.
+        """
+        from neograph import describe_type
+
+        class Opaque:
+            pass
+
+        class HasOpaque(BaseModel):
+            model_config = {"arbitrary_types_allowed": True}
+
+            thing: Opaque
+
+        result = describe_type(HasOpaque, prefix="")
+
+        assert "thing:" in result
+        assert "Opaque" in result
+
+    def test_inject_schema_no_longer_leaks_on_a_container_output_model(self):
+        """The second PUBLIC face of the same root (prompt.py:121 forwards
+        straight to ``describe_type``). Asserted rather than assumed to follow
+        from the shared root -- an unasserted claim is how the second face
+        silently diverges later (neograph-vduhp / GH issue #8)."""
+        from neograph import inject_schema
+        from neograph.tool import ToolInteraction
+
+        result = inject_schema({}, list[ToolInteraction])
+
+        assert "json_schema" in result
+        assert "tool_name" in result["json_schema"]
+
+    def test_dict_form_outputs_can_be_walked_entry_by_entry(self):
+        """The reported real-world trigger (neograph-vduhp / GH issue #8): a
+        consumer walking a node's declared dict-form ``outputs`` to render each
+        entry. The BaseModel entry worked; the ``list[X]`` sibling blew up."""
+        from neograph import describe_type
+        from neograph.tool import ToolInteraction
+
+        declared_outputs = {"result": Claims, "tool_log": list[ToolInteraction]}
+
+        rendered = {key: describe_type(ann, prefix="") for key, ann in declared_outputs.items()}
+
+        assert rendered["result"].startswith("{")
+        assert rendered["tool_log"].startswith("[{")
+        assert "tool_name: string" in rendered["tool_log"]
+
     def test_maps_primitives_to_typescript_names(self):
         """Primitive types map to their TypeScript-style names."""
         from neograph import describe_type
@@ -401,6 +573,112 @@ class TestDescribeType:
         name_line = [l for l in lines if l.startswith("name:")][0]
         assert "null" not in name_line
 
+    def test_optional_field_renders_exactly_one_null_when_annotation_is_nullable(self):
+        """An ``X | None`` field carries its None-ness twice -- once in the
+        annotation's own Union, once in ``is_required() is False`` -- and those
+        two signals must collapse to ONE ``or null`` token.
+
+        Regression for neograph-g21jc / GH issue #7: ``_render_model_body``
+        appended ' or null' unconditionally on top of the union-rendered null,
+        shipping ``T or null or null`` into every structured-output prompt.
+        """
+
+        from pydantic import Field
+
+        from neograph import describe_type
+
+        class WithNullables(BaseModel):
+            band: Literal["a", "b"] | None = Field(None, description="d")
+            plain: str | None = None
+            nested: list[str] | None = None
+
+        result = describe_type(WithNullables, prefix="")
+
+        assert "or null or null" not in result, (
+            f"duplicated null marker in rendered schema:\n{result}"
+        )
+        lines = [line.strip() for line in result.splitlines()]
+        assert [line for line in lines if line.startswith("band:")] == [
+            'band: "a" or "b" or null  // d'
+        ]
+        assert [line for line in lines if line.startswith("plain:")] == [
+            "plain: string or null"
+        ]
+        assert [line for line in lines if line.startswith("nested:")] == [
+            "nested: [string] or null"
+        ]
+
+    def test_optional_field_renders_one_null_when_none_is_first_union_member(self):
+        """``None | str`` renders ``null or string`` -- the null marker is NOT
+        trailing, because PEP-604 unions preserve author order.
+
+        This is the case that discriminates an annotation-shape guard from a
+        string-shape one: a ``type_str.endswith("null")`` dedupe passes every
+        other case in this suite and still emits ``null or string or null``
+        here (neograph-g21jc / GH issue #7, architect-review finding #3).
+        """
+        from typing import Optional, Union
+
+        from neograph import describe_type
+
+        class NoneFirst(BaseModel):
+            # The legacy `typing` spellings are deliberate: they are the only
+            # way to reach `_admits_none`'s `origin is Union` arm (PEP-604
+            # unions carry `types.UnionType` instead), so the modernizing
+            # lint rules are suppressed rather than obeyed here.
+            pep604: None | str = None
+            explicit: Union[None, int] = None  # noqa: UP007
+            trailing: Optional[str] = None  # noqa: UP045
+
+        result = describe_type(NoneFirst, prefix="")
+
+        assert "or null or null" not in result, (
+            f"duplicated null marker in rendered schema:\n{result}"
+        )
+        lines = [line.strip() for line in result.splitlines()]
+        assert [line for line in lines if line.startswith("pep604:")] == [
+            "pep604: null or string"
+        ]
+        assert [line for line in lines if line.startswith("explicit:")] == [
+            "explicit: null or int"
+        ]
+        assert [line for line in lines if line.startswith("trailing:")] == [
+            "trailing: string or null"
+        ]
+
+    def test_non_nullable_field_with_a_default_still_gets_or_null(self):
+        """Preservation guard for the neograph-g21jc fix: a field that is not
+        annotated nullable but HAS a default is ``is_required() is False``, and
+        its ``or null`` suffix is pre-existing 'may be absent' semantics --
+        deduping the doubled null must not silently drop it."""
+        from neograph import describe_type
+
+        class WithDefaults(BaseModel):
+            name: str = "x"
+            count: int = 3
+
+        result = describe_type(WithDefaults, prefix="")
+        lines = [line.strip() for line in result.splitlines()]
+        assert [line for line in lines if line.startswith("name:")] == [
+            "name: string or null"
+        ]
+        assert [line for line in lines if line.startswith("count:")] == [
+            "count: int or null"
+        ]
+
+    def test_required_nullable_field_renders_exactly_one_null(self):
+        """``x: str | None`` with NO default is required, so only the
+        annotation contributes a null -- exactly one, before and after the
+        neograph-g21jc fix."""
+        from neograph import describe_type
+
+        class RequiredNullable(BaseModel):
+            x: str | None
+
+        result = describe_type(RequiredNullable, prefix="")
+        lines = [line.strip() for line in result.splitlines()]
+        assert [line for line in lines if line.startswith("x:")] == ["x: string or null"]
+
     def test_joins_union_types_with_or_splitter(self):
         """Union[A, B] renders with or_splitter."""
 
@@ -414,7 +692,6 @@ class TestDescribeType:
 
     def test_renders_literal_values_as_quoted_strings(self):
         """Literal types render as quoted strings joined by or_splitter."""
-        from typing import Literal
 
         from neograph import describe_type
 
@@ -999,6 +1276,66 @@ class TestRenderPromptInspector:
         assert "Template: my/template" in result
         assert "[user]" in result
         assert "hello world" in result
+
+    def test_json_mode_output_schema_reaching_the_prompt_has_no_doubled_null(self):
+        """End-to-end at the ACCEPTANCE's locus: the schema text a node really
+        ships to the model.
+
+        neograph-g21jc / GH issue #7 was reported as a defect in the prompt, not
+        in a helper -- so the proof is the compiled prompt, not describe_type()
+        in isolation. json_mode is the strategy that rides the rendered schema
+        into the message, via ``describe_type(output_model)`` in
+        ``_llm_render``; this drives that whole path with no LLM call.
+        """
+        from neograph._llm import render_prompt
+        from tests.fakes import build_fake_runtime
+
+        captured: list[str | None] = []
+
+        def schema_capturing_compiler(template, data, output_schema=None, **kw):
+            captured.append(output_schema)
+            return [{"role": "user", "content": f"{template}\n{output_schema}"}]
+
+        class Verdict(BaseModel):
+            band: Literal["high", "low"] | None = None
+            note: str | None = None
+            reviewer: None | str = None
+            required_nullable: str | None
+            defaulted: str = "x"
+
+        n = Node(
+            name="verdict",
+            mode="think",
+            outputs=Verdict,
+            model="fast",
+            prompt="judge/verdict",
+            llm_config={"output_strategy": "json_mode"},
+        )
+        result = render_prompt(
+            n,
+            "some input",
+            runtime=build_fake_runtime(prompt_compiler=schema_capturing_compiler),
+        )
+
+        assert len(captured) == 1
+        schema = captured[0]
+        assert schema is not None, "json_mode must ride a rendered output schema"
+
+        # The defect, at the surface the user actually reported it on.
+        assert "or null or null" not in schema, f"doubled null in shipped schema:\n{schema}"
+        assert "or null or null" not in result, f"doubled null in shipped prompt:\n{result}"
+
+        lines = [line.strip() for line in schema.splitlines()]
+
+        def line_for(field: str) -> str:
+            return [line for line in lines if line.startswith(f"{field}:")][0]
+
+        assert line_for("band") == 'band: "high" or "low" or null'
+        assert line_for("note") == "note: string or null"
+        assert line_for("reviewer") == "reviewer: null or string"
+        assert line_for("required_nullable") == "required_nullable: string or null"
+        # Non-nullable-but-defaulted keeps its pre-existing "may be absent" null.
+        assert line_for("defaulted") == "defaulted: string or null"
 
     def test_applies_node_renderer_before_compilation(self):
         """render_prompt applies node.renderer before compilation."""
