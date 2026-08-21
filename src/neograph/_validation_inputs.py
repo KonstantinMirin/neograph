@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import cast, get_args, get_origin
 
-from neograph._ir_protocols import ConstructLike
+from neograph._ir_protocols import ConstructItem, ConstructLike
 from neograph._state_keys import StateKeys
 from neograph._validation_arms import _build_cross_arm_error
 from neograph._validation_types import (
@@ -374,3 +374,27 @@ def _suggest_hint(
             if element is not None and _types_compatible(element, input_type):
                 return f"did you forget to fan out? try .map(lambda s: s.{p.field_name}.{fname}, key='...')"
     return None
+
+
+def _check_bound_args(
+    item: ConstructItem, ambient_producers: ProducerMap | None, visible_producers: ProducerMap
+) -> None:
+    """Every ``Tool.bound_args`` path root must be produced by some upstream.
+
+    Checked like ``context=``: a reference the FRAMEWORK resolves must be proven
+    resolvable, or it becomes ``None`` and the tool queries the wrong thing --
+    reading the empty answer as a real one.
+    """
+    if not (isinstance(item, Node) and item.tools):
+        return
+    known_fields = set(ambient_producers or ()) | set(visible_producers)
+    for tool_spec in item.tools:
+        for arg_name, path in (getattr(tool_spec, "bound_args", None) or {}).items():
+            if field_name_for(path.partition(".")[0]) not in known_fields:
+                raise ConstructError.build(
+                    f"tool '{getattr(tool_spec, 'name', tool_spec)}' binds bound_args['{arg_name}']='{path}'",
+                    found=f"known upstream fields: {sorted(known_fields) or '(none)'}",
+                    hint="bound_args reads run STATE; its root must be an upstream field",
+                    node=item.name,
+                    location=_source_location(),
+                )

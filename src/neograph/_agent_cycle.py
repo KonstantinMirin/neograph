@@ -38,7 +38,7 @@ import asyncio
 import json  # noqa: E402,F401
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     Any,
     NoReturn,  # noqa: E402,F401
@@ -63,6 +63,7 @@ from neograph._agent_tool_calls import (  # noqa: E402,F401
     _lift_resource_refs,
     _raise_sync_tool_async,
     _record_tool_result,
+    _resolve_bound_args,
     _seed_repeat_cache,
     _tool_call_precheck,
 )
@@ -119,6 +120,8 @@ class _TurnPrep:
     output_model: Any
     effective_model: str
     effective_renderer: Any
+    # {tool: {arg: value}} -- resolved ONCE in the shared pre-prep, so the twins cannot differ.
+    bound_args: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def _turn_prep_kwargs(
@@ -127,7 +130,7 @@ def _turn_prep_kwargs(
     tool_factory_lookup: dict[str, Callable],
     state: BaseModel,
     config: RunnableConfig,
-) -> tuple[dict[str, Any], Any, str, Any]:
+) -> tuple[dict[str, Any], Any, str, Any, dict[str, dict[str, Any]]]:
     """Shared pre-prep for both turn-prep twins: extract + render input, resolve
     the generation type, and assemble the kwargs passed to (a)prepare_tool_loop.
     Returns (prepare_kwargs, gen_type, effective_model, effective_renderer).
@@ -141,6 +144,7 @@ def _turn_prep_kwargs(
     raw_input = _extract_input(bus, node)
     rendered = _render_input(node, raw_input, runtime=runtime)
     context = _extract_context(bus, node)
+    bound_args = _resolve_bound_args(node, bus)
 
     output_model, primary_key = _resolve_primary_output(node)
     no = normalize_outputs(node.outputs)
@@ -164,7 +168,7 @@ def _turn_prep_kwargs(
         "context": context,
         "tool_factory_lookup": tool_factory_lookup,
     }
-    return prepare_kwargs, gen_type, effective_model, effective_renderer
+    return prepare_kwargs, gen_type, effective_model, effective_renderer, bound_args
 
 
 def _build_turn_prep(
@@ -181,13 +185,11 @@ def _build_turn_prep(
     # Sync injector: fails loud on a FROM_RESOURCE template var (its fetch is
     # awaited); resolves FromInput/FromConfig into config before _compile_prompt.
     config = _inject_di_inputs(node, config)
-    prepare_kwargs, gen_type, effective_model, effective_renderer = _turn_prep_kwargs(
+    prepare_kwargs, gen_type, effective_model, effective_renderer, bound_args = _turn_prep_kwargs(
         node, runtime, tool_factory_lookup, state, config
     )
     prep = _prepare_tool_loop(**prepare_kwargs)
-    return _TurnPrep(
-        prep=prep, output_model=gen_type, effective_model=effective_model, effective_renderer=effective_renderer
-    )
+    return _TurnPrep(prep, gen_type, effective_model, effective_renderer, bound_args)
 
 
 async def _abuild_turn_prep(
@@ -203,13 +205,11 @@ async def _abuild_turn_prep(
     # Async injector twin: awaits FROM_RESOURCE bindings so a fetched resource's
     # text reaches the cycle's _compile_prompt as a template var. See neograph-3q6j.
     config = await _ainject_di_inputs(node, config)
-    prepare_kwargs, gen_type, effective_model, effective_renderer = _turn_prep_kwargs(
+    prepare_kwargs, gen_type, effective_model, effective_renderer, bound_args = _turn_prep_kwargs(
         node, runtime, tool_factory_lookup, state, config
     )
     prep = await _aprepare_tool_loop(**prepare_kwargs)
-    return _TurnPrep(
-        prep=prep, output_model=gen_type, effective_model=effective_model, effective_renderer=effective_renderer
-    )
+    return _TurnPrep(prep, gen_type, effective_model, effective_renderer, bound_args)
 
 
 def _init_budget(existing: Any) -> dict[str, Any]:
@@ -581,7 +581,7 @@ def make_agent_cycle_bodies(
         refs: list = []
         handoff_target: str | None = None
         for tc in tool_calls:
-            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances, handoff_targets)
+            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances, handoff_targets, tp.bound_args)
             if kind == "handoff":
                 interaction, msg = _handoff_ack(tc, payload)
                 interactions.append(interaction)
@@ -631,7 +631,7 @@ def make_agent_cycle_bodies(
         plan: list[tuple[str, Any]] = []  # ("handoff", (tc, peer)) | ("msg", ToolMessage) | ("run", (tc, ordinal))
         coros = []
         for tc in tool_calls:
-            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances, handoff_targets)
+            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances, handoff_targets, tp.bound_args)
             if kind == "handoff":
                 plan.append(("handoff", (tc, payload)))
                 continue

@@ -5,7 +5,7 @@ description: How a step reads a value produced earlier in the run — run identi
 
 A step often needs a value produced earlier in the run that is **not** what the previous step handed it. Run identity. A session handle. A briefing the model needs but no node between here and there cares about.
 
-neograph makes steps close to pure functions on purpose: what a step consumes, it declares. That is why a graph is reviewable at all. But it would be a bad trade if the price were threading a deal id through six intermediate types that have no business carrying one.
+neograph makes steps close to pure functions on purpose: what a step consumes, it declares. That is why a graph is reviewable at all. But it would be a bad trade if the price were threading a warehouse id through six intermediate types that have no business carrying one.
 
 `context=` is the answer, and the reference stays declared.
 
@@ -17,12 +17,12 @@ from pydantic import BaseModel
 from neograph import Each, Node
 
 
-class RunCtx(BaseModel):
-    deal_id: int
+class Audit(BaseModel):
+    warehouse_id: int
 
 
-class Claim(BaseModel):
-    text: str
+class Discrepancy(BaseModel):
+    sku: str
 
 
 class Verdict(BaseModel):
@@ -32,12 +32,12 @@ class Verdict(BaseModel):
 verify = Node(
     name="verify",
     mode="think",
-    inputs=Claim,           # the port: WHICH ITEM
+    inputs=Discrepancy,     # the port: WHICH ITEM
     outputs=Verdict,
     model="fast",
     prompt="check",
-    context=["run_ctx"],    # the back-reference: WHICH RUN
-) | Each(over="claims.items", key="text")
+    context=["audit"],      # the back-reference: WHICH RUN
+) | Each(over="discrepancies.items", key="sku")
 ```
 
 Every fanned branch receives its own `Claim` on the port, and the same `run_ctx` through `context`. Those are two different questions and they were never competing.
@@ -65,8 +65,42 @@ Values arrive un-rendered — no BAML wrapper — which makes `context=` right f
 
 Documenting it the other way round has a cost we actually paid: the mechanism was described as "verbatim state fields injected into the prompt … for pre-formatted context like graph catalogs", and a consumer who needed precisely this capability read that, concluded it was about presentation, and filed a design proposal for a feature that already shipped. If you document a general mechanism through its narrowest use case, the people who need the general form cannot find it.
 
-## Known limits
+## Scripted nodes need no mechanism
 
-**LLM-mode nodes only.** A scripted node does not resolve `context=` today.
+`context=` resolves for LLM-mode nodes. A scripted node does not need it, and deliberately does not get one: an upstream read **is** a normal declared input, and dict-form `inputs` lets a fanned branch declare both at once.
 
-**Seeing is not binding.** `context=` puts a value where the model can see it. Nothing binds it into a tool call, so a model composing tool arguments can still invent one. If the correctness of an argument matters, do not rely on the model having been shown the right value.
+```python
+from neograph import node
+
+
+class Classified(BaseModel):
+    label: str
+
+
+@node(outputs=Classified, map_over="discrepancies.items", map_key="sku")
+def classify(item: Discrepancy, audit: Audit) -> Classified:
+    """`item` is the fanned value; `audit` is an ordinary upstream read."""
+    return Classified(label=f"{item.sku} [warehouse {audit.warehouse_id}]")
+```
+
+That route is **better** than `context=`, not merely equivalent: the validator type-checks a fan-in input and it creates a real dataflow edge, while a `context` field is typed `Any` and declares none. Prefer it whenever the node runs Python.
+
+## Seeing a value is not the same as a tool receiving it
+
+`context=` puts a value where the model can **see** it. An LLM composes its own tool-call arguments, so being shown the right warehouse does not stop it querying a different one — and that failure is quiet, because stock in the wrong warehouse reads as zero units, indistinguishable from a genuine stockout.
+
+`Tool(bound_args=...)` closes it. The framework supplies the argument from run state, over whatever the model emitted:
+
+```python
+from neograph import Tool
+
+Tool(
+    name="check_stock",
+    budget=3,
+    bound_args={"warehouse_id": "audit.warehouse_id"},   # the framework's, not the model's
+)
+```
+
+Arguments not named stay exactly as the model composed them. The binding is declared, so assembly fails when no upstream produces the path's root — a reference the framework resolves must be proven resolvable before a run, not silently become `None` and query the wrong thing.
+
+Reach for it whenever the **correctness** of an argument matters rather than its plausibility. `examples/33_run_scoped_state.py` shows all three routes in one pipeline, with a fake model that queries the wrong warehouse on purpose.

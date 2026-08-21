@@ -38,7 +38,7 @@ from neograph._normalize import _declared_output
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._state_keys import StateKeys
 from neograph._validation_arms import ArmScopedProducers, _check_no_modifier_in_branch_arm
-from neograph._validation_inputs import _check_item_input
+from neograph._validation_inputs import _check_bound_args, _check_item_input
 from neograph._validation_modifiers import (
     _validate_merge_hooks,
     validate_loop_construct,
@@ -196,6 +196,7 @@ def _validate_node_chain(
                         location=_source_location(),
                     )
 
+        _check_bound_args(item, ambient_producers, visible_producers)
         # Sub-construct items: recurse with the current producer union as the
         # ambient set so inner-node context checks fire at arbitrary depth.
         # The TypeGuard narrows `item` to ConstructLike — no untyped cast.

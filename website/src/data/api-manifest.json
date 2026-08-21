@@ -740,6 +740,12 @@
           "required": false
         },
         {
+          "annotation": "dict[str, str] | None",
+          "default": "None",
+          "name": "bound_args",
+          "required": false
+        },
+        {
           "annotation": "bool",
           "default": "False",
           "name": "idempotent",
@@ -748,7 +754,7 @@
       ],
       "kind": "pydantic_model",
       "name": "Tool",
-      "signature": "(name: str, budget: int = 0, config: dict[str, Any] = <factory:dict>, idempotent: bool = False)"
+      "signature": "(name: str, budget: int = 0, config: dict[str, Any] = <factory:dict>, bound_args: dict[str, str] | None = None, idempotent: bool = False)"
     },
     {
       "anchor": "toolinteraction",

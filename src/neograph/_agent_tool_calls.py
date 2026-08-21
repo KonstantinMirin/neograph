@@ -22,7 +22,9 @@ from langchain_core.runnables import RunnableConfig
 
 from neograph._content_blocks import _block_field, _iter_content_blocks, _resource_link_kind
 from neograph._tool_loop import _render_tool_result_for_llm, _unparseable_args_raw
+from neograph.di import read_upstream
 from neograph.errors import ConfigurationError
+from neograph.node import Node
 from neograph.tool import ProducingCall, ResourceRef, ToolBudgetTracker, ToolInteraction
 
 
@@ -43,11 +45,70 @@ def _raise_sync_tool_async(node_name: str, tool_name: str, exc: Exception) -> No
     ) from exc
 
 
+def _resolve_bound_args(node: Node, bus: Any) -> dict[str, dict[str, Any]]:
+    """``{tool_name: {arg: value}}`` for every ``Tool.bound_args`` on *node*.
+
+    Resolved ONCE per turn from state, so a path is read at the point the run
+    reached rather than per tool call. A dotted path navigates the resolved
+    VALUE after the first segment, matching how ``Each(over=...)`` reads its
+    collection -- one navigation rule, not two.
+
+    Sits beside ``_apply_bound_args`` so one module owns the whole rule:
+    where a framework-owned tool argument comes from, and that a model cannot
+    replace it.
+    """
+    bound: dict[str, dict[str, Any]] = {}
+    for tool_spec in node.tools or []:
+        # A raw LangChain BaseTool carries no neograph declaration, so there is
+        # nothing to bind on it.
+        bindings = getattr(tool_spec, "bound_args", None)
+        if not bindings:
+            continue
+        resolved: dict[str, Any] = {}
+        for arg_name, path in bindings.items():
+            root, _, rest = path.partition(".")
+            # read_upstream, not bus.get: reading an upstream is a RULE, not a
+            # line -- it unwraps a Loop append-list and an Each result dict. A
+            # bound argument off a Loop-modified producer would otherwise
+            # resolve to the whole history rather than the latest value.
+            # required=False: assembly already proved the root has a producer,
+            # so absence here means an untaken branch arm, not a wiring bug.
+            value = read_upstream(bus, root, object, required=False, node_label=getattr(node, "name", ""))
+            for part in rest.split(".") if rest else []:
+                if value is None:
+                    break
+                value = getattr(value, part, None)
+            resolved[arg_name] = value
+        bound[getattr(tool_spec, "name", "")] = resolved
+    return bound
+
+def _apply_bound_args(tc: dict, bound_by_tool: dict[str, dict[str, Any]]) -> None:
+    """Overwrite the framework-owned arguments the model composed.
+
+    Applied inside the pre-invoke check so BOTH twins get it from one site --
+    the sync and async invokes are two sinks and a fix at each would drift.
+    It must also land BEFORE ``_idempotent_repeat_key`` reads ``tc["args"]``,
+    or two calls differing only in an overridden argument collapse in the
+    repeat cache: a correctness fix turning into a caching bug.
+
+    Arguments not named in ``bound_args`` are left exactly as the model wrote
+    them. Resolution lives in ``_agent_cycle._resolve_bound_args``, which holds
+    the state bus.
+    """
+    bound = bound_by_tool.get(tc.get("name", ""))
+    if not bound:
+        return
+    args = tc.get("args")
+    if isinstance(args, dict):
+        args.update(bound)
+
+
 def _tool_call_precheck(
     tc: dict,
     tracker: ToolBudgetTracker,
     tool_instances: dict,
     handoff_targets: dict[str, str] | None = None,
+    bound_by_tool: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[str, Any]:
     """Pure pre-invoke check for one tool call. Returns ``("handoff", peer)`` for
     a synthesized ``transfer_to_<peer>`` call (design §3.2), ``("msg",
@@ -83,6 +144,10 @@ def _tool_call_precheck(
     tool_fn = tool_instances.get(name)
     if tool_fn is None:
         return "msg", ToolMessage(content=f"Unknown tool: {name}", tool_call_id=tc["id"])
+    # Last thing before the call is cleared to run, and before the caller takes
+    # the repeat key: a framework-owned argument is not the model's to choose.
+    if bound_by_tool:
+        _apply_bound_args(tc, bound_by_tool)
     return "run", tool_fn
 
 

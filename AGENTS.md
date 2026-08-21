@@ -450,6 +450,23 @@ Verbatim (un-rendered) delivery is a PROPERTY of the channel, useful for a pre-f
 
 ---
 
+## Run-scoped state: how a step reaches a value produced earlier
+
+An LLM-mode node declares `context=["ctx"]` and reads the field straight from state — declared, validated at assembly, and it works inside a fan-out where the port already carries the mapped item.
+
+A SCRIPTED node needs no such mechanism, and deliberately does not get one (`neograph-7e065`). An upstream read is already a normal typed input, and dict-form `inputs` lets a fanned branch declare both at once:
+
+```python
+@node(outputs=Out, map_over="claims.items", map_key="text")
+def branch(item: Claim, ctx: RunCtx) -> Out: ...   # item = WHICH ITEM, ctx = WHICH RUN
+```
+
+That route is **better** than `context=`, not merely equivalent: the validator type-checks a fan-in input and it creates a real dataflow edge, while a `context` field is typed `Any` in `state.py` and declares none. Widening `context=` to scripted nodes would add a second, weaker way to do one thing. Pinned by `tests/test_scripted_run_state.py`.
+
+**What neither closes**: a value the model composes into a TOOL CALL is still the model's until it is bound. Use `Tool(bound_args={"warehouse_id": "audit.warehouse_id"})` when the argument's correctness matters — seeing a value and being unable to override it are different guarantees.
+
+---
+
 ## Modes and mode inference
 
 `@node` supports five execution modes:
