@@ -1,4 +1,18 @@
-"""Example 14: Context Injection -- verbatim state in sub-constructs.
+"""Example 14: context= -- verbatim rendering of run state.
+
+`context=` reads a value produced EARLIER IN THE RUN without threading it
+through the intervening node shapes. This example is about ONE PROPERTY of
+that channel: values arrive un-rendered, so a string crafted for the model
+reaches it as written.
+
+For the capability itself -- the three routes a step has to run-scoped state,
+and why being shown a value is not the same as a tool receiving it -- see
+example 33 and the Run-Scoped State concept page. Reading this example as
+"context= is for rendering" is the misreading that cost a consumer a week
+(GH #15); it is for reaching backwards in the run, and rendering verbatim is
+a property it happens to have.
+
+Original title: "Context Injection -- verbatim state in sub-constructs".
 
 Scenario: A requirements verification pipeline where:
   1. build_catalog: scripted node produces a pre-formatted graph catalog
