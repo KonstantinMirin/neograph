@@ -587,7 +587,7 @@ tool(fn: 'Callable | None' = None, *, name: 'str | None' = None, budget: 'int' =
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-Tool(name: str, budget: int = 0, config: dict[str, Any] = <factory:dict>, idempotent: bool = False)
+Tool(name: str, budget: int = 0, config: dict[str, Any] = <factory:dict>, bound_args: dict[str, str] | None = None, idempotent: bool = False)
 ```
 
 | Field | Type | Required | Default |
@@ -595,6 +595,7 @@ Tool(name: str, budget: int = 0, config: dict[str, Any] = <factory:dict>, idempo
 | <span id="tool-model-name"></span>`name` | `str` | yes |  |
 | <span id="tool-model-budget"></span>`budget` | `int` | no | `0` |
 | <span id="tool-model-config"></span>`config` | `dict[str, Any]` | no | `<factory:dict>` |
+| <span id="tool-model-bound_args"></span>`bound_args` | `dict[str, str] | None` | no | `None` |
 | <span id="tool-model-idempotent"></span>`idempotent` | `bool` | no | `False` |
 
 ### ToolInteraction

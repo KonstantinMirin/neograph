@@ -197,6 +197,27 @@ def _validate_node_chain(
                         location=_source_location(),
                     )
 
+        # bound_args= is checked exactly like context=, and for the same reason:
+        # a reference the framework RESOLVES must be proven resolvable before a
+        # run, or it silently becomes None at call time -- which for a tool
+        # argument means querying the wrong thing and reading the empty answer
+        # as a real one. Same `context_checkable` deferral for a standalone
+        # sub-construct walk.
+        if isinstance(item, Node) and item.tools and context_checkable:
+            known_fields = set(ambient_producers or ()) | set(producers)
+            for tool_spec in item.tools:
+                for arg_name, path in (getattr(tool_spec, "bound_args", None) or {}).items():
+                    root_field = field_name_for(path.partition(".")[0])
+                    if root_field not in known_fields:
+                        raise ConstructError.build(
+                            f"tool '{getattr(tool_spec, 'name', tool_spec)}' binds bound_args['{arg_name}']='{path}' "
+                            f"but no upstream node produces '{path.partition('.')[0]}'",
+                            found=f"known upstream fields: {sorted(known_fields) or '(none)'}",
+                            hint="bound_args reads run STATE; the path's root must be a field some upstream node writes",
+                            node=item.name,
+                            location=_source_location(),
+                        )
+
         # Sub-construct items: recurse with the current producer union as the
         # ambient set so inner-node context checks fire at arbitrary depth.
         # The TypeGuard narrows `item` to ConstructLike — no untyped cast.

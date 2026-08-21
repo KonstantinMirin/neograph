@@ -47,6 +47,21 @@ class Tool(BaseModel, frozen=True):
     budget: int = 0  # max calls for this tool (0 = unlimited)
     config: dict[str, Any] = Field(default_factory=dict)
 
+    # Arguments the FRAMEWORK supplies, never the model: {arg_name: state_path}.
+    # `bound_args={"deal_id": "ctx.deal_id"}` reads state field `ctx`, takes its
+    # `deal_id`, and writes it over whatever the model emitted for that argument.
+    #
+    # This exists because a model composes tool arguments, so an invented one is
+    # otherwise REPRESENTABLE -- and silently: a wrong id returns an empty result
+    # that reads exactly like a legitimately empty one, so the run completes and
+    # concludes from evidence about nothing. `context=` lets the model SEE the
+    # right value; only this makes the wrong value unreachable.
+    #
+    # DECLARED, so it is checkable: assembly fails when no upstream produces the
+    # path's root, rather than resolving to None at call time. Arguments not named
+    # here are left exactly as the model composed them.
+    bound_args: dict[str, str] | None = None
+
     # Replay-safety gate; see neograph-lhc6. True only when re-invoking this tool is
     # side-effect-safe -- read-only, or an idempotent mutation (e.g. an HTTP PUT).
     # Default is the CONSERVATIVE non-idempotent: a bare Tool must not be replayed
