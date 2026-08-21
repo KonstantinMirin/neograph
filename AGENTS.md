@@ -403,7 +403,7 @@ def branch(item: Claim, ctx: RunCtx) -> Out: ...   # item = WHICH ITEM, ctx = WH
 
 That route is **better** than `context=`, not merely equivalent: the validator type-checks a fan-in input and it creates a real dataflow edge, while a `context` field is typed `Any` in `state.py` and declares none. Widening `context=` to scripted nodes would add a second, weaker way to do one thing. Pinned by `tests/test_scripted_run_state.py`.
 
-**What neither closes**: a value the model composes into a TOOL CALL is still the model's until it is bound. Use `Tool(bound_args={"deal_id": "ctx.deal_id"})` when the argument's correctness matters — seeing a value and being unable to override it are different guarantees.
+**What neither closes**: a value the model composes into a TOOL CALL is still the model's until it is bound. Use `Tool(bound_args={"warehouse_id": "audit.warehouse_id"})` when the argument's correctness matters — seeing a value and being unable to override it are different guarantees.
 
 ---
 

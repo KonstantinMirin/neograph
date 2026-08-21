@@ -28,15 +28,15 @@ def test_the_example_runs_and_the_model_cannot_substitute_the_bound_argument(cap
     out = capsys.readouterr().out
 
     # Route 2: every fanned scripted branch read the run context.
-    assert "missing index [deal 4822/acme]" in out
-    assert "stale cache [deal 4822/acme]" in out
+    assert "SKU-114 [warehouse 4822/eu-west]" in out
+    assert "SKU-330 [warehouse 4822/eu-west]" in out
 
-    # Route 3: the model asked for 1, the tool got 4822, and the unbound
-    # argument survived untouched. All three lines matter -- the third is what
-    # stops the fix being "overwrite everything".
-    assert "model emitted   : deal_id=1" in out
-    assert "tool received   : deal_id=4822" in out
-    assert "verbosity='full'" in out
+    # Route 3: the model asked for warehouse 1, the tool got 4822, and the
+    # unbound argument survived untouched. All three lines matter -- the third
+    # is what stops the fix being "overwrite everything".
+    assert "model emitted   : warehouse_id=1" in out
+    assert "tool received   : warehouse_id=4822" in out
+    assert "include_reserved=True" in out
 
 
 def test_the_bound_argument_is_declared_on_the_node():
@@ -47,9 +47,9 @@ def test_the_bound_argument_is_declared_on_the_node():
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
-        review = next(n for n in module.pipeline.nodes if n.name == "review")
+        summarize = next(n for n in module.pipeline.nodes if n.name == "summarize")
     finally:
         sys.modules.pop(spec.name, None)
 
-    assert review.tools[0].bound_args == {"deal_id": "run_ctx.deal_id"}
-    assert review.context == ["run_ctx"]
+    assert summarize.tools[0].bound_args == {"warehouse_id": "audit.warehouse_id"}
+    assert summarize.context == ["audit"]

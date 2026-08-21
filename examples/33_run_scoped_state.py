@@ -1,26 +1,31 @@
 """Example 33: Run-scoped state -- reaching a value the previous step didn't hand you.
 
 A step often needs a value produced earlier in the run that is NOT what its
-input port carries: run identity, a session handle, a tenant. Threading it
-through every intermediate type pollutes the domain model -- a `Claim` is about
-a fault, not about which deal it belongs to -- and passing it as config only
-works while the value is fixed for the whole run.
+input port carries: which tenant, which warehouse, which session. Threading it
+through every intermediate type pollutes the domain model -- a `Discrepancy` is
+about a product, not about which warehouse the audit is running in -- and
+passing it as config only works while the value is fixed for the whole run.
 
-There are three routes, and the difference between them is the whole point of
-this example. They are not alternatives; they answer different questions.
+There are three routes, and the difference between them is the point of this
+example. They are not alternatives; they answer different questions.
 
-    context=["run_ctx"]            an LLM node SEES the value
+    context=["audit"]              an LLM node SEES the value
     inputs={"item": X, "ctx": Y}   a scripted node READS the value (type-checked)
     Tool(bound_args={...})         a tool RECEIVES the value, and the model
                                    cannot substitute a different one
 
 The third exists because the first is not a guarantee. An LLM composes its own
-tool-call arguments, so being shown the right deal id does not stop a model
-emitting a different one -- and that failure is silent, because a wrong id
-returns an empty result that reads exactly like a legitimately empty one.
+tool-call arguments, so being shown the right warehouse does not stop a model
+emitting a different one.
+
+That failure is quiet, which is what makes it expensive. Ask for a SKU's stock
+in the wrong warehouse and the answer is zero units -- indistinguishable from a
+genuine stockout. The run completes, every gate stays green, and the report
+says "out of stock" about a shelf nobody looked at.
 
 To make that concrete rather than asserted, the fake model below DELIBERATELY
-asks for deal 1 when the run is about deal 4822. Watch what the tool receives.
+queries warehouse 1 when the audit is running in warehouse 4822. Watch what the
+tool receives.
 
 Keyless -- uses a fake LLM.
 
@@ -40,28 +45,33 @@ from neograph import Tool, compile, construct_from_module, node, run
 # -- Schemas --------------------------------------------------------------
 
 
-class RunCtx(BaseModel, frozen=True):
+class Audit(BaseModel, frozen=True):
     """Produced once, early. Every later step needs it; no later step produces it."""
 
-    deal_id: int
-    tenant: str
+    warehouse_id: int
+    region: str
 
 
-class Claim(BaseModel, frozen=True):
-    """A domain object. Note what it does NOT carry: any run identity."""
+class Discrepancy(BaseModel, frozen=True):
+    """A domain object. Note what it does NOT carry: any run identity.
 
-    text: str
+    A discrepancy is about a product. Adding `warehouse_id` here to get it
+    downstream would make the domain model carry routing information, and doing
+    that a few times is how a clean model turns into transport envelopes.
+    """
+
+    sku: str
 
 
-class Claims(BaseModel, frozen=True):
-    items: tuple[Claim, ...]
+class Discrepancies(BaseModel, frozen=True):
+    items: tuple[Discrepancy, ...]
 
 
-class Triage(BaseModel, frozen=True):
+class Classified(BaseModel, frozen=True):
     label: str
 
 
-class Verdict(BaseModel, frozen=True):
+class Report(BaseModel, frozen=True):
     text: str
 
 
@@ -70,16 +80,15 @@ class Verdict(BaseModel, frozen=True):
 tool_calls_seen: list[dict] = []
 
 
-class DealLookupTool:
-    name = "get_deal"
+class StockLookupTool:
+    name = "check_stock"
 
     def invoke(self, args, config=None, **kwargs):
         tool_calls_seen.append(dict(args))
-        return f"deal {args['deal_id']}: 3 open findings"
+        return f"warehouse {args['warehouse_id']}: 14 units on hand"
 
 
 # -- A model that guesses ---------------------------------------------------
-
 
 # Module-level so the count survives bind_tools(), which the cycle calls once
 # per turn and which must return a bound clone.
@@ -87,10 +96,10 @@ turns = {"n": 0}
 
 
 class GuessingLLM:
-    """Emits deal_id=1. The run is about deal 4822.
+    """Queries warehouse 1. The audit is running in warehouse 4822.
 
-    This is not a strawman: it is the reported production shape, where a
-    fan-out branch made 49 calls whose deal id read 1, 2, 3, 4, 5, 1001.
+    Not a strawman -- a model fills in an argument it was never given a way to
+    know, and a plausible-looking integer is the most likely thing it writes.
     """
 
     def bind_tools(self, tools):
@@ -101,10 +110,14 @@ class GuessingLLM:
         if turns["n"] == 1:
             msg = AIMessage(content="")
             msg.tool_calls = [
-                {"name": "get_deal", "args": {"deal_id": 1, "verbosity": "full"}, "id": "c1"}
+                {
+                    "name": "check_stock",
+                    "args": {"warehouse_id": 1, "include_reserved": True},
+                    "id": "c1",
+                }
             ]
             return msg
-        return AIMessage(content=Verdict(text="reviewed").model_dump_json())
+        return AIMessage(content=Report(text="audit complete").model_dump_json())
 
     def with_structured_output(self, model):
         return self
@@ -114,29 +127,29 @@ def llm_factory(tier):
     return GuessingLLM()
 
 
-# -- Route 1 + 2: the pipeline ---------------------------------------------
+# -- The pipeline ----------------------------------------------------------
 
 
-@node(outputs=RunCtx)
-def run_ctx() -> RunCtx:
-    return RunCtx(deal_id=4822, tenant="acme")
+@node(outputs=Audit)
+def audit() -> Audit:
+    return Audit(warehouse_id=4822, region="eu-west")
 
 
-@node(outputs=Claims)
-def claims() -> Claims:
-    return Claims(items=(Claim(text="missing index"), Claim(text="stale cache")))
+@node(outputs=Discrepancies)
+def discrepancies() -> Discrepancies:
+    return Discrepancies(items=(Discrepancy(sku="SKU-114"), Discrepancy(sku="SKU-330")))
 
 
-@node(outputs=Triage, map_over="claims.items", map_key="text")
-def triage(item: Claim, run_ctx: RunCtx) -> Triage:
+@node(outputs=Classified, map_over="discrepancies.items", map_key="sku")
+def classify(item: Discrepancy, audit: Audit) -> Classified:
     """ROUTE 2 -- a scripted fan-out branch.
 
-    `item` is the fanned value; `run_ctx` is an ordinary upstream read. A
-    scripted node needs no special mechanism: the port carries WHICH ITEM and a
-    second fan-in key carries WHICH RUN. Both are type-checked by the validator,
-    which is why this is the route to prefer when the node runs Python.
+    `item` is the fanned value; `audit` is an ordinary upstream read. A scripted
+    node needs no special mechanism: the port carries WHICH ITEM and a second
+    fan-in key carries WHICH RUN. Both are type-checked by the validator, which
+    is why this is the route to prefer when the node runs Python.
     """
-    return Triage(label=f"{item.text} [deal {run_ctx.deal_id}/{run_ctx.tenant}]")
+    return Classified(label=f"{item.sku} [warehouse {audit.warehouse_id}/{audit.region}]")
 
 
 # ROUTE 1 + 3 -- an LLM node that both SEES the run context and cannot
@@ -144,24 +157,25 @@ def triage(item: Claim, run_ctx: RunCtx) -> Triage:
 # one is what the model is shown, the other is what it cannot change.
 @node(
     mode="agent",
-    outputs=Verdict,
+    outputs=Report,
     model="fast",
-    prompt="review",
+    prompt="audit",
     # ROUTE 1: the model SEES the run context. Declared, so assembly fails if
     # nothing upstream produces it.
-    context=["run_ctx"],
+    context=["audit"],
     tools=[
         Tool(
-            name="get_deal",
+            name="check_stock",
             budget=3,
             # ROUTE 3: the framework SUPPLIES this argument. Whatever the model
-            # emits for deal_id is overwritten from run state. `verbosity` is
-            # not named here, so it stays exactly as the model composed it.
-            bound_args={"deal_id": "run_ctx.deal_id"},
+            # emits for warehouse_id is overwritten from run state.
+            # `include_reserved` is not named here, so it stays exactly as the
+            # model composed it.
+            bound_args={"warehouse_id": "audit.warehouse_id"},
         )
     ],
 )
-def review(claims: Claims) -> Verdict:
+def summarize(discrepancies: Discrepancies) -> Report:
     # body unused for mode='agent' -- the LLM drives the tool loop
     ...
 
@@ -175,25 +189,25 @@ if __name__ == "__main__":
     graph = compile(
         pipeline,
         llm_factory=llm_factory,
-        prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "review"}],
-        tool_factories={"get_deal": lambda config, tool_config: DealLookupTool()},
+        prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "audit"}],
+        tool_factories={"check_stock": lambda config, tool_config: StockLookupTool()},
     )
-    result = run(graph, input={"node_id": "REVIEW-1"})
+    result = run(graph, input={"node_id": "AUDIT-1"})
 
     print("Route 2 -- scripted fan-out branches, each reading the run context:")
-    for key, value in result["triage"].items():
+    for key, value in result["classify"].items():
         print(f"  {key}: {value.label}")
 
     args = tool_calls_seen[0]
     print("\nRoute 3 -- what the model asked for vs what the tool received:")
-    print("  model emitted   : deal_id=1        <- an id that does not exist")
-    print(f"  tool received   : deal_id={args['deal_id']}     <- supplied from run state")
-    print(f"  left untouched  : verbosity={args['verbosity']!r}  <- not bound, so still the model's")
+    print("  model emitted   : warehouse_id=1        <- a warehouse this audit is not in")
+    print(f"  tool received   : warehouse_id={args['warehouse_id']}     <- supplied from run state")
+    print(f"  left untouched  : include_reserved={args['include_reserved']}  <- not bound, still the model's")
 
-    assert args["deal_id"] == 4822, "the model's invented id reached the tool"
-    assert args["verbosity"] == "full", "binding one argument swallowed another"
+    assert args["warehouse_id"] == 4822, "the model's invented warehouse reached the tool"
+    assert args["include_reserved"] is True, "binding one argument swallowed another"
 
     print("\nWithout bound_args the first line would have been the tool call.")
-    print("A wrong id returns an empty result that reads like a real one, so the")
-    print("run completes, every gate stays green, and the answer is derived from")
-    print("evidence about a deal that does not exist.")
+    print("Stock in the wrong warehouse reads as zero units, which is")
+    print("indistinguishable from a genuine stockout -- so the run completes,")
+    print("every gate stays green, and the report is about a shelf nobody looked at.")
