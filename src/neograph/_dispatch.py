@@ -194,7 +194,17 @@ class ScriptedDispatch:
 
     Delegates to the registered scripted function. Receives ``context_data``
     in its ``execute()`` signature for protocol conformance but does NOT
-    pass it to the function — scripted nodes have no LLM context needs.
+    pass it to the function, and that is a decision rather than a gap
+    (``neograph-7e065``).
+
+    A scripted node reaching a value produced earlier in the run declares it as
+    a normal typed input, and under ``Each`` declares BOTH -- the fanned item
+    via ``fan_out_param`` and the upstream by name -- in one dict-form
+    ``inputs``. That route is strictly better than ``context=``: the validator
+    type-checks a fan-in input and it creates a real dataflow edge, where a
+    ``context`` field is typed ``Any`` in ``state.py`` and declares no edge.
+    Widening ``context=`` here would add a second, weaker way to do one thing.
+    Pinned by ``tests/test_scripted_run_state.py``.
     """
 
     def __init__(self, fn: Callable) -> None:
