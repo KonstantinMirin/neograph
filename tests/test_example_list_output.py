@@ -1,4 +1,4 @@
-"""Runtime regression for examples/12_list_output_type.py.
+"""Runtime regression for examples/32_list_output_type.py.
 
 The example exists because `outputs=list[X]` was the one declaration shape the
 framework never exercised: zero occurrences across every other example, while
@@ -17,11 +17,11 @@ import importlib.util
 import sys
 from pathlib import Path
 
-EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "12_list_output_type.py"
+EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "32_list_output_type.py"
 
 
 def _load_example():
-    spec = importlib.util.spec_from_file_location("neograph_example_12_list_output", EXAMPLE)
+    spec = importlib.util.spec_from_file_location("neograph_example_32_list_output", EXAMPLE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     # Register BEFORE exec so Pydantic forward refs resolve against the module
