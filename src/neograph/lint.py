@@ -756,7 +756,7 @@ def _check_unconsumed_outputs(
     port_types = {
         m.input
         for m in members
-        if isinstance(m, Construct) and isinstance(getattr(m, "input", None), type)
+        if isinstance(m, Construct) and isinstance(m.input, type)
     }
 
     consumed_whole: set[str] = set()
