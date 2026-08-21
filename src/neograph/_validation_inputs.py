@@ -231,10 +231,14 @@ def _check_each_path(
     element_type = _extract_list_element(current_type)
     if element_type is None:
         raise ConstructError.build(
-            f"Each(over='{each.over}') terminal field is not a list",
-            expected="list[...]",
+            f"Each(over='{each.over}') terminal field is not a collection of one type",
+            expected="list[X] or tuple[X, ...]",
             found=_fmt_type(current_type),
-            hint="Each fans out over a collection; the terminal field must be a list",
+            hint=(
+                "Each fans out over a homogeneous collection. A heterogeneous "
+                "tuple[X, Y] has no single element type, so which one each "
+                "branch would receive is undefined."
+            ),
             node=item.name,
             construct=construct.name,
             location=_source_location(),

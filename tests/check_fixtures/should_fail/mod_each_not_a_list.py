@@ -1,4 +1,4 @@
-# CHECK_ERROR: Each\(over='info_node\.title'\) terminal field is not a list
+# CHECK_ERROR: Each\(over='info_node\.title'\) terminal field is not a collection of one type
 # Each.over path resolves to a plain string field, not a list.
 # Should fail at assembly-time validation.
 from pydantic import BaseModel
