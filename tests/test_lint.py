@@ -1120,9 +1120,8 @@ class TestSupplySideChecksOnARealisticPipeline:
     """
 
     def _pipeline(self):
-        from typing import Annotated
 
-        from neograph import FromInput, ToolInteraction, construct_from_functions, node
+        from neograph import ToolInteraction, construct_from_functions, node
 
         class Deal(BaseModel):
             deal_id: str
