@@ -21,10 +21,7 @@ import structlog
 
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
-
-# input_contract/InputBinding are re-exported (noqa F401) so they resolve
-# alongside `lint` -- the two answer paired questions.
-from neograph._lint_di import InputBinding, _check_binding, input_contract, iter_di_bindings  # noqa: F401
+from neograph._lint_di import _check_binding, _check_unmatched_config_keys, iter_di_bindings
 
 # --- extracted clusters (neograph-3ffdg.10), re-exported so existing
 # --- `from neograph.lint import ...` call sites keep resolving unchanged.
@@ -146,6 +143,9 @@ def lint(
     tool_factory_lookup: dict[str, Callable] = dict(_decoration_registry.tool_factory)
     if tool_factories:
         tool_factory_lookup.update(tool_factories)
+
+    # Construct-level: consumability is a property of the whole binding set.
+    _check_unmatched_config_keys(construct, config, issues)
 
     all_known = _KNOWN_EXTRAS | (known_template_vars or set())
     _walk(

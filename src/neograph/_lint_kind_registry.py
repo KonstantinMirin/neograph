@@ -72,6 +72,14 @@ LINT_KIND_META: dict[str, LintKindMeta] = {
         "Bundled `BaseModel` via `FromConfig` -- each model field must exist in config.",
     ),
     # Template placeholders.
+    "config_key_unmatched": LintKindMeta(
+        "ERROR",
+        "A key in the `config=` passed to `lint()` that matches no DI binding in "
+        "the construct, so nothing reads it. A key accepted because it is present "
+        "rather than because a binding names it is how a padded config silences a "
+        "real unsatisfiable binding: the linter then agrees with a description of "
+        "the world it was handed, not with the graph.",
+    ),
     "from_input_unsatisfiable": LintKindMeta(
         "ERROR",
         "A `FromInput`/`FromConfig` parameter whose value is the Each-fanned item "

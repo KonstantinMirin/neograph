@@ -86,6 +86,11 @@
       "severity": "WARN"
     },
     {
+      "kind": "config_key_unmatched",
+      "meaning": "A key in the `config=` passed to `lint()` that matches no DI binding in the construct, so nothing reads it. A key accepted because it is present rather than because a binding names it is how a padded config silences a real unsatisfiable binding: the linter then agrees with a description of the world it was handed, not with the graph.",
+      "severity": "ERROR"
+    },
+    {
       "kind": "from_config",
       "meaning": "`Annotated[T, FromConfig]` -- resolved from `config['configurable']`, passed directly in `config=`.",
       "severity": "varies"

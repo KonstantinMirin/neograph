@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from neograph._ir_branch import iter_with_arms
 from neograph._lint_kind_registry import LintIssue
 from neograph._sidecar import _get_param_res, get_merge_fn_metadata
+from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.di import DI_CALLER_SUPPLIED_KINDS, DIBinding, DIKind
 from neograph.node import Node
@@ -35,6 +36,24 @@ if TYPE_CHECKING:
     from neograph.construct import ConstructItem
 
 __all__ = ["InputBinding", "input_contract"]
+
+# Keys a caller may legitimately put in `config['configurable']` that no DI
+# binding names: the framework extras neograph itself supplies, and
+# LangGraph's own run identifiers. Anything `neo_`/`_neo_`-prefixed is a
+# framework channel (StateKeys.FRAMEWORK_PREFIX) and is matched by prefix
+# rather than listed, so a new one cannot be forgotten here.
+_CONFIG_FRAMEWORK_KEYS: frozenset[str] = frozenset(
+    {
+        StateKeys.NODE_ID,
+        StateKeys.PROJECT_ROOT,
+        StateKeys.HUMAN_FEEDBACK,
+        "thread_id",
+        "checkpoint_id",
+        "checkpoint_ns",
+        "run_id",
+        "run_name",
+    }
+)
 
 _MODEL_KINDS = (DIKind.FROM_INPUT_MODEL, DIKind.FROM_CONFIG_MODEL)
 
@@ -207,3 +226,45 @@ def _check_binding(
                         ),
                     )
                 )
+
+
+def _check_unmatched_config_keys(
+    construct: Construct,
+    config: dict[str, Any] | None,
+    issues: list[LintIssue],
+) -> None:
+    """Report a config key that no binding in *construct* can consume.
+
+    A key is accepted because a binding names it, never because it is present.
+    Honouring an unmatched key is what makes a padded lint config a working
+    silencer: the linter reports a binding no caller can satisfy, someone adds
+    the demanded key to make the message stop, and the linter then agrees with a
+    description of the world it was handed rather than with the graph (GH #12).
+
+    ERROR, deliberately. A WARN leaves the hatch open for any gate that keys on
+    ``required``, which is the gate a consumer falls back to.
+    """
+    if not config:
+        return
+
+    consumable = {binding.param for binding in input_contract(construct)}
+    for key in config:
+        if key in consumable or key in _CONFIG_FRAMEWORK_KEYS:
+            continue
+        if key.startswith(StateKeys.FRAMEWORK_PREFIX) or key.startswith("_" + StateKeys.FRAMEWORK_PREFIX):
+            continue
+        issues.append(
+            LintIssue(
+                node_name=construct.name,
+                param=key,
+                kind="config_key_unmatched",
+                required=True,
+                message=(
+                    f"{construct.name}: config key '{key}' matches no DI binding in this "
+                    f"construct, so nothing reads it. A key accepted because it is present "
+                    f"rather than because a binding names it is how a padded config silences "
+                    f"a real unsatisfiable binding. Remove it, or bind a parameter that "
+                    f"consumes it."
+                ),
+            )
+        )

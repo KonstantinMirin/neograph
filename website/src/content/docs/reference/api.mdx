@@ -757,6 +757,7 @@ XmlRenderer(*, include_field_info: "Literal['once', 'always', 'never']" = 'once'
 |------|----------|---------|
 | `act_mode_all_idempotent_tools` | WARN | `mode='act'` (mutations) but all tools are `idempotent=True` (read-only) -- probably a misclassification; use `mode='agent'` unless a tool is a genuinely idempotent mutation. |
 | `ask_human_in_mutating_node` | WARN | An `act`-mode (mutating) tool calls `ask_human()`; a non-idempotent side effect before the mid-loop pause can double-fire on resume. Make any pre-pause mutation idempotent, or move it after the pause. |
+| `config_key_unmatched` | ERROR | A key in the `config=` passed to `lint()` that matches no DI binding in the construct, so nothing reads it. A key accepted because it is present rather than because a binding names it is how a padded config silences a real unsatisfiable binding: the linter then agrees with a description of the world it was handed, not with the graph. |
 | `from_config` | varies | `Annotated[T, FromConfig]` -- resolved from `config['configurable']`, passed directly in `config=`. |
 | `from_config_model` | varies | Bundled `BaseModel` via `FromConfig` -- each model field must exist in config. |
 | `from_input` | varies | `Annotated[T, FromInput]` -- resolved from `config['configurable']`, originally from `run(input={...})`. |

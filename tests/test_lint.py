@@ -1281,3 +1281,71 @@ class TestCorrectGraphLintsToZero:
         assert {"deal_id", "user_ref", "auth"} <= missing, (
             f"a config missing three keys reported {[(i.kind, i.param, i.required) for i in issues]}"
         )
+
+
+class TestPaddedConfigKeysAreRejected:
+    """A config key that matches no binding is reported, not honoured.
+
+    GH #12's reporter supplied the evidence for this: their linter WAS working
+    and correctly named two parameters that could not resolve. Someone chasing a
+    green gate added the demanded keys to the lint config until the message
+    stopped. The graph then compiled, linted clean, and could not execute a
+    single call -- every run died in the DI preflight. It stayed that way for
+    days behind a green gate.
+
+    `from_input_unsatisfiable` makes that error DETECTABLE. Rejecting an
+    unmatched key makes it UNSUPPRESSABLE. Honouring a key purely because it is
+    present is the same failure the project already named for GH #13: a checker
+    that must be told what the world looks like turns its own agreement with
+    that description into non-evidence.
+    """
+
+    @staticmethod
+    def _graph():
+        class Out(BaseModel):
+            text: str
+
+        @node(outputs=Out)
+        def start(question: Annotated[str, FromInput]) -> Out:
+            return Out(text="x")
+
+        return construct_from_functions("g", [start])
+
+    def test_a_key_matching_no_binding_is_reported(self):
+        """The padding tell: a key the graph never asked for."""
+        issues = lint(self._graph(), config={"question": "q", "nonexistent_key": "PAD"})
+
+        unmatched = [i for i in issues if i.kind == "config_key_unmatched"]
+        assert [i.param for i in unmatched] == ["nonexistent_key"], (
+            f"the padded key was honoured silently; got {[(i.kind, i.param) for i in issues]}"
+        )
+        assert unmatched[0].required is True, "a key no caller could supply is an error"
+
+    def test_padding_cannot_reduce_the_issue_count_of_a_defective_graph(self):
+        """The reporter's shape: pad the config until the message stops. The
+        graph is still unrunnable, so the padding must not buy a clean gate."""
+        from tests.test_lint import TestUnsatisfiableFromInput
+
+        broken = TestUnsatisfiableFromInput._each_over_port()
+
+        honest = lint(broken)
+        padded = lint(broken, config={"claim_in": {}, "text": "PADDED-FIXTURE-VALUE"})
+
+        assert [i for i in honest if i.kind == "from_input_unsatisfiable"], "precondition"
+        assert len(padded) >= len(honest), (
+            "padding the config lowered the issue count -- the hatch GH #12 describes"
+        )
+        assert [i for i in padded if i.kind == "config_key_unmatched"], (
+            "the padded keys were honoured rather than reported"
+        )
+
+    def test_a_satisfying_config_reports_nothing(self):
+        """No false positives: every key the graph declares is accepted."""
+        assert lint(self._graph(), config={"question": "q"}) == []
+
+    def test_framework_supplied_extras_are_not_unmatched(self):
+        """`node_id` and `project_root` are supplied by the framework, so a
+        caller passing them is not padding."""
+        issues = lint(self._graph(), config={"question": "q", "node_id": "n", "project_root": "/p"})
+
+        assert [i for i in issues if i.kind == "config_key_unmatched"] == []

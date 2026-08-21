@@ -135,7 +135,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     """Run compile() + lint() on all constructs in the target module."""
     from neograph.compiler import compile
     from neograph.errors import CompileError, ConstructError
-    from neograph.lint import input_contract, lint
+    from neograph._lint_di import input_contract
+    from neograph.lint import lint
 
     mod = _import_module(args.target)
     constructs = _discover_constructs(mod)

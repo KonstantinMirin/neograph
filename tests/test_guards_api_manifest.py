@@ -108,6 +108,7 @@ _KNOWN_LINT_KIND_FLOOR = frozenset(
     {
         "act_mode_all_idempotent_tools",
         "ask_human_in_mutating_node",
+        "config_key_unmatched",
         "llm_kwargs_missing",
         "loop_condition_none_unsafe",
         "loop_condition_unregistered",
@@ -413,7 +414,7 @@ class TestLintIssueKindExtraction:
 
 # ════════════════════════════════════════════════════════════════════════════
 # Class 4 -- enriched lint_issue_kinds: {kind, severity, meaning} objects,
-#            COMPLETE 14-kind set incl. the 4 DI kinds, code-derived severity
+#            COMPLETE kind set incl. the 4 DI kinds, code-derived severity
 #            (neograph-uw54v; refinement neograph-uqy66.52)
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -475,7 +476,7 @@ def _derive_literal_kind_severities() -> dict[str, set[bool]]:
 class TestLintIssueKindEnrichment:
     """The manifest's ``lint_issue_kinds`` must be enriched from bare name
     strings to ``{kind, severity, meaning}`` objects (neograph-uw54v), covering
-    the COMPLETE 14-kind set (10 literal + 4 DI) with a severity that STAYS
+    the COMPLETE kind set (the literal floor + the 4 DI kinds) with a severity that STAYS
     code-derived from the ``required=`` at each emission site.
 
     This is the Stage-A precursor that makes Severity/Meaning manifest-owned so
@@ -510,7 +511,7 @@ class TestLintIssueKindEnrichment:
             )
 
     def test_kind_set_is_complete_including_the_four_di_kinds(self):
-        """The manifest kind-set == the COMPLETE 14 kinds (10 literal + 4 DI).
+        """The manifest kind-set == the COMPLETE set (literal floor + 4 DI kinds).
 
         FAILS today: the AST walk misses the 4 dynamically-constructed DI kinds
         (from_input/from_config/from_input_model/from_config_model), so the
@@ -532,7 +533,9 @@ class TestLintIssueKindEnrichment:
         )
         extra = kinds - _COMPLETE_LINT_KIND_SET
         assert not extra, (
-            f"manifest lint_issue_kinds has unexpected kinds {sorted(extra)} not in the known 14-kind set."
+            f"manifest lint_issue_kinds has unexpected kinds {sorted(extra)} not in the known "
+            f"{len(_COMPLETE_LINT_KIND_SET)}-kind set. Add a LINT_KIND_META entry and extend "
+            f"_KNOWN_LINT_KIND_FLOOR."
         )
 
     def test_every_entry_has_nonempty_meaning_and_allowed_severity(self):

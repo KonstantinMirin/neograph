@@ -23,6 +23,7 @@ from neograph._agent_spec_conformance import ConformanceReport, ConformanceTier
 from neograph._agent_spec_conformance_report import export_conformance
 from neograph._hot_swap import aresume_from_agent_spec, resume_from_agent_spec
 from neograph._image import configure_image, resolve_image
+from neograph._lint_di import InputBinding, input_contract
 from neograph._llm import (
     CostCallback,
     LlmFactory,
@@ -68,7 +69,7 @@ from neograph.errors import (
 )
 from neograph.forward import ForwardConstruct
 from neograph.hitl import ask_human
-from neograph.lint import InputBinding, LintIssue, input_contract, lint
+from neograph.lint import LintIssue, lint
 from neograph.loader import from_agent_spec, load_spec
 from neograph.modifiers import (
     HANDOFF_END,
