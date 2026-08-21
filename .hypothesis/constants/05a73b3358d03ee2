@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph-release-0.7.9/src/neograph/_lint_consumers.py
+# hypothesis_version: 6.151.12
+
+['${', '.', ':', 'each', 'image:', 'input_field', 'modifier_set', 'outputs', 'over', 'portal', 'route', 'scripted', 'source_node', 'spec_field']

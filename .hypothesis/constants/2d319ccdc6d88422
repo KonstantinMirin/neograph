@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph-release-0.7.9/src/neograph/_lint_kind_registry.py
+# hypothesis_version: 6.151.12
+
+['ERROR', 'WARN', 'WARN/ERROR', 'config_key_unmatched', 'from_config', 'from_config_model', 'from_input', 'from_input_model', 'llm_kwargs_missing', 'varies']

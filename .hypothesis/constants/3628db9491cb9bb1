@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph-release-0.7.9/src/neograph/lint.py
+# hypothesis_version: 6.151.12
+
+['${', '${%s}', ', ', '.', 'act', 'agent', 'context', 'di_inputs', 'llm_kwargs_missing', 'loop.when', 'modifier_set', 'scripted', '{%s}']

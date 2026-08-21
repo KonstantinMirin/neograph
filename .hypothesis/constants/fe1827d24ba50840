@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph-release-0.7.9/src/neograph/_hints.py
+# hypothesis_version: 6.151.12
+
+['__annotations__', '__dict__', '__globals__', '__module__', '__qualname__']

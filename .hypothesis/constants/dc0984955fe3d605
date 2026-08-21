@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph-release-0.7.9/src/neograph/__main__.py
+# hypothesis_version: 6.151.12
+
+['  [optional]', ',', '--config', '--known-vars', '--output', '--overwrite', '--setup', '--version', '-o', '.py', '/', '\\', '__main__', 'check', 'command', 'conditions', 'config', 'config=', 'get_check_config', 'get_conditions', 'get_llm_factory', 'get_prompt_compiler', 'get_scripted', 'get_tool_factories', 'input', 'known_template_vars', 'llm_factory', 'modifiers', 'neograph', 'operator', 'prompt_compiler', 'run(input=...)', 'scripted', 'store_true', 'target', 'template_resolver', 'test-scaffold', 'tool_factories', 'version']

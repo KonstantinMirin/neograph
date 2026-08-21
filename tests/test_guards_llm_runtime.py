@@ -391,7 +391,15 @@ class TestLlmResponsibilityDiscipline:
         # the structured arm that holds no ValidationError to feed back. Kept to
         # ONE function — the hint body is inlined rather than split into a
         # build_*_repair_message sibling — specifically to hold this proxy down.
-        "_llm_retry.py": 695,  # 695 actual — at ceiling
+        # neograph-l2nul: 695 -> 698. Correctness fix, +3 lines: the parse tail
+        # became TypeAdapter(output_model).validate_json(...) so a declared
+        # container type (list[Claim]) parses at all -- it used to call
+        # model_validate_json, which only a BaseModel SUBCLASS has, and failed
+        # on EVERY row. The 3 lines are one hoisted display name and a two-line
+        # rationale at the call site. The eight per-site type_display_name()
+        # calls it replaced were 1:1, not additive. Load-bearing assertion is
+        # the name allowlist above, as ever.
+        "_llm_retry.py": 698,  # 698 actual — at ceiling
         # neograph-v569: 310 -> 445. The public standalone compile_prompt landed
         # here (its change axis) with a thorough public docstring, a shared
         # render-then-compile core (_render_and_compile, which render_prompt now
