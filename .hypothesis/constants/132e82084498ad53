@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph-release-0.7.9/src/neograph/_trace.py
+# hypothesis_version: 6.151.12
+
+['neograph:node', 'neograph_mode', 'neograph_node', 'neograph_node_id', 'neograph_output_type', 'subgraph']

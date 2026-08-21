@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph-release-0.7.9/src/neograph/di.py
+# hypothesis_version: 6.151.12
+
+['+json', ';', '?', '__name__', 'application/json', 'config', 'configurable', 'constant', 'from_config', 'from_config_model', 'from_input', 'from_input_model', 'from_resource', 'from_state', 'input', 'kind', 'mcp_resource_fetcher', 'producer_idempotent']

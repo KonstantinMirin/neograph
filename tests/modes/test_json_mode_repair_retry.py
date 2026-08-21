@@ -191,3 +191,57 @@ class TestTruncationContinuation:
         _invoke_json_with_retry(fake, _msgs(), Diagnosis, config={})
         follow_up = _last_user_content(fake.calls[1])
         assert "cut off" not in follow_up.lower()
+
+
+class Claim(BaseModel):
+    text: str
+
+
+class TestContainerOutputTypesParse:
+    """A declared output type that is not a BaseModel SUBCLASS still parses.
+
+    `_parse_json_response` ended in `output_model.model_validate_json(...)`,
+    which only a BaseModel subclass has. A node declaring `list[Claim]` -- or
+    dict-form `{"result": list[Claim]}` -- was accepted at assembly and then
+    failed at runtime on EVERY row, because this is the primary path, not a
+    fallback. Measured by the reporter across a 71-row corpus: no decisions.
+
+    The defect is sharpest stated as a disagreement: `output_strategy=
+    "structured"` takes the constrained-decoding path and is unaffected, so the
+    two strategies disagree about which declared output types are usable. And
+    since GH #8, `describe_type(list[Claim])` renders a correct array schema --
+    so the model is INSTRUCTED to return an array the parser then refuses.
+    """
+
+    def test_a_json_array_parses_against_a_list_output_type(self):
+        """The reported shape."""
+        from neograph._llm_retry import _parse_json_response
+
+        parsed = _parse_json_response('[{"text": "a"}, {"text": "b"}]', list[Claim])
+
+        assert parsed == [Claim(text="a"), Claim(text="b")]
+
+    def test_a_dict_output_type_parses(self):
+        """Same root cause, keyed rather than sequential."""
+        from neograph._llm_retry import _parse_json_response
+
+        parsed = _parse_json_response('{"a": {"text": "x"}}', dict[str, Claim])
+
+        assert parsed == {"a": Claim(text="x")}
+
+    def test_a_plain_base_model_still_parses(self):
+        """The fix must not regress the case that always worked."""
+        from neograph._llm_retry import _parse_json_response
+
+        assert _parse_json_response('{"text": "solo"}', Claim) == Claim(text="solo")
+
+    def test_a_container_validation_failure_still_reports_the_fields(self):
+        """A wrong-shaped payload must still fail loud with usable detail, not
+        pass through because the parser stopped being strict."""
+        from neograph._llm_retry import _parse_json_response
+        from neograph.errors import ExecutionError
+
+        with pytest.raises(ExecutionError) as exc:
+            _parse_json_response('[{"wrong_field": 1}]', list[Claim])
+
+        assert "text" in str(exc.value), f"the missing field is not named: {exc.value}"

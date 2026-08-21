@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph-release-0.7.9/src/neograph/_lint_supply.py
+# hypothesis_version: 6.151.12
+
+[', ', '.', ':', 'DI parameter', 'Each-fanned item', 'Loop carry', '_param_res', 'context', 'context field', 'each', 'fan_out_param', 'image:', 'inner_type', 'input', 'loop', 'merge_prompt', 'model_cls', 'modifier_set', 'none', 'oracle', 'skip_when', 'upstream input']
