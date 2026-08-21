@@ -89,6 +89,27 @@ DI_TEMPLATE_KINDS: frozenset[DIKind] = frozenset(
     }
 )
 
+# The DI kinds a CALLER supplies at run time -- the graph's input contract, read
+# by `input_contract()` and by the lint DI check that validates a specific
+# payload. CONSTANT is baked at decoration, FROM_STATE reads the state bus, and
+# FROM_RESOURCE hydrates from a manifest, so none of the three is a caller's to
+# supply.
+#
+# This is EQUAL to DI_TEMPLATE_KINDS above, and for a shared underlying reason:
+# both sets are "the value arrives via config['configurable']". They are kept
+# separate because they answer different questions -- one asks what a template
+# may name, the other asks what a caller must pass -- so a future kind that is
+# caller-supplied but not template-usable (or the reverse) moves one set without
+# silently moving the other.
+DI_CALLER_SUPPLIED_KINDS: frozenset[DIKind] = frozenset(
+    {
+        DIKind.FROM_INPUT,
+        DIKind.FROM_CONFIG,
+        DIKind.FROM_INPUT_MODEL,
+        DIKind.FROM_CONFIG_MODEL,
+    }
+)
+
 
 def _get_configurable(config: Any, key: str) -> Any:
     """Read a key from config['configurable'], handling dict and attr forms."""

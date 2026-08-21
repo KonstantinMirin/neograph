@@ -102,21 +102,23 @@ def _load_gen_api_manifest():
     return module
 
 
-# The 10 verified kind= string literals in src/neograph/lint.py today (grep
+# Every verified kind= string literal across the lint cluster (grep
 # `kind="[a-z_]+"` | sort -u). The extractor must yield AT LEAST these -- the
 # floor catches kind=variable drift (an AST walk for string-literal kwargs
 # silently misses a variable assignment).
-_KNOWN_LINT_KIND_FLOOR = frozenset({
-    "act_mode_all_idempotent_tools",
-    "ask_human_in_mutating_node",
-    "llm_kwargs_missing",
-    "loop_condition_none_unsafe",
-    "loop_condition_unregistered",
-    "resource_hydration_kind_unmatched",
-    "template_placeholder_known_vars_only",
-    "from_input_unsatisfiable",
-        "output_field_unconsumed",
+_KNOWN_LINT_KIND_FLOOR = frozenset(
+    {
+        "act_mode_all_idempotent_tools",
+        "ask_human_in_mutating_node",
+        "config_key_unmatched",
+        "llm_kwargs_missing",
+        "loop_condition_none_unsafe",
+        "loop_condition_unregistered",
+        "resource_hydration_kind_unmatched",
+        "template_placeholder_known_vars_only",
+        "from_input_unsatisfiable",
         "template_input_unreferenced",
+        "output_field_unconsumed",
         "template_placeholder_unresolvable",
     "template_var_requires_async_driver",
     "tool_requires_async_driver",
@@ -422,7 +424,7 @@ class TestLintIssueKindExtraction:
 
 # ════════════════════════════════════════════════════════════════════════════
 # Class 4 -- enriched lint_issue_kinds: {kind, severity, meaning} objects,
-#            COMPLETE 14-kind set incl. the 4 DI kinds, code-derived severity
+#            COMPLETE kind set incl. the 4 DI kinds, code-derived severity
 #            (neograph-uw54v; refinement neograph-uqy66.52)
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -459,8 +461,12 @@ def _derive_literal_kind_severities() -> dict[str, set[bool]]:
     emitted at multiple sites with conflicting ``required`` (the dual case).
     DI kinds use ``kind=variable`` and are invisible to this literal walk.
     """
-    lint_path = REPO_ROOT / "src" / "neograph" / "lint.py"
-    tree = ast.parse(lint_path.read_text())
+    # The FILE LIST comes from the generator (single source; the lint cluster is
+    # more than one module now); the WALK below stays independent, which is the
+    # point of this cross-check.
+    gen = _load_gen_api_manifest()
+    src_dir = REPO_ROOT / "src" / "neograph"
+    tree = ast.parse("\n".join((src_dir / name).read_text() for name in gen.LINT_CLUSTER_MODULES))
     out: dict[str, set[bool]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -488,7 +494,7 @@ def _derive_literal_kind_severities() -> dict[str, set[bool]]:
 class TestLintIssueKindEnrichment:
     """The manifest's ``lint_issue_kinds`` must be enriched from bare name
     strings to ``{kind, severity, meaning}`` objects (neograph-uw54v), covering
-    the COMPLETE 14-kind set (10 literal + 4 DI) with a severity that STAYS
+    the COMPLETE kind set (the literal floor + the 4 DI kinds) with a severity that STAYS
     code-derived from the ``required=`` at each emission site.
 
     This is the Stage-A precursor that makes Severity/Meaning manifest-owned so
@@ -525,7 +531,7 @@ class TestLintIssueKindEnrichment:
             )
 
     def test_kind_set_is_complete_including_the_four_di_kinds(self):
-        """The manifest kind-set == the COMPLETE 14 kinds (10 literal + 4 DI).
+        """The manifest kind-set == the COMPLETE set (literal floor + 4 DI kinds).
 
         FAILS today: the AST walk misses the 4 dynamically-constructed DI kinds
         (from_input/from_config/from_input_model/from_config_model), so the
@@ -541,14 +547,15 @@ class TestLintIssueKindEnrichment:
         missing = _COMPLETE_LINT_KIND_SET - kinds
         assert not missing, (
             f"manifest lint_issue_kinds is INCOMPLETE, missing {sorted(missing)} "
-            f"(expected all 14 = 10 literal + 4 DI kinds "
+            f"(expected all {len(_COMPLETE_LINT_KIND_SET)} = the literal floor + 4 DI kinds "
             f"{sorted(_DI_KIND_NAMES)}). The AST walk cannot see kind=variable DI "
             f"emissions; they must be unioned in from neograph.di.DI_TEMPLATE_KINDS."
         )
         extra = kinds - _COMPLETE_LINT_KIND_SET
         assert not extra, (
-            f"manifest lint_issue_kinds has unexpected kinds {sorted(extra)} not "
-            f"in the known 14-kind set."
+            f"manifest lint_issue_kinds has unexpected kinds {sorted(extra)} not in the known "
+            f"{len(_COMPLETE_LINT_KIND_SET)}-kind set. Add a LINT_KIND_META entry and extend "
+            f"_KNOWN_LINT_KIND_FLOOR."
         )
 
     def test_every_entry_has_nonempty_meaning_and_allowed_severity(self):
