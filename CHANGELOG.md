@@ -7,15 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.9] - 2026-08-21
+
 ### Fixed
 
 - **`output_field_unconsumed` no longer reports three classes of live field as dead** (`neograph-o5z7j`). Running the new check against this repo's own examples surfaced five reports; four were the check's own false positives, from three distinct bugs. A member **sub-construct** consumes its port BY TYPE and is a `Construct` rather than a `Node`, so filtering the walk to Nodes made it invisible and every producer feeding a sub-construct looked dead. A **single-type input** also resolves by type, not by the producer's name, so comparing it against a name-keyed producer hid every such consumer. And `${image:seed.photo}` reads field `photo` of `seed`, but the dotted reader did not strip the `image:` rendering prefix that `_placeholder_root` already strips, so the root read as `image:seed`. Each fix carries a regression test and each is mutation-verified. Reports on the repo's examples fall from five to one — and that survivor is a true positive, tracked as `neograph-svtsx`.
 
 - **A union renders its members in error messages, not the word "Union"** (`neograph-oq2jk`). Python 3.14 gave `types.UnionType` a `__name__` of `"Union"`, and `type_display_name` trusted `__name__` — so on 3.14 a fan-in mismatch reported the producer as `Union` instead of `Claims | str`, losing the one detail the reader needs. On 3.12 `__name__` was absent and the `str(t)` fallback happened to be right, so the defect was latent until the interpreter bump. The check-fixture suite caught it: `test_should_fail[type_union_output]` asserts the message names `Claims | str`, and its `CHECK_ERROR` regex stopped matching. Unions now render their members, `NoneType` renders as `None`, and the dict-form branch recurses through `type_display_name` so all three paths share one rule. This also drops the module prefix 3.12's fallback leaked: `__main__.Claims | str` becomes `Claims | str`.
-
-## [0.7.9] - 2026-08-21
-
-### Fixed
 
 - **`output_field_unconsumed` no longer reports a field the framework reads as dead** (`neograph-rwnz0`). Found by running `lint()` over the whole `should_pass` check-fixture corpus rather than over the examples: **18 reports on graphs the fixture suite calls correct**. The GH #11 check derived its three consumer axes from what a pipeline AUTHOR writes and never asked what the RUNTIME reads, so five classes of live field looked dead — a field a modifier names (`Portal(spec_field='spec', input_field='dispatch_input')`, `Each(over='clusters.groups')`), the peer-mode routing field (`Portal(route='goto')`), a branch condition's `attr_chain`, a sub-construct's declared `output=` surfacing at the boundary, and an `Optional`-wrapped single-type input (`inputs=Claims | None`), whose union was treated as opaque so the model it takes whole looked unread. A branch also has one terminal PER ARM, and `members[-1]` can name only one, so every other arm's final producer was reported dead. Every missed reader is a name already sitting in the IR the check walks; `_framework_field_reads` is now the single derivation of them, and the rule is written down: a new modifier that names a field teaches that one function. Corpus reports fall 18 → 5, and the 5 are true positives on fixtures whose prompt is the stub `"test"`. Five mutations, all caught — including the arm descent, which needed a test written for it after the first mutation run showed deleting it changed nothing.
 
