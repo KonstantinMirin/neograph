@@ -33,7 +33,7 @@ from neograph._oracle import (
 )
 from neograph._state_bus import StateBus, adapt_state, snapshot_state
 from neograph._state_keys import StateKeys
-from neograph._trace import named
+from neograph._trace import add_traced_node, named
 from neograph.factory import make_node_fn
 from neograph.modifiers import Each, Oracle, split_each_path
 from neograph.naming import field_name_for, output_field_name
@@ -124,6 +124,7 @@ def _wire_oracle(
     merge_fn: LangGraphNodeFn,
     oracle: Oracle,
     prev_node: str | None,
+    subgraph_meta: dict[str, str] | None = None,
 ) -> str:
     """Shared Oracle wiring used by both Node and Construct paths.
 
@@ -133,7 +134,9 @@ def _wire_oracle(
 
     # Generator node (called N times via Send). `named` so the engine span reads
     # as the node (not the leaking redirect __name__). See neograph-3fm1.
-    graph.add_node(gen_name, cast(Any, named(cast(Runnable, gen_fn), gen_name, mode="oracle")))
+    add_traced_node(
+        graph, gen_name, cast(Any, gen_fn), mode="oracle", subgraph_meta=subgraph_meta
+    )
 
     # Router that dispatches N generators
     models = oracle.models
@@ -174,6 +177,7 @@ def _wire_each(
     fan_fn: LangGraphNodeFn,
     each: Each,
     prev_node: str | None,
+    subgraph_meta: dict[str, str] | None = None,
 ) -> str:
     """Shared Each wiring used by both Node and Construct paths.
 
@@ -185,7 +189,9 @@ def _wire_each(
 
     # `named` so the fan-out node's engine span reads as the node (not the
     # leaking wrapper __name__). See neograph-3fm1.
-    graph.add_node(fan_name, cast(Any, named(cast(Runnable, fan_fn), fan_name, mode="each")))
+    add_traced_node(
+        graph, fan_name, cast(Any, fan_fn), mode="each", subgraph_meta=subgraph_meta
+    )
 
     # Empty-collection bypass: writes empty dict to the Each field so
     # downstream nodes proceed. Follows the __loop_exit_ pattern.

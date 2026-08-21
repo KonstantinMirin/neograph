@@ -21,6 +21,7 @@ import structlog
 
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
+from neograph._lint_di import _check_binding
 
 # --- extracted clusters (neograph-3ffdg.10), re-exported so existing
 # --- `from neograph.lint import ...` call sites keep resolving unchanged.
@@ -37,6 +38,13 @@ from neograph._lint_predict import (  # noqa: E402,F401
     _predict_input_keys,
     _resolve_return_type,
 )
+from neograph._lint_supply import (
+    _check_unconsumed_outputs,
+    _check_unreferenced_inputs,
+    _check_unsatisfiable_di,
+    _placeholder_root,
+    _port_supplied_by_modifier,
+)
 from neograph._lint_tool_checks import (  # noqa: E402,F401
     _TOOL_BODY_ATTRS,
     _check_act_mode_all_idempotent,
@@ -52,7 +60,7 @@ from neograph._llm_runtime import (
     collect_llm_nodes,
     missing_runtime_kwargs,
 )
-from neograph._normalize import normalize_inputs  # noqa: E402,F401
+from neograph._normalize import normalize_inputs, normalize_outputs  # noqa: E402,F401
 from neograph._placeholders import DOLLAR_RE
 from neograph._runtime_registry import _decoration_registry
 from neograph._sidecar import _get_param_res, get_merge_fn_metadata
@@ -60,7 +68,6 @@ from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.di import (
     DI_TEMPLATE_KINDS,  # noqa: E402,F401
-    DIBinding,
     DIKind,
 )
 from neograph.node import Node
@@ -81,81 +88,6 @@ _KNOWN_EXTRAS: frozenset[str] = frozenset(
 # (byte-identical dedup: lint collects names, prompt.substitute fills them, both
 # off one grammar). Aliased to preserve the existing local name.
 _PLACEHOLDER_RE = DOLLAR_RE
-
-
-def _check_binding(
-    node_label: str,
-    binding: DIBinding,
-    config: dict[str, Any] | None,
-    issues: list[LintIssue],
-) -> None:
-    """Check a single DI binding against config.
-
-    ``node_label`` is pre-formatted by the caller — node and merge_fn paths
-    use different naming conventions, so the caller supplies the label.
-    """
-    kind_str = binding.kind.value
-
-    if binding.kind in (DIKind.FROM_INPUT, DIKind.FROM_CONFIG):
-        if config is not None:
-            if binding.name not in config:
-                issues.append(
-                    LintIssue(
-                        node_name=node_label,
-                        param=binding.name,
-                        kind=kind_str,
-                        required=binding.required,
-                        message=(f"{node_label}: DI parameter '{binding.name}' ({kind_str}) not found in config"),
-                    )
-                )
-        elif binding.required:
-            issues.append(
-                LintIssue(
-                    node_name=node_label,
-                    param=binding.name,
-                    kind=kind_str,
-                    required=True,
-                    message=(
-                        f"{node_label}: required DI parameter '{binding.name}' "
-                        f"({kind_str}) has no config to resolve from"
-                    ),
-                )
-            )
-
-    elif binding.kind in (DIKind.FROM_INPUT_MODEL, DIKind.FROM_CONFIG_MODEL):
-        model_cls: Any = binding.model_cls or binding.inner_type
-        required = binding.required
-        if config is not None:
-            for fname in model_cls.model_fields:
-                if fname not in config:
-                    issues.append(
-                        LintIssue(
-                            node_name=node_label,
-                            param=fname,
-                            kind=kind_str,
-                            required=required,
-                            message=(
-                                f"{node_label}: bundled model field "
-                                f"'{fname}' ({kind_str} via {model_cls.__name__}) "
-                                f"not found in config"
-                            ),
-                        )
-                    )
-        elif required:
-            for fname in model_cls.model_fields:
-                issues.append(
-                    LintIssue(
-                        node_name=node_label,
-                        param=fname,
-                        kind=kind_str,
-                        required=True,
-                        message=(
-                            f"{node_label}: required bundled model "
-                            f"field '{fname}' ({kind_str} via "
-                            f"{model_cls.__name__}) has no config"
-                        ),
-                    )
-                )
 
 
 def lint(
@@ -225,6 +157,8 @@ def lint(
         context_enabled=_compiler_accepts_context(prompt_compiler),
         resource_producer_present=_has_resource_link_producer(construct),
     )
+    # Construct-level: a field is dead only when every consumer axis misses it.
+    _check_unconsumed_outputs(construct, issues, template_resolver=template_resolver)
     return issues
 
 
@@ -362,6 +296,7 @@ def _walk(
     di_inputs_enabled: bool = False,
     context_enabled: bool = False,
     resource_producer_present: bool = False,
+    port_supplied: tuple[type, str] | None = None,
 ) -> None:
     """Recursively walk a construct and check DI bindings + template placeholders."""
     if isinstance(item, Construct):
@@ -370,6 +305,7 @@ def _walk(
         # iter_with_arms expands _BranchNode sentinels so a bare arm Node's DI
         # bindings + template placeholders are linted like any other node. See
         # neograph-vn5f (site 3).
+        child_port = _port_supplied_by_modifier(item)
         for child in iter_with_arms(item):
             _walk(
                 child,
@@ -382,11 +318,14 @@ def _walk(
                 di_inputs_enabled=di_inputs_enabled,
                 context_enabled=context_enabled,
                 resource_producer_present=resource_producer_present,
+                port_supplied=child_port,
             )
         return
 
     if not isinstance(item, Node):
         return
+
+    _check_unsatisfiable_di(item, issues, port_supplied=port_supplied)
 
     param_res = _get_param_res(item)
     node_label = f"Node '{item.name}'"
@@ -472,9 +411,6 @@ def _check_template_placeholders(
             return
         placeholders = _extract_format_placeholders(text)
 
-    if not placeholders:
-        return
-
     node_label = f"Node '{node.name}'"
     placeholder_syntax = "${%s}" if is_inline else "{%s}"
 
@@ -510,6 +446,23 @@ def _check_template_placeholders(
             valid_keys = valid_keys | resource_vars
 
     consumer_known = known_vars - _KNOWN_EXTRAS - predicted_keys
+
+    # One reduced set read by both directions, so the demand check and the
+    # supply check cannot disagree about what a template names. The demand loop
+    # still iterates the placeholder LIST: it emits one issue per OCCURRENCE.
+    referenced = {_placeholder_root(p) for p in placeholders}
+
+    _check_unreferenced_inputs(
+        node,
+        issues,
+        referenced=referenced,
+        is_inline=is_inline,
+        consumer_known=consumer_known,
+        node_label=node_label,
+    )
+
+    if not placeholders:
+        return
 
     for placeholder in placeholders:
         first_segment = placeholder.split(".")[0]

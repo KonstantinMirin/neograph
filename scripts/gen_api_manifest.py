@@ -400,6 +400,8 @@ LINT_CLUSTER_MODULES = (
     "_lint_tool_checks.py",
     "_lint_predict.py",
     "_lint_kind_registry.py",
+    "_lint_supply.py",
+    "_lint_di.py",
 )
 
 

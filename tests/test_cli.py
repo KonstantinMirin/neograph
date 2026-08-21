@@ -183,6 +183,86 @@ class TestCmdCheck:
         args = argparse.Namespace(target=str(pipeline), config=None, setup=str(setup), known_vars=None)
         assert cmd_check(args) == 0
 
+    def test_warn_only_pipeline_returns_0(self, tmp_path):
+        """A pipeline whose every lint issue is non-required passes the check.
+
+        `cmd_check` labelled an issue ERROR or WARN from `LintIssue.required`,
+        then appended every issue to one error list and failed the run. The label
+        changed the printed word and nothing else, so a WARN failed the check
+        exactly as an ERROR did. Six kinds carry a documented severity of WARN,
+        and CLAUDE.md documents `loop_condition_none_unsafe` as WARN for
+        callables, so the distinction reached the reader and stopped there.
+
+        The GH #10 and GH #11 checks both ship as warnings first, which requires
+        a warning to leave the exit code alone.
+        """
+        setup = tmp_path / "setup_warn.py"
+        setup.write_text(
+            textwrap.dedent("""\
+            def get_check_config():
+                return {}
+        """)
+        )
+
+        pipeline = tmp_path / "warns.py"
+        pipeline.write_text(
+            textwrap.dedent("""\
+            from typing import Annotated
+            from pydantic import BaseModel
+            from neograph import FromInput, node, construct_from_functions
+
+            class Out(BaseModel):
+                x: str
+
+            @node(outputs=Out)
+            def solo(topic: Annotated[str, FromInput(required=False)]) -> Out:
+                return Out(x=topic or "fallback")
+
+            pipe = construct_from_functions("pipe", [solo])
+        """)
+        )
+        args = argparse.Namespace(
+            target=str(pipeline), config=None, setup=str(setup), known_vars=None
+        )
+
+        assert cmd_check(args) == 0
+
+    def test_one_required_issue_returns_1(self, tmp_path):
+        """A required issue still fails the check.
+
+        Guards the other direction: relaxing WARN must not relax ERROR.
+        """
+        setup = tmp_path / "setup_err.py"
+        setup.write_text(
+            textwrap.dedent("""\
+            def get_check_config():
+                return {}
+        """)
+        )
+
+        pipeline = tmp_path / "errs.py"
+        pipeline.write_text(
+            textwrap.dedent("""\
+            from typing import Annotated
+            from pydantic import BaseModel
+            from neograph import FromInput, node, construct_from_functions
+
+            class Out(BaseModel):
+                x: str
+
+            @node(outputs=Out)
+            def solo(topic: Annotated[str, FromInput]) -> Out:
+                return Out(x=topic)
+
+            pipe = construct_from_functions("pipe", [solo])
+        """)
+        )
+        args = argparse.Namespace(
+            target=str(pipeline), config=None, setup=str(setup), known_vars=None
+        )
+
+        assert cmd_check(args) == 1
+
     def test_no_constructs_returns_1(self, tmp_path):
         """A file with no Constructs returns 1."""
         pipeline = tmp_path / "empty.py"

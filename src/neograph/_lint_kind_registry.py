@@ -72,6 +72,28 @@ LINT_KIND_META: dict[str, LintKindMeta] = {
         "Bundled `BaseModel` via `FromConfig` -- each model field must exist in config.",
     ),
     # Template placeholders.
+    "from_input_unsatisfiable": LintKindMeta(
+        "ERROR",
+        "A `FromInput`/`FromConfig` parameter whose value is the Each-fanned item "
+        "or the Loop carry. No caller can supply it, so the run fails in the DI "
+        "preflight -- and padding a config to silence it makes every branch "
+        "compute from the padded value. Bind it as a port parameter instead.",
+    ),
+    "template_input_unreferenced": LintKindMeta(
+        "WARN",
+        "A bound input, DI parameter, or context field that the node's own "
+        "template never references. The value reaches the node and the model "
+        "never sees it. Demand is read from the template text, so a "
+        "`prompt_compiler` that composes the message may consume the name "
+        "without naming it.",
+    ),
+    "output_field_unconsumed": LintKindMeta(
+        "WARN",
+        "A field of a node's typed output that nothing reads: no downstream node "
+        "takes the model, no template reads it by name, and it is not the graph's "
+        "terminal output. It costs tokens on every call and cannot affect the "
+        "answer.",
+    ),
     "template_placeholder_unresolvable": LintKindMeta(
         "ERROR",
         "Prompt placeholder not found in predicted input keys or known extras.",

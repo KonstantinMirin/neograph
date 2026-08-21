@@ -57,17 +57,26 @@ def lookup_context(input_data, config):
     return Context(references=["auth.py:42", "logger.py:18", "crypto.py:7"])
 
 def score_claims(input_data, config):
-    """Score claims based on available context."""
-    # input_data is Claims (from neo_subgraph_input)
+    """Score claims, using the references `lookup` found.
+
+    Dict-form inputs, so `input_data` is a mapping: the sub-pipeline's port
+    value under `neo_subgraph_input`, and the upstream node's output under its
+    own name. That is how a sub-pipeline's second node reads BOTH the boundary
+    input and a peer.
+    """
+    claims = input_data["neo_subgraph_input"]
+    context = input_data["lookup"]
     scores = {"authenticate": "high", "log access": "medium", "encrypt": "high"}
     scored = []
-    for claim in input_data.items:
+    for claim in claims.items:
         score = "low"
         for keyword, s in scores.items():
             if keyword in claim:
                 score = s
                 break
-        scored.append({"claim": claim, "score": score})
+        scored.append(
+            {"claim": claim, "score": score, "refs": str(len(context.references))}
+        )
     return ScoredClaims(scored=scored)
 
 
@@ -79,7 +88,15 @@ enrich = Construct(
     output=ScoredClaims,
     nodes=[
         Node.scripted("lookup", fn="lookup_context", inputs=Claims, outputs=Context),
-        Node.scripted("score", fn="score_claims", inputs=Claims, outputs=ScoredClaims),
+        Node.scripted(
+            "score",
+            fn="score_claims",
+            # Reads the port AND the peer: `lookup`'s Context would otherwise be
+            # computed on every run and read by nobody, which `lint()` reports
+            # as `output_field_unconsumed`.
+            inputs={"neo_subgraph_input": Claims, "lookup": Context},
+            outputs=ScoredClaims,
+        ),
     ],
 )
 
@@ -132,7 +149,15 @@ enrich_oracle = Construct(
     output=ScoredClaims,
     nodes=[
         Node.scripted("lookup", fn="lookup_context", inputs=Claims, outputs=Context),
-        Node.scripted("score", fn="score_claims", inputs=Claims, outputs=ScoredClaims),
+        Node.scripted(
+            "score",
+            fn="score_claims",
+            # Reads the port AND the peer: `lookup`'s Context would otherwise be
+            # computed on every run and read by nobody, which `lint()` reports
+            # as `output_field_unconsumed`.
+            inputs={"neo_subgraph_input": Claims, "lookup": Context},
+            outputs=ScoredClaims,
+        ),
     ],
 ) | Oracle(n=3, merge_fn="merge_scored")
 

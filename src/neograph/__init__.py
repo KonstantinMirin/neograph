@@ -31,6 +31,7 @@ from neograph._llm import (
     render_prompt,
 )
 from neograph._rendered import PromptInput, Rendered
+from neograph._spec_dump import dump_spec
 from neograph._tool_ledger import ToolLedger
 from neograph.compiler import compile, describe_graph
 from neograph.conditions import parse_condition
@@ -192,6 +193,7 @@ __all__ = [
     "lookup_type",
     # Spec loader
     "load_spec",
+    "dump_spec",
     # Lint
     "lint",
     "LintIssue",

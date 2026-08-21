@@ -242,4 +242,8 @@ def make_subgraph_fn(
     # graph-assembly layer (`named(...)` at the add_node sites in compiler.py and
     # _wiring._add_arm_nodes) so this factory keeps returning the bare
     # dual-path RunnableLambda the async guard pins.
-    return RunnableLambda(subgraph_node, afunc=asubgraph_node)
+    # `name=` is set HERE rather than by `named(...)` at the assembly layer:
+    # this RunnableLambda closes over a compiled Pregel, and `named` calls
+    # `.with_config(...)`, which returns a RunnableBinding that LangGraph's
+    # subgraph walker cannot see through. See neograph-xunot / GH #6.
+    return RunnableLambda(subgraph_node, afunc=asubgraph_node, name=sub.name)
