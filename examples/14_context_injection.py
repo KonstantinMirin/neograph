@@ -1,4 +1,15 @@
-"""Example 14: Context Injection -- verbatim state in sub-constructs.
+"""Example 14: context= -- reading run state a node's input port never carries.
+
+`context=` lets a node read a value produced EARLIER IN THE RUN without it
+being threaded through every intervening shape, and the reference is DECLARED
+so a missing binding fails at assembly rather than at run time. It works inside
+a fan-out, where the port carries which ITEM and context carries which RUN.
+
+This example happens to show the verbatim-rendering property -- the catalog
+must reach the model exactly as written -- but that is a property of the
+channel, not its purpose. See AGENTS.md, "Run-scoped state".
+
+Originally titled "Context Injection -- verbatim state in sub-constructs".
 
 Scenario: A requirements verification pipeline where:
   1. build_catalog: scripted node produces a pre-formatted graph catalog

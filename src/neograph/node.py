@@ -152,9 +152,25 @@ class Node(Modifiable, BaseModel):
     # hierarchy: model.render_for_prompt() > node.renderer > global > None.
     renderer: Renderer | None = None
 
-    # Verbatim state fields injected into the prompt alongside typed input.
-    # Values are passed as-is (not BAML-rendered). Use for pre-formatted
-    # context like graph catalogs or domain briefings.
+    # Values produced EARLIER IN THE RUN that this node reads without them
+    # being threaded through the intervening node shapes. The back-reference is
+    # DECLARED, so `_construct_validation` fails at assembly when no upstream
+    # produces the field -- it is not an ambient global.
+    #
+    # This is the answer to "my step needs run identity or session context that
+    # its input port does not carry". It works inside a fan-out, where the port
+    # carries WHICH ITEM and context carries WHICH RUN: the two were never
+    # competing. And it reads STATE, not config, so a value that changes during
+    # the run -- a session restored after a human-in-the-loop gate fires hours
+    # later -- is expressible, where static config cannot express it.
+    #
+    # Values are passed as-is (not BAML-rendered), which makes it right for a
+    # pre-formatted catalog or briefing too. That is a PROPERTY, not the
+    # purpose; documenting it as the purpose is what made the capability
+    # undiscoverable (GH #15).
+    #
+    # Limit: LLM-mode nodes only. `_execute` gates it on
+    # `node.mode != "scripted"`.
     context: list[str] | None = None
 
     # Conditional produce: skip the LLM call when the predicate returns True.

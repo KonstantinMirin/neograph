@@ -428,6 +428,28 @@ An LLM-mode node (`think`/`agent`/`act`) never runs its body, so — unlike scri
 
 ---
 
+## Run-scoped state: `context=`, the declared back-reference
+
+A step often needs a value produced earlier in the run that is NOT what its input port hands it — run identity, a session handle, a briefing. `context=["ctx"]` on a Node reads that value straight from state, without it being threaded through every intervening shape.
+
+```python
+verify = Node(name="verify", mode="think", inputs=Claim, outputs=Verdict,
+              model="fast", prompt="check", context=["ctx"]) | Each(over="claims.items", key="text")
+# every branch: port item = one Claim, context = the run's RunCtx
+```
+
+Three properties, and each is the reason it exists rather than a side effect:
+
+- **Declared, never ambient.** `_construct_validation` checks that some upstream produces the named field, so a missing binding is a `ConstructError` at assembly. A reader of the node sees everything it consumes — the pure-function bias is preserved, which an invisible global would destroy.
+- **Works under fan-out.** The port carries WHICH ITEM, `context` carries WHICH RUN. These were never competing, and a fanned branch is the shape people most often believe is impossible.
+- **Reads STATE, not config.** So a value that changes during the run — a session restored after a HITL gate fires hours later — is expressible. Static config cannot express that; this is the distinction to reach for when someone proposes threading a value through `run(input=)`.
+
+Verbatim (un-rendered) delivery is a PROPERTY of the channel, useful for a pre-formatted catalog. It is not the purpose. Documenting it as the purpose is what made the capability undiscoverable for years — a consumer filed a design proposal for a feature that already shipped (GH #15). When you document a general mechanism through its narrowest use case, the people who need the general form cannot find it.
+
+**Known limits, both tracked**: LLM-mode nodes only (`_execute` gates on `node.mode != "scripted"`), and `context=` makes the model SEE a value — nothing BINDS it into a tool call, so a model can still compose a tool argument of its own invention.
+
+---
+
 ## Modes and mode inference
 
 `@node` supports five execution modes:

@@ -52,6 +52,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Node Modes', slug: 'concepts/node-modes' },
 						{ label: 'Subgraphs', slug: 'concepts/subgraphs' },
+						{ label: 'Run-Scoped State', slug: 'concepts/run-scoped-state' },
 						{ label: 'Sync & Async Execution', slug: 'concepts/async-execution' },
 						{ label: 'Checkpoint Resume', slug: 'concepts/checkpoint-resume' },
 						{ label: 'Observability', slug: 'concepts/observability' },
