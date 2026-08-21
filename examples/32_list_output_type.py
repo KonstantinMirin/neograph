@@ -1,4 +1,4 @@
-"""Example 12: A node that returns a list of models.
+"""Example 32: A node that returns a list of models.
 
 Scenario: a node extracts several readings from a report. The natural way to
 say that is `outputs=list[Reading]` -- the node produces a list of models, so
@@ -32,7 +32,7 @@ constrained decoding. Both accept `list[Reading]`.
 Keyless -- uses a fake LLM.
 
 Run:
-    python examples/12_list_output_type.py
+    python examples/32_list_output_type.py
 """
 
 from __future__ import annotations
