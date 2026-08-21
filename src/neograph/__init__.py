@@ -68,7 +68,7 @@ from neograph.errors import (
 )
 from neograph.forward import ForwardConstruct
 from neograph.hitl import ask_human
-from neograph.lint import LintIssue, lint
+from neograph.lint import InputBinding, LintIssue, input_contract, lint
 from neograph.loader import from_agent_spec, load_spec
 from neograph.modifiers import (
     HANDOFF_END,
@@ -197,6 +197,10 @@ __all__ = [
     # Lint
     "lint",
     "LintIssue",
+    # Input contract -- what a caller supplies, reported positively rather than
+    # as lint issues, so a correct graph lints to zero.
+    "input_contract",
+    "InputBinding",
     # Verify
     "verify_compiled",
     "VerifyIssue",

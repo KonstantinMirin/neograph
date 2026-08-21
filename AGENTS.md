@@ -352,8 +352,16 @@ When a pipeline runs with a checkpointer and the same `thread_id`, neograph dete
 lint(construct, *, config=None, known_template_vars=None, template_resolver=None)
 ```
 
+**Two directions.** The linter historically checked one: every kind reported a reference with no source, or a missing config value. None reported a value that arrives and reaches nothing. The supply-side kinds close that asymmetry — `template_input_unreferenced` (a bound input, DI parameter, or context field the node's own template never names) and `output_field_unconsumed` (a produced field nothing reads). Both are WARN, because demand is read from template TEXT and a custom `prompt_compiler` can consume a name the template never spells.
+
+**`lint()` returns defects, and nothing else.** A `FromInput`/`FromConfig` parameter a caller supplies at run time is the graph's INPUT CONTRACT, which is not a defect — so it does not travel in the issue list at all. Read it from `input_contract(construct)`, which returns `InputBinding` records (`node_name`, `param`, `kind`, `source`, `type_name`, `required`, `model_name`), and which `neograph check` prints as its own section outside the lists that decide the exit code. A correct graph therefore lints to ZERO, which is what makes an all-output-fails gate reachable; before that, the strictest available policy was "fails on `required` only", the same trust-the-classification posture a padded config exploits (GH #12, GH #13).
+
+Only a binding no caller can satisfy is an error: `from_input_unsatisfiable` fires when an `Each` item or a `Loop` carry is bound with `FromInput`, and it is derived from construct structure so no config can silence it. Demanding a config is what pushed one consumer to pad a fixture with a key no caller could pass, which silenced a real defect while the pipeline computed every fanned branch from the padded value. Pass `config=` to check a specific payload — a different, optional question.
+
+**One enumeration, two readers.** `iter_di_bindings(item)` in `_lint_di.py` is the single definition of where DI bindings live — a node's own `_param_res` plus its Oracle `merge_fn`'s. Both `lint()`'s payload check and `input_contract()` walk it, so a new binding site reaches both surfaces or neither. Do NOT re-enumerate bindings in a new caller; that is how the two drift.
+
 **Three check categories**:
-1. DI binding checks (original) — `FromInput`/`FromConfig` params vs config dict
+1. DI binding checks — `FromInput`/`FromConfig` params. Only when `config=` is passed: an unsatisfied key is an ERROR. With no config there is nothing to check, and the contract is reported by `input_contract()`.
 2. Inline prompt placeholder checks — `${var}` against predicted input dict keys (no flattened, no framework extras)
 3. Template-ref placeholder checks — `{var}` against predicted input keys + flattened fields + known extras (requires `template_resolver`)
 
@@ -434,6 +442,7 @@ An LLM-mode node (`think`/`agent`/`act`) never runs its body, so — unlike scri
 
 - **`main`** — stable. Only tagged releases and critical hotfix PRs.
 - **`develop`** — active development. All new work lands here. The authoritative version is `__version__` in `src/neograph/__init__.py` (do not hard-code it here — it drifts). Piarch and other downstream consumers pull from this branch via `uv add "neograph @ git+https://github.com/KonstantinMirin/neograph.git@develop"`.
+- **Forward-port**: after a release tag, merge `main` back to `develop` and then run `make forward-port-check`. A forward-port merge resolves conflicts file by file, and resolving in favour of `develop`'s side silently discards what the release branch documented — which is how the 0.7.8 port dropped two CHANGELOG sections, the AGENTS.md lint documentation, and a drafted upstream report while the test suite stayed green. The check compares release headings and `docs/` paths across the two branches, because a passing test run cannot distinguish "the docs merged" from "the docs were discarded".
 - **Release path**: when `develop` is ready, merge to `main`, **run `make release-gate` on merged `main`**, then tag `vX.Y.Z` and push the tag. `.github/workflows/publish.yml` triggers on `v*` tags and publishes to PyPI via Trusted Publishing (no tokens, OIDC-scoped).
 - **Version bumps**: on `develop` we increment normally. On `main` at the release tag we tag `vX.Y.Z`. `__version__` and `pyproject.toml`'s `version` move together — `TestVersionSync` fails if you bump one alone.
 

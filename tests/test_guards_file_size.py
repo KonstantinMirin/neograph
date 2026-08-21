@@ -96,7 +96,10 @@ ALLOWLIST: dict[str, int] = {
     "decorators.py": 644,
     "factory.py": 617,
     "forward.py": 1022,
-    "lint.py": 615,
+    # neograph-qmei0: 615 -> 611. The no-config DI branches moved out to
+    # _lint_di's input_contract(), and the separate Oracle merge_fn binding loop
+    # collapsed into the shared iter_di_bindings enumeration.
+    "lint.py": 611,
     "modifiers.py": 806,
     "renderers.py": 575,
     "runner.py": 679,

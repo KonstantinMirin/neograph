@@ -135,7 +135,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     """Run compile() + lint() on all constructs in the target module."""
     from neograph.compiler import compile
     from neograph.errors import CompileError, ConstructError
-    from neograph.lint import lint
+    from neograph.lint import input_contract, lint
 
     mod = _import_module(args.target)
     constructs = _discover_constructs(mod)
@@ -215,6 +215,19 @@ def cmd_check(args: argparse.Namespace) -> int:
             print(f"OK    {label}")
         for line in blocking + advisory:
             print(f"      {line}")
+
+        # 3. Input contract. Its own section, deliberately outside `blocking`
+        # and `advisory`: a correct graph HAS an input contract, so printing it
+        # among the issues would make a clean graph look unclean and put an
+        # all-output-fails gate out of reach.
+        contract = input_contract(construct)
+        if contract:
+            print(f"      input contract ({len(contract)} key(s) a caller supplies):")
+            for binding in sorted(contract, key=lambda b: (b.source, b.param)):
+                via = "run(input=...)" if binding.source == "input" else "config="
+                optional = "" if binding.required else "  [optional]"
+                through = f" via {binding.model_name}" if binding.model_name else ""
+                print(f"        {binding.param}: {binding.type_name}  <- {via}{through}{optional}")
 
     n = len(constructs)
     print()

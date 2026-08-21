@@ -1300,6 +1300,65 @@
       "signature": "(node_name: 'str', param: 'str', kind: 'str', message: 'str', required: 'bool' = False) -> None"
     },
     {
+      "anchor": "input_contract",
+      "doc": "Every key a caller supplies to run *construct*.",
+      "kind": "function",
+      "name": "input_contract",
+      "signature": "(construct: 'Construct') -> 'list[InputBinding]'"
+    },
+    {
+      "anchor": "inputbinding",
+      "bases": [],
+      "doc": "One key a caller supplies at run time -- part of the graph's input contract.",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "node_name",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "param",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "kind",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "source",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "type_name",
+          "required": true
+        },
+        {
+          "annotation": "bool",
+          "default": null,
+          "name": "required",
+          "required": true
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "model_name",
+          "required": false
+        }
+      ],
+      "kind": "dataclass",
+      "name": "InputBinding",
+      "signature": "(node_name: 'str', param: 'str', kind: 'str', source: 'str', type_name: 'str', required: 'bool', model_name: 'str | None' = None) -> None"
+    },
+    {
       "anchor": "verify_compiled",
       "doc": "Validate structural integrity of a compiled graph.",
       "kind": "function",

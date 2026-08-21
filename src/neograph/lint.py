@@ -21,7 +21,10 @@ import structlog
 
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
-from neograph._lint_di import _check_binding
+
+# input_contract/InputBinding are re-exported (noqa F401) so they resolve
+# alongside `lint` -- the two answer paired questions.
+from neograph._lint_di import InputBinding, _check_binding, input_contract, iter_di_bindings  # noqa: F401
 
 # --- extracted clusters (neograph-3ffdg.10), re-exported so existing
 # --- `from neograph.lint import ...` call sites keep resolving unchanged.
@@ -63,7 +66,7 @@ from neograph._llm_runtime import (
 from neograph._normalize import normalize_inputs, normalize_outputs  # noqa: E402,F401
 from neograph._placeholders import DOLLAR_RE
 from neograph._runtime_registry import _decoration_registry
-from neograph._sidecar import _get_param_res, get_merge_fn_metadata
+from neograph._sidecar import _get_param_res
 from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.di import (
@@ -330,23 +333,16 @@ def _walk(
     param_res = _get_param_res(item)
     node_label = f"Node '{item.name}'"
 
-    # 1. DI binding checks (existing)
-    for binding in (param_res or {}).values():
-        _check_binding(node_label, binding, config, issues)
+    # 1. DI binding checks. iter_di_bindings is the SINGLE enumeration of where
+    # DI bindings live; input_contract() reads the same one, so a new binding
+    # site reaches both surfaces or neither. It covers the node's own params AND
+    # its Oracle merge_fn's, which is why no separate merge_fn loop follows.
+    for binding_label, binding in iter_di_bindings(item):
+        _check_binding(binding_label, binding, config, issues)
 
     # 1b. Manifest-driven hydration: a FromResource(ref=<kind>) binding needs an
     # upstream resource_link producer somewhere in the construct neograph-a5nh.
     _check_resource_hydration(item, param_res, issues, resource_producer_present)
-
-    # Check merge_fn DI bindings for Oracle nodes.
-    oracle = item.modifier_set.oracle
-    if oracle is not None and isinstance(oracle.merge_fn, str):
-        meta = get_merge_fn_metadata(oracle.merge_fn)
-        if meta is not None:
-            _, merge_param_res = meta
-            merge_label = f"{item.name} merge_fn '{oracle.merge_fn}'"
-            for binding in merge_param_res.values():
-                _check_binding(merge_label, binding, config, issues)
 
     # 2. Template placeholder checks
     _check_template_placeholders(

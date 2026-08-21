@@ -84,7 +84,7 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # `neograph --help` startup fast. Justification: import latency, not cycle.
     ("__main__.py", "neograph.compiler", frozenset({"compile"})),
     ("__main__.py", "neograph.errors", frozenset({"CompileError", "ConstructError"})),
-    ("__main__.py", "neograph.lint", frozenset({"lint"})),
+    ("__main__.py", "neograph.lint", frozenset({"input_contract", "lint"})),
     ("__main__.py", "neograph.compiler", frozenset({"classify_modifiers"})),
     ("__main__.py", "neograph.testing", frozenset({"scaffold_tests"})),
     ("__main__.py", "neograph", frozenset({"__version__"})),

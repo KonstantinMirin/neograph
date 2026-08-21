@@ -93,10 +93,11 @@ class TestLint:
         issues = lint(pipeline, config={"node_id": "x", "project_root": "/tmp"})
         assert issues == []
 
-    def test_lint_no_config_still_validates_required(self):
+    def test_lint_no_config_reports_the_contract_not_an_issue(self):
         """Without config, a caller-suppliable param is the graph's INPUT
-        CONTRACT, not an error (GH #13). It is still reported, so nothing is
-        lost -- only its severity changes."""
+        CONTRACT. It is not a lint issue, and it is not lost either -- it moves
+        to its own surface (GH #13)."""
+        from neograph import input_contract
 
         @node(outputs=RawText)
         def my_node(
@@ -104,11 +105,13 @@ class TestLint:
         ) -> RawText: ...
 
         pipeline = construct_from_functions("no-cfg", [my_node])
-        issues = lint(pipeline)
-        assert len(issues) == 1
-        assert issues[0].required is False, "the input contract is not an error"
-        assert "topic" in issues[0].param
-        assert "input contract" in issues[0].message
+
+        assert lint(pipeline) == [], "the input contract is not a lint issue"
+
+        contract = input_contract(pipeline)
+        assert [b.param for b in contract] == ["topic"]
+        assert contract[0].source == "input"
+        assert contract[0].required is True
 
     def test_lint_required_false_no_issue_without_config(self):
         """Optional FromInput(required=False) params are NOT flagged without config."""
@@ -191,12 +194,13 @@ class TestLint:
         def my_node(ctx: Annotated[Ctx, FromInput(required=True)]) -> RawText: ...
 
         pipeline = construct_from_functions("bundled-no-cfg", [my_node])
-        issues = lint(pipeline)
-        assert len(issues) == 2
-        params = {i.param for i in issues}
-        assert params == {"node_id", "project_root"}
-        assert not any(i.required for i in issues), "the input contract is not an error"
-        assert all("input contract" in i.message for i in issues)
+        from neograph import input_contract
+
+        assert lint(pipeline) == [], "the input contract is not a lint issue"
+
+        contract = input_contract(pipeline)
+        assert {b.param for b in contract} == {"node_id", "project_root"}
+        assert {b.model_name for b in contract} == {"Ctx"}, "the bundling model is named"
 
     def test_lint_merge_fn_di_param_missing_from_config(self):
         """lint detects missing DI param in @merge_fn when config is provided."""
@@ -248,13 +252,15 @@ class TestLint:
         def lint_gen2(topic: Annotated[str, FromInput(required=True)]) -> Claims: ...
 
         pipeline = construct_from_functions("merge-lint-req", [lint_gen2])
-        issues = lint(pipeline)
-        # Both node-level 'topic' and merge_fn-level 'secret' are required
-        merge_issues = [i for i in issues if "merge_fn" in i.node_name]
-        assert len(merge_issues) == 1
-        assert merge_issues[0].param == "secret"
-        assert merge_issues[0].required is False, "the input contract is not an error"
-        assert "input contract" in merge_issues[0].message
+        from neograph import input_contract
+
+        di = [i for i in lint(pipeline) if i.kind.startswith("from_")]
+        assert di == [], "the input contract is not a lint issue"
+
+        # A merge_fn's own DI params are resolved from the same config, so they
+        # belong to the same contract.
+        merge_bound = [b for b in input_contract(pipeline) if "merge_fn" in b.node_name]
+        assert [b.param for b in merge_bound] == ["secret"]
 
     def test_lint_merge_fn_bundled_model_fields_checked(self):
         """lint() checks from_input_model fields in @merge_fn (neograph-s2h8)."""
@@ -374,11 +380,16 @@ class TestLintObligationGaps:
         def gen_w15() -> Claims: ...
 
         pipeline = construct_from_functions("w15-test", [gen_w15])
-        issues = lint(pipeline)  # no config
-        merge_issues = [i for i in issues if "merge_fn" in i.node_name]
-        missing = {i.param for i in merge_issues}
-        assert "node_id" in missing
-        assert "project_root" in missing
+        from neograph import input_contract
+
+        # GH #13: with no config the bundled merge_fn params are the graph's
+        # input contract, so they are not issues -- but they must still be SEEN.
+        di = [i for i in lint(pipeline) if i.kind.startswith("from_")]
+        assert di == [], "the input contract is not a lint issue"
+
+        merge_bound = {b.param for b in input_contract(pipeline) if "merge_fn" in b.node_name}
+        assert "node_id" in merge_bound
+        assert "project_root" in merge_bound
 
     def test_lint_oracle_callable_merge_fn_no_false_positive(self):
         """W-19: Oracle with callable merge_fn (not string) — no issues (neograph-xcy7)."""
@@ -410,12 +421,17 @@ class TestLintObligationGaps:
         def gen_w21(limiter: Annotated[str, FromConfig(required=True)]) -> Claims: ...
 
         pipeline = construct_from_functions("w21-test", [gen_w21])
-        issues = lint(pipeline)  # no config
+        from neograph import input_contract
+
         # GH #13: with no config a FromConfig param is the graph's input
-        # contract, reported without being an error. The binding is still SEEN.
-        required_issues = [i for i in issues if i.param == "limiter"]
-        assert len(required_issues) == 1
-        assert "from_config" in required_issues[0].kind
+        # contract, not an issue. The binding is still SEEN, on its own surface.
+        di = [i for i in lint(pipeline) if i.kind.startswith("from_")]
+        assert di == [], "the input contract is not a lint issue"
+
+        bound = [b for b in input_contract(pipeline) if b.param == "limiter"]
+        assert len(bound) == 1
+        assert bound[0].kind == "from_config"
+        assert bound[0].source == "config", "FromConfig arrives via config=, not run(input=)"
 
 
 class TestLoopConditionLint:
@@ -904,15 +920,16 @@ class TestLintNeedsNoConfig:
             f"got {[(i.kind, i.param) for i in required]}"
         )
 
-    def test_the_input_contract_is_still_reported_informationally(self):
-        """Removing the error must not remove the information. The set of keys a
-        caller must supply is useful output in its own right."""
-        from neograph.lint import lint
+    def test_the_input_contract_is_still_reported_on_its_own_surface(self):
+        """Removing the issues must not remove the information. The set of keys
+        a caller must supply is useful output in its own right -- it just is not
+        a defect, so it does not travel in the issue list."""
+        from neograph import input_contract
 
-        reported = {i.param for i in lint(self._caller_supplied())}
+        reported = {b.param for b in input_contract(self._caller_supplied())}
 
         assert {"question", "deal_id"} <= reported, (
-            f"the input contract vanished instead of becoming informational: {reported}"
+            f"the input contract vanished instead of moving channel: {reported}"
         )
 
     def test_config_still_checks_a_specific_payload(self):
@@ -1167,12 +1184,15 @@ class TestSupplySideChecksOnARealisticPipeline:
             llm_factory=lambda tier: None,
         )
 
-    def test_di_parameters_are_the_input_contract_not_errors(self):
-        """`deal_ref` and `region` are supplied by a caller at run time."""
-        di = [i for i in self._lint() if i.kind == "from_input"]
+    def test_di_parameters_are_the_input_contract_not_issues(self):
+        """`deal_ref` and `region` are supplied by a caller at run time, so on a
+        realistic pipeline they are the contract, not lint output."""
+        from neograph import input_contract
 
-        assert {i.param for i in di} == {"deal_ref", "region"}
-        assert not any(i.required for i in di), "the input contract is not an error"
+        assert [i for i in self._lint() if i.kind.startswith("from_")] == []
+
+        supplied = {b.param for b in input_contract(self._pipeline())}
+        assert {"deal_ref", "region"} <= supplied
 
     def test_the_unread_output_field_is_reported(self):
         """`summarize` reads `${triage_result.severity}`. Nothing reads
@@ -1193,3 +1213,71 @@ class TestSupplySideChecksOnARealisticPipeline:
         assert "severity" not in dead
         assert "tool_log" not in dead
         assert "deal_id" not in dead and "notes" not in dead
+
+
+class TestCorrectGraphLintsToZero:
+    """A graph with nothing wrong produces no lint issues.
+
+    GH #13 asked to SEPARATE 'unsatisfiable by construction' from 'supplied by
+    the caller at run time'. Lowering the severity of both left the caller-
+    supplied set riding in the issue list, so a correct graph still reported
+    four issues describing nothing wrong. That forbids an all-output-fails
+    gate, which forces a consumer onto 'fails on required only' -- the same
+    trust-the-classification posture the padded config in GH #12 exploited.
+    """
+
+    @staticmethod
+    def _correct_graph():
+        class Ctx(BaseModel):
+            deal_id: int
+            user_ref: str
+
+        class Out(BaseModel):
+            text: str
+
+        @node(outputs=Out)
+        def start(
+            question: Annotated[str, FromInput],
+            ctx: Annotated[Ctx, FromInput],
+            auth: Annotated[str, FromConfig],
+        ) -> Out:
+            return Out(text="x")
+
+        return construct_from_functions("qa", [start])
+
+    def test_no_issues_without_a_config(self):
+        """The strictest possible gate -- any output fails -- must be
+        satisfiable by a correct graph."""
+        issues = lint(self._correct_graph())
+
+        assert issues == [], f"a correct graph reported {[(i.kind, i.param) for i in issues]}"
+
+    def test_no_issues_with_a_satisfying_config(self):
+        """Passing a payload that satisfies the graph is also clean."""
+        issues = lint(
+            self._correct_graph(),
+            config={"question": "q", "deal_id": 1, "user_ref": "u", "auth": "t"},
+        )
+
+        assert issues == [], f"a satisfied graph reported {[(i.kind, i.param) for i in issues]}"
+
+    def test_the_input_contract_is_reported_on_its_own_surface(self):
+        """Removing the issues must not remove the information: the set of keys
+        a caller supplies stays discoverable, positively framed."""
+        from neograph import input_contract
+
+        supplied = {b.param for b in input_contract(self._correct_graph())}
+
+        assert {"question", "deal_id", "user_ref", "auth"} <= supplied, (
+            f"the input contract vanished instead of moving channel: {supplied}"
+        )
+
+    def test_an_unsatisfying_config_is_still_an_error(self):
+        """`config=` keeps answering its own question: does THIS payload
+        satisfy the graph."""
+        issues = lint(self._correct_graph(), config={"question": "q"})
+
+        missing = {i.param for i in issues if i.required}
+        assert {"deal_id", "user_ref", "auth"} <= missing, (
+            f"a config missing three keys reported {[(i.kind, i.param, i.required) for i in issues]}"
+        )
