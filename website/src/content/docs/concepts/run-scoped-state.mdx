@@ -1,0 +1,106 @@
+---
+title: Run-Scoped State
+description: How a step reads a value produced earlier in the run — run identity, a session handle, a briefing — without threading it through every intervening shape.
+---
+
+A step often needs a value produced earlier in the run that is **not** what the previous step handed it. Run identity. A session handle. A briefing the model needs but no node between here and there cares about.
+
+neograph makes steps close to pure functions on purpose: what a step consumes, it declares. That is why a graph is reviewable at all. But it would be a bad trade if the price were threading a deal id through six intermediate types that have no business carrying one.
+
+`context=` is the answer, and the reference stays declared.
+
+## The mechanism
+
+```python
+from pydantic import BaseModel
+
+from neograph import Each, Node
+
+
+class RunCtx(BaseModel):
+    deal_id: int
+
+
+class Claim(BaseModel):
+    text: str
+
+
+class Verdict(BaseModel):
+    ok: bool
+
+
+verify = Node(
+    name="verify",
+    mode="think",
+    inputs=Claim,           # the port: WHICH ITEM
+    outputs=Verdict,
+    model="fast",
+    prompt="check",
+    context=["run_ctx"],    # the back-reference: WHICH RUN
+) | Each(over="claims.items", key="text")
+```
+
+Every fanned branch receives its own `Claim` on the port, and the same `run_ctx` through `context`. Those are two different questions and they were never competing.
+
+## Three properties, each load-bearing
+
+**Declared, never ambient.** Validation checks that some upstream produces the named field, so a missing binding is a `ConstructError` at assembly — before a run, before a model sees anything. A reader of the node still sees everything it consumes. An ambient global would buy the same convenience and destroy that, which is the whole reason this is a declaration and not a lookup.
+
+**Works under fan-out.** A fanned branch is the shape people most often assume is impossible, because the port is already spoken for by the mapped item. It is not: the two channels are independent.
+
+**Reads state, not config.** This is the distinction to reach for when someone proposes passing the value through `run(input=...)`. Config is fixed for the run. State is not — so a session restored after a human-in-the-loop gate fires hours later is expressible here and is *not* expressible as config.
+
+## When to use each
+
+| You need | Reach for |
+|---|---|
+| A value the caller supplies and that never changes during the run | `Annotated[T, FromInput]` |
+| A shared resource — a client, a limiter — configured once | `Annotated[T, FromConfig]` |
+| A value **produced earlier in the run**, possibly changing | `context=[...]` |
+| A value the previous step computed *for* this step | a normal typed input |
+
+## Verbatim delivery is a property, not the purpose
+
+Values arrive un-rendered — no BAML wrapper — which makes `context=` right for a pre-formatted catalog that must reach the model exactly as written. That is a **property of the channel**, not what it is for.
+
+Documenting it the other way round has a cost we actually paid: the mechanism was described as "verbatim state fields injected into the prompt … for pre-formatted context like graph catalogs", and a consumer who needed precisely this capability read that, concluded it was about presentation, and filed a design proposal for a feature that already shipped. If you document a general mechanism through its narrowest use case, the people who need the general form cannot find it.
+
+## Scripted nodes need no mechanism
+
+`context=` resolves for LLM-mode nodes. A scripted node does not need it, and deliberately does not get one: an upstream read **is** a normal declared input, and dict-form `inputs` lets a fanned branch declare both at once.
+
+```python
+from neograph import node
+
+
+class Triage(BaseModel):
+    label: str
+
+
+@node(outputs=Triage, map_over="claims.items", map_key="text")
+def triage(item: Claim, run_ctx: RunCtx) -> Triage:
+    """`item` is the fanned value; `run_ctx` is an ordinary upstream read."""
+    return Triage(label=f"{item.text} [deal {run_ctx.deal_id}]")
+```
+
+That route is **better** than `context=`, not merely equivalent: the validator type-checks a fan-in input and it creates a real dataflow edge, while a `context` field is typed `Any` and declares none. Prefer it whenever the node runs Python.
+
+## Seeing a value is not the same as a tool receiving it
+
+`context=` puts a value where the model can **see** it. An LLM composes its own tool-call arguments, so being shown the right deal id does not stop it emitting a different one — and that failure is silent, because a wrong id returns an empty result that reads exactly like a legitimately empty one.
+
+`Tool(bound_args=...)` closes it. The framework supplies the argument from run state, over whatever the model emitted:
+
+```python
+from neograph import Tool
+
+Tool(
+    name="get_deal",
+    budget=3,
+    bound_args={"deal_id": "run_ctx.deal_id"},   # the framework's, not the model's
+)
+```
+
+Arguments not named stay exactly as the model composed them. The binding is declared, so assembly fails when no upstream produces the path's root — a reference the framework resolves must be proven resolvable before a run, not silently become `None` and query the wrong thing.
+
+Reach for it whenever the **correctness** of an argument matters rather than its plausibility. `examples/33_run_scoped_state.py` shows all three routes in one pipeline, with a fake model that asks for the wrong deal on purpose.
