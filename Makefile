@@ -56,8 +56,8 @@ examples:
 website:
 	cd website && npm ci --silent && npm run build
 
-# A skip is invisible in a pass count. This fails on any skip whose reason is not
-# in tests/skip_allowlist.txt (which is empty by design).
+# A skip is invisible in a pass count. This fails on ANY skip -- there is no
+# allowlist. A known-broken behaviour is xfail(strict=True), not a skip.
 skipcheck:
 	uv run python scripts/check_skips.py -m "not live"
 

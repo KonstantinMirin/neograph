@@ -1,4 +1,4 @@
-"""Fail when a test skips for a reason nobody has signed off on.
+"""Fail when a test skips. Any test. For any reason.
 
 A skip is invisible in a pass count. "3211 passed, 86 skipped" reads as success
 while an entire shipped surface silently stops being exercised -- which is how
@@ -6,12 +6,24 @@ while an entire shipped surface silently stops being exercised -- which is how
 credentials) and how 0.7.7 shipped with ``neograph[mcp]`` -- 74 tests, a whole
 second top-level package -- contributing nothing to the gate.
 
-``release-gate`` therefore runs the suite with every extra installed, where the
-expected number of skips is ZERO, and this script turns any skip into a hard
-failure unless its reason appears in ``tests/skip_allowlist.txt``.
+``release-gate`` runs the suite with every extra installed, where the expected
+number of skips is ZERO, and this script turns any skip into a hard failure.
 
-The allowlist is a ratchet: it may only shrink. Adding a line means writing down
-why a surface is knowingly unexercised, which is the thing that was missing.
+THERE IS NO ALLOWLIST, deliberately. This script shipped with one
+(``tests/skip_allowlist.txt``, "empty by design, may only shrink") and it was
+removed four days later without a single entry ever being added, because the
+escape hatch cannot be justified: a test exists to verify a behaviour, so a test
+that does not run is a defect with a cause, and writing its reason into a file
+does not fix the cause -- it only stops anyone being told about it.
+
+When this fails, there are exactly two honest answers:
+
+  * Make the test run. Install the extra, provide the credential, fix the
+    import, build the fixture.
+  * If the behaviour is known-broken and the test cannot pass yet, mark it
+    ``xfail(strict=True)`` -- which is reported distinctly from a pass AND
+    turns red the moment the gap closes, so the exemption cannot outlive its
+    reason. That is the property an allowlist can never have.
 
 Usage:
     python scripts/check_skips.py [pytest args...]
@@ -25,21 +37,9 @@ import subprocess
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-ALLOWLIST = REPO / "tests" / "skip_allowlist.txt"
 
 # "SKIPPED [3] tests/foo.py:12: some reason"
 _SKIP_RE = re.compile(r"^SKIPPED\s+\[\d+\]\s+(?P<loc>\S+?):\s*(?P<reason>.*)$")
-
-
-def _allowed() -> list[str]:
-    if not ALLOWLIST.exists():
-        return []
-    out = []
-    for raw in ALLOWLIST.read_text().splitlines():
-        line = raw.strip()
-        if line and not line.startswith("#"):
-            out.append(line)
-    return out
 
 
 def main(argv: list[str]) -> int:
@@ -47,15 +47,11 @@ def main(argv: list[str]) -> int:
     proc = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
     output = proc.stdout + proc.stderr
 
-    allowed = _allowed()
     offenders: list[str] = []
     for line in output.splitlines():
         match = _SKIP_RE.match(line.strip())
-        if not match:
-            continue
-        reason = match.group("reason").strip()
-        if not any(entry in reason for entry in allowed):
-            offenders.append(f"{match.group('loc')}: {reason}")
+        if match:
+            offenders.append(f"{match.group('loc')}: {match.group('reason').strip()}")
 
     if proc.returncode not in (0, 1):  # 1 == test failures, reported by pytest itself
         print(output[-4000:])
@@ -67,19 +63,19 @@ def main(argv: list[str]) -> int:
         return 1
 
     if offenders:
-        print("\nUNALLOWLISTED SKIPS -- a surface is silently unexercised:\n", file=sys.stderr)
+        print("\nSKIPPED TESTS -- a behaviour is not being verified:\n", file=sys.stderr)
         for entry in sorted(set(offenders)):
             print(f"  {entry}", file=sys.stderr)
         print(
-            f"\n{len(set(offenders))} distinct skip reason(s) not in {ALLOWLIST.relative_to(REPO)}."
-            "\nEither make the test run (install the extra, provide the credential, fix the import)"
-            "\nor add the reason to the allowlist WITH a justification comment. The allowlist may"
-            "\nonly shrink -- growing it is a decision, not a formality.",
+            f"\n{len(set(offenders))} distinct skip reason(s). There is no allowlist."
+            "\nEither make the test run, or -- if the behaviour is known-broken -- mark it"
+            "\nxfail(strict=True), which is reported distinctly and turns RED when the gap"
+            "\ncloses, so the exemption cannot outlive its reason.",
             file=sys.stderr,
         )
         return 1
 
-    print("check_skips: no unallowlisted skips.")
+    print("check_skips: no skipped tests.")
     return 0
 
 
