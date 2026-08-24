@@ -869,13 +869,13 @@ the live database**.
   bd makes ~200 sequential round trips per command and has no connection reuse.
 - **Never run `bd dolt push` / `bd dolt pull`.** They fail with `Access denied for user 'root'` —
   Dolt's server-side push path hardcodes root with an empty password and no config can change it.
-  Replicate with `ox-troubleshooting-demo/scripts/beads_sync.sh`.
+  Replicate with `~/beads-ops/scripts/beads_sync.sh`.
 - **`bd sync` does not exist** in bd 1.1.2 — not `--flush-only`, not `--from-main`. JSONL export is
   automatic; `bd export -o .beads/issues.jsonl` is the explicit form.
 - **If bd reports "No issues found" unexpectedly, stop and diagnose — do not create anything.**
   `.beads/metadata.json` is a git-tracked pointer to the database, so a branch checkout can silently
   revert it; bd then creates an EMPTY database rather than failing. This once hid 5279 issues.
-  Run `make beads-preflight` (in ox-troubleshooting-demo) to check every project.
+  Run `cd ~/beads-ops && make preflight` to check every project.
 - **Where `.beads` is gitignored, `export.git-add` must stay `false`**, or every bd write fails with
   `auto-export: git add failed` while reads keep working.
 
