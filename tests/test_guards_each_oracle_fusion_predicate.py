@@ -150,7 +150,9 @@ FUSED_READERS: frozenset[str] = frozenset(
         "state.py",  # dict-form fused arm + single-type collector
         "_state_write.py",  # Each key-wrapping suppression for the fusion
         "_subconstruct.py",  # NEGATED: EACH-shaped but not fused
-        "_agent_spec.py",  # EXPORT: the pre-`match` fusion split (MapNode over an Oracle subflow)
+        # neograph-qtfof.13: RE-KEYED from _agent_spec.py -- the fused-column read
+        # moved with _lower_construct_item, it did not spread to a new consumer.
+        "_agent_spec_item_dispatch.py",  # EXPORT: the pre-`match` fusion split (MapNode over an Oracle subflow)
         "loader.py",  # IMPORT: the mirror fusion split
     }
 )

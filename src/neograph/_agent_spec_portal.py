@@ -34,6 +34,7 @@ from neograph._agent_spec_placeholders import (
     _properties_for,
     _translate_placeholders,
 )
+from neograph._agent_spec_provider import ApiProviderResolver
 from neograph._agent_spec_swarm_encoding import SWARM_ENCODING, mesh_handoff_mode
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph.construct import Construct
@@ -45,6 +46,7 @@ def _lower_portal_mesh_to_swarm(
     members: list[Node | Construct],
     tools_mod: Any,
     export_flow: Callable[[Construct], Any],
+    provider: ApiProviderResolver,
 ) -> Any:
     """Export a Portal mode-(a) peer mesh to a top-level pyagentspec ``Swarm``
     -- the export-direction mirror of ``loader.py``'s ``_reconstruct_swarm_mesh``
@@ -98,12 +100,14 @@ def _lower_portal_mesh_to_swarm(
         rewritten, ref_props, flat_to_original = _translate_placeholders(
             member.prompt or "", _properties_for(member.inputs), member.name
         )
-        agent = _make_agent(member, tools_mod, ref_props, [], rewritten)
+        agent = _make_agent(member, tools_mod, ref_props, [], rewritten, provider)
         member_portal = member.modifier_set.portal
         assert member_portal is not None  # collected as Portal-modified
         agent.metadata = {
             **(agent.metadata or {}),
-            _MARK_PROMPT_SPEC: _prompt_spec_marker(member, flat_to_original),
+            _MARK_PROMPT_SPEC: _prompt_spec_marker(
+                member, flat_to_original, derived_model_id=provider.config_for(member).model_id
+            ),
             # Swarm.handoff is MESH-level and Agent carries no mode, so without
             # this the member's own mode and trigger never reach the wire and the
             # importer can only guess (neograph-dgbqv.8). Foreign Swarms have no

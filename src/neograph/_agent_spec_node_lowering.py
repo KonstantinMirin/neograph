@@ -35,6 +35,8 @@ if TYPE_CHECKING:
     from pyagentspec.flows.node import Node as SpecNode
     from pyagentspec.property import Property
 
+    from neograph._agent_spec_provider import ApiProviderResolver
+
 
 def _reject_unrepresentable_fields(node: Node) -> None:
     """Fail loud on any Node field that has no Agent Spec representation.
@@ -89,7 +91,7 @@ def _lower_generation_step(
     metadata: dict[str, Any],
     model_tier: str | None = None,
     tool_description: str | None = None,
-    api_provider: str | None = None,
+    provider: ApiProviderResolver,
 ) -> SpecNode:
     """The SINGLE per-node.mode generation dispatch (think / agent-act / scripted-raw).
 
@@ -126,9 +128,14 @@ def _lower_generation_step(
             name=name,
             inputs=ref_props or None,
             outputs=outputs or None,
-            llm_config=_make_llm_config(Node(name=node.name, model=model_tier or node.model), api_provider=api_provider),
+            llm_config=_make_llm_config(Node(name=node.name, model=model_tier or node.model), provider),
             prompt_template=rewritten,
-            metadata={**metadata, _MARK_PROMPT_SPEC: _prompt_spec_marker(node, flat_to_original)},
+            metadata={
+                **metadata,
+                _MARK_PROMPT_SPEC: _prompt_spec_marker(
+                    node, flat_to_original, derived_model_id=provider.config_for(node).model_id
+                ),
+            },
         )
 
     if node.mode in ("agent", "act"):
@@ -147,7 +154,7 @@ def _lower_generation_step(
         # base_node | Oracle(models=...).
         rewritten, ref_props, flat_to_original = _translate_placeholders(node.prompt or "", inputs, name)
         agent_source = node.model_copy(update={"name": name, "model": model_tier or node.model})
-        agent = _make_agent(agent_source, tools_mod, ref_props, outputs, rewritten, api_provider=api_provider)
+        agent = _make_agent(agent_source, tools_mod, ref_props, outputs, rewritten, provider)
         return nodes_mod.AgentNode(
             name=name,
             inputs=ref_props or None,
@@ -163,7 +170,9 @@ def _lower_generation_step(
                 # Each fan-out receiver must round-trip to the SAME element type as
                 # the producer's list element neograph-3lk2l. marker["prompt"] on
                 # _MARK_AGENT_SPEC already carries the untranslated ${var} text.
-                _MARK_PROMPT_SPEC: _prompt_spec_marker(node, flat_to_original),
+                _MARK_PROMPT_SPEC: _prompt_spec_marker(
+                    node, flat_to_original, derived_model_id=provider.config_for(node).model_id
+                ),
             },
         )
 
@@ -234,8 +243,7 @@ def _reconstruct_remote_agent(node: Node, *, inputs: list[Property], outputs: li
     drifted = sorted(attr for attr in attrs if attr not in agent_cls.model_fields)
     if drifted:
         raise ConfigurationError.build(
-            f"node {node.name!r}'s captured RemoteAgent endpoint config has drifted from the "
-            "installed pyagentspec SDK",
+            f"node {node.name!r}'s captured RemoteAgent endpoint config has drifted from the installed pyagentspec SDK",
             expected=f"{agent_class_name} to declare field(s) {drifted}",
             found=f"the installed {agent_class_name} has no such field(s)",
             hint="the pyagentspec SDK version changed since import -- re-import the Agent Spec "
@@ -244,7 +252,7 @@ def _reconstruct_remote_agent(node: Node, *, inputs: list[Property], outputs: li
     return agent_cls(**attrs, inputs=inputs or None, outputs=outputs or None)
 
 
-def _lower_node(node: Node, api_provider: str | None = None) -> SpecNode:
+def _lower_node(node: Node, provider: ApiProviderResolver) -> SpecNode:
     """Dispatch a single neograph Node to its Agent Spec primitive by mode.
 
     Thin wrapper over the shared ``_lower_generation_step`` neograph-2s2o6: the
@@ -254,12 +262,17 @@ def _lower_node(node: Node, api_provider: str | None = None) -> SpecNode:
     """
     _reject_unrepresentable_fields(node)
     return _lower_generation_step(
-        node, name=node.name, outputs=_properties_for(node.outputs), metadata={}, api_provider=api_provider
+        node, name=node.name, outputs=_properties_for(node.outputs), metadata={}, provider=provider
     )
 
 
 def _make_agent(
-    node: Node, tools_mod: Any, inputs: list[Property], outputs: list[Property], system_prompt: str, api_provider: str | None = None
+    node: Node,
+    tools_mod: Any,
+    inputs: list[Property],
+    outputs: list[Property],
+    system_prompt: str,
+    provider: ApiProviderResolver,
 ) -> Any:
     """Build the pyagentspec ``Agent`` for an agent/act node. ``inputs`` are the
     Option-F-translated referenced flat Properties and ``system_prompt`` is the
@@ -273,7 +286,7 @@ def _make_agent(
     tools = cast("list[Tool]", node.tools)
     return Agent(
         name=f"{node.name}-agent",
-        llm_config=_make_llm_config(node, api_provider=api_provider),
+        llm_config=_make_llm_config(node, provider),
         system_prompt=system_prompt,
         tools=[_tool_to_server_tool(tool, tools_mod) for tool in tools],
         inputs=inputs or None,
@@ -344,17 +357,28 @@ def _agent_spec_marker(node: Node) -> dict[str, Any]:
     }
 
 
-def _make_llm_config(node: Node, api_provider: str | None = None) -> Any:
-    """neograph-qtfof.8: api_provider is opt-in (maintainer decision: fail-loud,
-    never guessed -- neograph deliberately keeps the real LLM provider out of the
-    graph layer, Node.model is an opaque tier string resolved via llm_factory at
-    RUNTIME). None (the default) keeps today's honest NEOGRAPH_ROUND_TRIP_ONLY
-    behavior; a caller-supplied provider makes the export loadable+convertible by
-    a metadata-blind third-party Agent Spec runtime."""
+def _make_llm_config(node: Node, provider: ApiProviderResolver) -> Any:
+    """THE single ``SpecLlmConfig`` construction site — all three lowerings
+    (think, agent/act, Oracle merge) funnel here, so per-node derivation lands
+    everywhere by changing one expression.
+
+    neograph-qtfof.13: ``provider`` decides the whole exported triple, precedence
+    already applied (explicit -> derived-from-the-resolved-client -> None). With
+    no ``llm_factory`` and no explicit override it derives nothing, which is
+    qtfof.8's honest NEOGRAPH_ROUND_TRIP_ONLY shape: no provider, no url, and the
+    opaque tier string as ``model_id``. A derived ``model_id`` matters as much as
+    the provider — exporting the tier ``"fast"`` names a model no vendor has, so
+    the artifact loads and then 404s on its first real call."""
     _nodes_mod, _flow_mod, _edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
     from pyagentspec.llms.llmconfig import LlmConfig as SpecLlmConfig
 
-    return SpecLlmConfig(name=f"{node.name}-llm", model_id=node.model or "default", api_provider=api_provider)
+    derived = provider.config_for(node)
+    return SpecLlmConfig(
+        name=f"{node.name}-llm",
+        model_id=derived.model_id or node.model or "default",
+        api_provider=derived.api_provider,
+        url=derived.url,
+    )
 
 
 def _make_server_tool(

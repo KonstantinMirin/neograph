@@ -28,11 +28,28 @@ def _lower_node_source() -> str:
 
 
 def _to_agent_spec_source() -> str:
+    """The export BODY, wherever it currently lives.
+
+    neograph-qtfof.13 split the public ``to_agent_spec`` into a thin wrapper
+    (builds the ApiProviderResolver once) plus ``_to_agent_spec_with``, which
+    holds the lowering body these guards scan. Re-keyed to the internal name,
+    with the public one kept as a fallback: this guard follows the code, it does
+    not pin which of the two the body sits in.
+    """
     tree = ast.parse(agent_spec_source())
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "to_agent_spec":
-            return ast.get_source_segment(agent_spec_source(), node) or ""
-    raise AssertionError("to_agent_spec not found in _agent_spec.py")
+    by_name = {
+        node.name: ast.get_source_segment(agent_spec_source(), node) or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+    }
+    for candidate in ("_to_agent_spec_with", "to_agent_spec"):
+        source = by_name.get(candidate, "")
+        if "if ni.is_dict_form:" in source:
+            return source
+    raise AssertionError(
+        "neither _to_agent_spec_with nor to_agent_spec in _agent_spec.py carries the "
+        "dict-form fan-in branch these guards scan"
+    )
 
 
 def _dict_form_fan_in_branch(source: str) -> str:

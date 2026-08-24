@@ -82,9 +82,13 @@ MIGRATED: frozenset[str] = frozenset(
         "_recursion_budget.py",
         "_wiring.py",
         # neograph-tjpn4: MOVED here from PENDING, not merely dropped -- assertion
-        # (c) is an EQUALITY and _agent_spec.py is still a combo-vocabulary
-        # consumer via its table imports.
-        "_agent_spec.py",
+        # (c) is an EQUALITY and the per-item combo dispatch is still a
+        # combo-vocabulary consumer via its table imports.
+        # neograph-qtfof.13: RE-KEYED, not widened. `_lower_construct_item` (the
+        # whole of _agent_spec.py's combo readership) moved to its own module when
+        # _agent_spec.py crossed its size ceiling; the count of consumers is
+        # unchanged, only the file holding this one.
+        "_agent_spec_item_dispatch.py",
         # neograph-s7zt3.10 (Phase 7): loader.py joined the readership when its
         # recognition walk moved to recognize->classify -- it now maps a recognized
         # modifier-NAME frozenset through combo_for_modifier_names and dispatches on
@@ -468,11 +472,14 @@ class TestComboDispatchScannerMetaTests:
     def test_agent_spec_now_holds_zero_combo_dispatch(self):
         """neograph-tjpn4 end state: the last PENDING file is clean.
 
-        Redundant with assertion (a) by construction, but it keeps _agent_spec.py
-        named in a meta-test so a future reader sees the file that used to be the
-        exception is now the proof.
+        Redundant with assertion (a) by construction, but it keeps the file named
+        in a meta-test so a future reader sees the one that used to be the
+        exception is now the proof. neograph-qtfof.13 split the dispatch into
+        _agent_spec_item_dispatch.py; BOTH must stay clean, so both are asserted
+        rather than the assertion following the code and leaving a gap behind it.
         """
         assert _combo_dispatch_sites((SRC_DIR / "_agent_spec.py").read_text()) == []
+        assert _combo_dispatch_sites((SRC_DIR / "_agent_spec_item_dispatch.py").read_text()) == []
 
 
 class TestTableSymbolUsageScannerMetaTests:

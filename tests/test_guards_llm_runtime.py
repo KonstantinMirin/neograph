@@ -2377,9 +2377,7 @@ class TestStructuredRetryBudgetParityAcrossTwins:
         for match_node in (n for n in ast.walk(fn) if isinstance(n, ast.Match)):
             for case in match_node.cases:
                 body = ast.Module(body=case.body, type_ignores=[])
-                if any(
-                    isinstance(n, ast.Name) and n.id in {"attempts", "max_retries"} for n in ast.walk(body)
-                ):
+                if any(isinstance(n, ast.Name) and n.id in {"attempts", "max_retries"} for n in ast.walk(body)):
                     budgeted.add(ast.unparse(case.pattern))
         return budgeted
 
@@ -2488,9 +2486,7 @@ class TestConfigCarrierIsTheOnlySite:
             if not isinstance(node, ast.Dict):
                 continue
             splats_existing = any(k is None for k in node.keys)
-            sets_configurable = any(
-                isinstance(k, ast.Constant) and k.value == "configurable" for k in node.keys
-            )
+            sets_configurable = any(isinstance(k, ast.Constant) and k.value == "configurable" for k in node.keys)
             if splats_existing and sets_configurable:
                 n += 1
         return n
@@ -2590,11 +2586,7 @@ class TestToolInteractionOrdinalSingleWriter:
             if not isinstance(node, ast.FunctionDef):
                 continue
             for call in ast.walk(node):
-                if (
-                    isinstance(call, ast.Call)
-                    and isinstance(call.func, ast.Name)
-                    and call.func.id == "ToolInteraction"
-                ):
+                if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "ToolInteraction":
                     has_ordinal = any(kw.arg == "ordinal" for kw in call.keywords)
                     sites.append((node.name, has_ordinal))
         return sites
@@ -2651,3 +2643,61 @@ class TestToolInteractionOrdinalSingleWriter:
         """Non-vacuity: describe_type.py's class_counts (a different concern —
         hoisting frequency, not per-tool-name budget) must not trip this guard."""
         assert not self._looks_like_per_tool_count_dict(ast.AnnAssign(), "class_counts")
+
+
+class TestTierResolutionAndLlmConfigConstructionMonopolies:
+    """neograph-qtfof.13: two single-source-of-truth ratchets the Agent Spec
+    provider derivation depends on, pinned as a CLASS-level rule rather than a
+    one-off review note.
+
+    The disease-scan for that ticket measured both at ZERO pre-existing
+    instances, which is exactly why they are cheap to pin now and expensive to
+    recover later: a second call site is invisible until a factory with a
+    narrower signature silently stops receiving its kwargs.
+
+    Both scans use AST, not text, so a mention inside a comment or docstring
+    (``_agent_spec_provider`` has one of each, deliberately) cannot trip them --
+    the earlier grep-based sweep DID surface those two lines and a reader had to
+    dismiss them by hand.
+    """
+
+    @staticmethod
+    def _call_sites(predicate) -> list[str]:
+        found = []
+        for py in sorted(SRC_DIR.rglob("*.py")):
+            if "__pycache__" in py.parts:
+                continue
+            for node in ast.walk(ast.parse(py.read_text())):
+                if isinstance(node, ast.Call) and predicate(node.func):
+                    found.append(f"{py.relative_to(SRC_DIR)}:{node.lineno}")
+        return found
+
+    def test_llm_factory_is_invoked_only_inside_get_llm(self):
+        """Every tier->client resolution must go through ``_llm._get_llm``.
+
+        A bare ``runtime.llm_factory(tier)`` skips the ``llm_factory_params``
+        signature filter ``LlmRuntime.build`` populates, so a factory declared as
+        ``(tier, node_name=None, llm_config=None)`` -- the form examples 07, 08
+        and 10 all use -- silently stops receiving those kwargs.
+        """
+        sites = self._call_sites(lambda f: isinstance(f, ast.Attribute) and f.attr == "llm_factory")
+        assert [s.split(":")[0] for s in sites] == ["_llm.py"], (
+            "llm_factory must be CALLED in exactly one place -- inside _llm._get_llm, which "
+            "applies the llm_factory_params filter. Route the new caller through _get_llm "
+            f"instead of calling the factory directly:\n  {sites}"
+        )
+
+    def test_agent_spec_llm_config_has_one_construction_site(self):
+        """All three lowerings (think, agent/act, Oracle merge) funnel through
+        ``_make_llm_config``, so per-node provider/model/url derivation lands
+        everywhere by changing ONE expression."""
+        sites = self._call_sites(lambda f: isinstance(f, ast.Name) and f.id == "SpecLlmConfig")
+        assert [s.split(":")[0] for s in sites] == ["_agent_spec_node_lowering.py"], (
+            "the Agent Spec LlmConfig must be constructed in exactly one place "
+            f"(_make_llm_config), or a lowering will quietly export an underived config:\n  {sites}"
+        )
+
+    def test_the_scanner_actually_sees_calls(self):
+        """Non-vacuity: a predicate matching nothing would make both assertions
+        above pass for the wrong reason."""
+        assert self._call_sites(lambda f: isinstance(f, ast.Name) and f.id == "_get_llm")

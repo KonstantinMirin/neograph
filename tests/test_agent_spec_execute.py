@@ -70,6 +70,8 @@ Run with::
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 pytest.importorskip("pyagentspec")
@@ -343,12 +345,21 @@ class TestEveryGreenCellExecutesUnderAThirdPartyAgentSpecRuntime:
     """
 
     @pytest.mark.parametrize("cell_id", sorted(GREEN))
-    def test_the_exported_flow_loads_and_runs_without_raising(self, cell_id: str) -> None:
+    def test_the_exported_flow_loads_and_runs_without_raising(self, cell_id: str, request: Any) -> None:
         flow = to_agent_spec(build_cell(*CELLS[cell_id]))
         assert type(flow).__name__ == "Flow", f"{cell_id} exports a {type(flow).__name__}, not a Flow"
 
         if cell_id in EXEC_EXEMPT:
-            pytest.skip(f"known export gap: {EXEC_EXEMPT[cell_id]}")
+            # neograph-qtfof.13: xfail(strict=True), NOT skip. Two reasons, and the
+            # second is the one that matters. (1) scripts/check_skips.py fails on ANY
+            # skip and has no allowlist, so the skip form made release-gate red here.
+            # (2) EXEC_EXEMPT is documented SHRINK-ONLY: an xfail that starts PASSING
+            # turns the suite RED (XPASS is a failure under strict), so a gap that
+            # closes cannot silently drop out of the count. A skip can never do that.
+            # The body below still RUNS -- that is what makes the XPASS reachable.
+            request.node.add_marker(
+                pytest.mark.xfail(strict=True, reason=f"known export gap: {EXEC_EXEMPT[cell_id]}")
+            )
 
         try:
             run_via_agent_spec_loader(flow, cell_id, _stub_registry(flow))
@@ -371,11 +382,15 @@ class TestTheThirdPartyRuntimeAgreesWithNeographsOwnRuntime:
     """
 
     @pytest.mark.parametrize("cell_id", sorted(COMPARE_CELLS))
-    def test_the_third_party_run_surfaces_a_result(self, cell_id: str) -> None:
+    def test_the_third_party_run_surfaces_a_result(self, cell_id: str, request: Any) -> None:
         if cell_id not in _CELL_BODIES:
             pytest.skip(f"{cell_id}: no declared COMPARE bodies yet (newly widened COMPARE_CELLS)")
         if cell_id in COMPARE_EXEMPT:
-            pytest.skip(f"known export gap: {COMPARE_EXEMPT[cell_id]}")
+            # neograph-qtfof.13: same reasoning as EXEC_EXEMPT above -- strict xfail so a
+            # closed gap turns RED instead of dropping silently out of a skip count.
+            request.node.add_marker(
+                pytest.mark.xfail(strict=True, reason=f"known export gap: {COMPARE_EXEMPT[cell_id]}")
+            )
         flow = to_agent_spec(build_cell(*CELLS[cell_id]))
         bodies = _CELL_BODIES[cell_id]
 
@@ -390,11 +405,15 @@ class TestTheThirdPartyRuntimeAgreesWithNeographsOwnRuntime:
         )
 
     @pytest.mark.parametrize("cell_id", sorted(COMPARE_CELLS))
-    def test_the_third_party_result_equals_neographs_own(self, cell_id: str) -> None:
+    def test_the_third_party_result_equals_neographs_own(self, cell_id: str, request: Any) -> None:
         if cell_id not in _CELL_BODIES:
             pytest.skip(f"{cell_id}: no declared COMPARE bodies yet (newly widened COMPARE_CELLS)")
         if cell_id in COMPARE_EXEMPT:
-            pytest.skip(f"known export gap: {COMPARE_EXEMPT[cell_id]}")
+            # neograph-qtfof.13: same reasoning as EXEC_EXEMPT above -- strict xfail so a
+            # closed gap turns RED instead of dropping silently out of a skip count.
+            request.node.add_marker(
+                pytest.mark.xfail(strict=True, reason=f"known export gap: {COMPARE_EXEMPT[cell_id]}")
+            )
         flow = to_agent_spec(build_cell(*CELLS[cell_id]))
         bodies = _CELL_BODIES[cell_id]
 

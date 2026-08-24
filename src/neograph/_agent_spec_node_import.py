@@ -332,7 +332,11 @@ def _reconstruct_primitive_node(spec_node: Any, flow: Any, output_types: dict[st
             inputs = _augment_inputs_from_prompt_marker(inputs, marker, output_types)
         else:
             prompt = spec_node.prompt_template
-        mode, model, scripted_fn = "think", spec_node.llm_config.model_id, None
+        # neograph-qtfof.13: the marker's tier wins over llm_config.model_id, which
+        # holds the RESOLVED model name whenever the export was given an llm_factory.
+        # Falls back to model_id for a pre-qtfof.13 or foreign LlmNode with no tier.
+        marker_tier = (marker or {}).get("model_tier")
+        mode, model, scripted_fn = "think", (marker_tier or spec_node.llm_config.model_id), None
     elif cls_name == "ToolNode":
         mode, prompt, model, scripted_fn = "scripted", None, None, spec_node.tool.name
     else:

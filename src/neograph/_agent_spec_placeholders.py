@@ -124,7 +124,9 @@ def _is_translation_eligible(item: Any) -> TypeGuard[Node]:
     return isinstance(item, Node) and item.mode in ("think", "agent", "act")
 
 
-def _prompt_spec_marker(node: Node, flat_to_original: dict[str, str]) -> dict[str, Any]:
+def _prompt_spec_marker(
+    node: Node, flat_to_original: dict[str, str], *, derived_model_id: str | None = None
+) -> dict[str, Any]:
     """Build the strictly JSON-native ``neograph/prompt_spec`` round-trip marker.
 
     Carries the UNtranslated ``${var}`` text + the full original input TypeSpec so
@@ -141,6 +143,16 @@ def _prompt_spec_marker(node: Node, flat_to_original: dict[str, str]) -> dict[st
         "original_text": node.prompt or "",
         "placeholder_map": dict(flat_to_original),
         "original_inputs": [{"title": p.title, "json_schema": p.json_schema} for p in _properties_for(node.inputs)],
+        # neograph-qtfof.13: the opaque TIER string, recorded ONLY when the export
+        # actually loses it -- i.e. when a supplied llm_factory resolved the tier and
+        # llm_config.model_id now carries the REAL model name instead. With no factory
+        # (or an unclassifiable client) model_id still IS the tier, nothing is lost, and
+        # emitting the key would be redundant metadata.
+        #
+        # That conditional is what keeps the zero-arg export byte-for-byte identical
+        # forever, which tests/fixtures/agent_spec_refactor_snapshot.json pins as a
+        # historical proof and explicitly forbids rebaselining.
+        **({"model_tier": node.model or ""} if derived_model_id else {}),
     }
 
 
