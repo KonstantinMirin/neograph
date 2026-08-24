@@ -517,7 +517,7 @@ git tag -a vX.Y.Z -m "..." && git push origin main && git push origin vX.Y.Z
 | `website` | `npm ci && npm run build`, because the api-manifest guard couples page content to the public API |
 | `skipcheck` | `scripts/check_skips.py`, which fails on any skip whose reason is not in `tests/skip_allowlist.txt` |
 
-**A skip is invisible in a pass count.** `tests/skip_allowlist.txt` is EMPTY by design and may only shrink: with every extra installed, nothing should need to skip. That file is the ratchet. Adding a line records a surface the gate knowingly does not exercise.
+**A skip is invisible in a pass count**, so `skipcheck` fails on ANY skip and there is **no allowlist**. One shipped briefly (`tests/skip_allowlist.txt`, "empty by design, may only shrink") and was deleted without a single entry ever being added: a test exists to verify a behaviour, so a test that does not run is a defect with a cause, and writing its reason into a file does not fix the cause — it only stops anyone being told about it. When a behaviour is genuinely known-broken, mark it `xfail(strict=True)`: reported distinctly from a pass, and it turns RED the moment the gap closes, so the exemption cannot outlive its reason. That is the property an allowlist can never have.
 
 **Tag the commit you gated.** Not a later one, and not the branch tip if it moved.
 
