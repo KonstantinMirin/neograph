@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 from neograph._ir_branch import iter_with_arms
 from neograph._normalize import _declared_output
 from neograph._output_classify import output_markers
-from neograph._validation_types import effective_producer_type
+from neograph._validation_types import _source_location, effective_producer_type
 from neograph.errors import ConstructError
 from neograph.naming import field_name_for
 from neograph.node import Node
@@ -186,3 +186,49 @@ def _check_model_markers(
                     construct=getattr(construct, "name", None),
                     location=None,
                 )
+
+
+def check_output_from(construct: ConstructLike) -> None:
+    """Validate ``Construct.output_from`` names exactly one declared item.
+
+    GH #17. ``output_from`` says WHICH item's output is the boundary; ``output=``
+    still says WHAT type it is. A name that matches no item -- or matches more than
+    one -- refuses HERE, at assembly, like any other wiring mistake.
+
+    Refusing a name that resolves to a forwarded ``context=`` field matters more
+    than it looks: that field is exactly the value the reverse type-scan used to
+    return silently, so accepting it would re-spell the original bug through the
+    very field added to prevent it.
+    """
+    port = getattr(construct, "output_from", None)
+    if port is None:
+        return
+    # Direct attribute read, not _declared_output: the selector exists to abstract
+    # the Node(.outputs)-vs-Construct(.output) split, and this is known to be a
+    # Construct. The orchestrator reads construct.output the same way.
+    if construct.output is None:
+        raise ConstructError.build(
+            f"declares output_from={port!r} but no output= type",
+            expected="output= set alongside output_from=",
+            found="output=None",
+            hint="output_from says WHICH producer is the boundary; output= says WHAT type it is. Both are needed.",
+            construct=construct.name,
+            location=_source_location(),
+        )
+    names = [item.name for item in iter_with_arms(construct) if getattr(item, "name", None)]
+    matches = [n for n in names if n == port]
+    if len(matches) == 1:
+        return
+    problem = "matches no item" if not matches else f"is ambiguous -- {len(matches)} items share it"
+    raise ConstructError.build(
+        f"declares output_from={port!r}, which {problem}",
+        expected=f"the name of exactly one item of construct {construct.name!r}",
+        found=f"declared items: {names}" if names else "this construct declares no items",
+        hint=(
+            "output_from must name an item THIS construct declares. A forwarded context= field or a "
+            "framework key is not an item -- it is a value the construct was handed, and letting such a "
+            "value be the boundary is the bug output_from exists to prevent."
+        ),
+        construct=construct.name,
+        location=_source_location(),
+    )

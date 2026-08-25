@@ -9,6 +9,7 @@ from langchain_core.runnables import RunnableConfig, RunnableLambda
 from pydantic import BaseModel
 
 from neograph._ir_branch import iter_with_arms
+from neograph._normalize import _declared_output
 from neograph._oracle import _inject_oracle_config
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
@@ -20,7 +21,7 @@ from neograph.modifiers import (
     PrimaryShape,
     classify_modifiers,
 )
-from neograph.naming import field_name_for
+from neograph.naming import field_name_for, output_field_name
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -44,13 +45,70 @@ def _scan_subgraph_input(state: StateBus, sub_input_type: type) -> Any:
     return None
 
 
-def _scan_subgraph_output(sub_result: dict[str, Any], sub_output_type: type) -> Any:
-    """Scan sub-graph result in reverse order for first value matching sub.output.
+def item_field_names(construct: Construct) -> list[str]:
+    """State-field names the construct's OWN DECLARED ITEMS write, in declaration order.
 
-    Reverse iteration so later pipeline nodes take precedence. Unwraps loop
-    append-lists (list[T] from reducer) by checking val[-1] against the
-    declared output type.
+    The eligibility half of the shared boundary rule, per GH #17. A
+    sub-construct's final state holds more than what the sub-construct COMPUTED:
+    forwarded ``context=`` fields, ``neo_subgraph_input``, framework keys. Those
+    are values the child was HANDED, and letting them compete to BE its output is
+    the whole of GH #17 -- a branch that declared ``context=['read']`` had its
+    ``output=Case`` silently re-pointed at the injected case, five readings and
+    zero claims, with a green run.
+
+    Shared deliberately: ``_scan_subgraph_input`` (neograph-5suot unknown #5) can
+    adopt this same eligibility set, and it agrees with
+    ``_agent_spec_boundary.resolve_end_node_sources``, which already answers
+    "which node is the boundary" positionally. One rule, not a fifth answer.
     """
+    fields: list[str] = []
+    for item in iter_with_arms(construct):
+        name = getattr(item, "name", None)
+        if not name:
+            continue
+        base = field_name_for(name)
+        declared = _declared_output(item)
+        if isinstance(declared, dict):
+            # Dict-form outputs write ONE state field per key ({node}_{key}), and the
+            # bare {node} field does not exist. Missing these made every dict-form
+            # sub-construct boundary unresolvable -- caught by
+            # TestGatherProduceSubConstruct, not by the boundary tests.
+            fields.extend(output_field_name(base, key) for key in declared)
+        else:
+            fields.append(base)
+    return fields
+
+
+def _scan_subgraph_output(
+    sub_result: dict[str, Any], sub_output_type: type, *, eligible: list[str] | None = None
+) -> Any:
+    """Resolve a sub-construct's boundary value from the child's final state.
+
+    ``eligible`` restricts the candidates to the fields the
+    construct's own declared items write, LAST-DECLARED-ITEM FIRST, so a value the
+    child was merely handed can never win. Measured over the full suite at the time
+    of the change: 270 boundary resolutions, 26 with more than one type match, and
+    this rule changes the answer on 2 -- both of them the reported bug. The other 24
+    are ordinary same-typed chains (``review``->``revise``, ``write``->``improve``)
+    and keep resolving exactly as before, which is why ORDERING was chosen over
+    refusing (a refusal would have broken the canonical refine sub-construct).
+
+    ``eligible=None`` keeps the historical whole-state reverse scan. That is NOT a
+    deprecated path: Portal mode-(b) dispatch (``_agent_spec_dispatch``) invokes a
+    flow EMITTED AT RUNTIME whose item names are unknowable at assembly, so it has
+    no eligibility set to pass and the type scan is the only resolution available.
+
+    Unwraps loop append-lists (``list[T]`` from the reducer) by checking ``val[-1]``
+    against the declared output type.
+    """
+    if eligible is not None:
+        for field in reversed(eligible):
+            if field not in sub_result:
+                continue
+            check_val = _unwrap_loop_value(sub_result[field], object)
+            if isinstance(check_val, sub_output_type):
+                return check_val
+        return None
     for val in reversed(list(sub_result.values())):
         check_val = _unwrap_loop_value(val, object)
         if isinstance(check_val, sub_output_type):
@@ -196,7 +254,12 @@ def make_subgraph_fn(
         # Extract the declared output type from sub result.
         output_val = None
         if sub.output is not None:
-            output_val = _scan_subgraph_output(sub_result, sub.output)
+            # GH #17: a declared port wins outright; otherwise the boundary
+            # is the LAST DECLARED ITEM that produced the type -- never a forwarded
+            # context value or another field the child was merely handed.
+            port = getattr(sub, "output_from", None)
+            eligible = [field_name_for(port)] if port else item_field_names(sub)
+            output_val = _scan_subgraph_output(sub_result, sub.output, eligible=eligible)
 
         # Runtime defense: if no internal node produced a compatible output,
         # fail loud instead of writing None silently.

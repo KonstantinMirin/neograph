@@ -150,6 +150,11 @@ class ConstructSpec(BaseModel):
     name: str
     input: str
     output: str
+    #: GH #17: the NODE NAME whose output is the boundary. Distinct from
+    #: ``output`` above, which is a TYPE NAME resolved via ``lookup_type`` --
+    #: the two must not share a spelling. Optional: the default rule already
+    #: prefers the last declared member producing ``output``.
+    output_from: str | None = None
     nodes: list[str]
     oracle: OracleSpec | None = None
     each: EachSpec | None = None

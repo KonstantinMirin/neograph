@@ -851,3 +851,50 @@ class TestPortalMeshGroupingMonopoly:
         spaced = "groups.setdefault( portal.name , [] ).append( item )"
         assert spaced.count(_PORTAL_GROUPING_IDIOM) == 0  # naive scan misses it
         assert _normalized_idiom_count(spaced, _PORTAL_GROUPING_IDIOM) == 1
+
+
+class TestSubConstructBoundaryEligibilityMonopoly:
+    """GH #17: a sub-construct's boundary may only be resolved over the fields its
+    OWN declared items write.
+
+    ``_scan_subgraph_output`` still accepts the historical whole-state scan
+    (``eligible=None``) because Portal mode-(b) dispatch invokes a flow EMITTED AT
+    RUNTIME whose item names cannot be known at assembly -- there is no eligibility
+    set to pass there. That escape hatch is exactly how the bug would come back, so
+    it is pinned to the ONE call site that legitimately needs it.
+
+    The disease-scan for that ticket measured this at zero other instances, which is
+    what makes the ratchet cheap now and expensive to recover later: a second
+    whole-state caller is invisible until some unrelated declaration puts a
+    type-compatible value into a child's state.
+    """
+
+    #: The ONLY call site allowed to resolve a boundary over the whole child state.
+    _WHOLE_STATE_ALLOWED = {"_agent_spec_dispatch.py"}
+
+    def test_only_portal_dispatch_scans_the_whole_child_state(self):
+        offenders = []
+        for py in sorted(SRC_DIR.rglob("*.py")):
+            if "__pycache__" in py.parts:
+                continue
+            for node in ast.walk(ast.parse(py.read_text())):
+                if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_scan_subgraph_output"):
+                    continue
+                passes_eligible = any(kw.arg == "eligible" for kw in node.keywords)
+                if not passes_eligible and py.name not in self._WHOLE_STATE_ALLOWED:
+                    offenders.append(f"{py.name}:{node.lineno}")
+        assert offenders == [], (
+            "_scan_subgraph_output was called without eligible=, which resolves a boundary over the "
+            "WHOLE child state -- including values the construct was merely handed (a forwarded "
+            "context= field, neo_subgraph_input). That is GH #17. Pass eligible=item_field_names(sub) "
+            f"unless this is the Portal mode-(b) dispatch site:\n  {offenders}"
+        )
+
+    def test_the_scanner_sees_the_real_call_sites(self):
+        """Non-vacuity: a predicate matching nothing passes the assertion above."""
+        found = [
+            py.name
+            for py in SRC_DIR.rglob("*.py")
+            if "__pycache__" not in py.parts and "_scan_subgraph_output(" in py.read_text()
+        ]
+        assert "_subconstruct.py" in found and "_agent_spec_dispatch.py" in found

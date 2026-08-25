@@ -232,3 +232,41 @@ The compiler enforces sub-Construct contracts:
 ---
 
 Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).
+
+## Which node's output crosses the boundary
+
+`output=` declares the boundary's TYPE. Which member actually supplies it is resolved
+by position: the **last declared member that produces that type** wins.
+
+Only the members the sub-construct itself declares are eligible. A value the child was
+merely handed — a field forwarded by `context=`, the input port, a framework key — can
+never be the boundary, even when it matches `output=` exactly. This matters because
+`context=` is an *input* declaration, and before this rule it could silently re-point an
+unrelated `output=`.
+
+When position is wrong, or you simply want the boundary stated rather than inferred,
+name the member with `output_from=`:
+
+{/* test-skip: illustrative fragment: references types defined in the page narrative */}
+```python
+branch = Construct(
+    "branch",
+    input=Docket,
+    output=Case,
+    output_from="settle",   # the member whose output IS the boundary
+    nodes=[settle, audit],  # `audit` also produces a Case
+)
+```
+
+`output_from` names a member, never a type — `output=` still says what the type is.
+A name that matches no member, or matches a forwarded `context=` field rather than a
+member, refuses at `Construct(...)` like any other wiring mistake:
+
+```
+[Construct 'branch'] declares output_from='settle_typo', which matches no item
+  expected: the name of exactly one item of construct 'branch'
+  found: declared items: ['settle', 'audit']
+```
+
+You usually do not need it. Reach for it when two members produce the boundary type and
+the later one is not the answer, or when you want the wiring visible to the next reader.

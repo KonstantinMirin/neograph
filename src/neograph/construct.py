@@ -122,6 +122,26 @@ class Construct(Modifiable, BaseModel):
     input: type[BaseModel] | None = None
     output: type[BaseModel] | None = None
 
+    # WHICH item's output IS the boundary (neograph-35mur / GH #17). Names an item
+    # of THIS construct; validated to exist and to be unambiguous at assembly, so a
+    # typo refuses like any other wiring mistake instead of silently resolving.
+    #
+    # A SEPARATE field rather than letting `output` take a str, deliberately:
+    # `Portal.output` and `ConstructSpec.output` already accept a str meaning a TYPE
+    # NAME (resolved via `lookup_type`), and giving one spelling two contradictory
+    # meanings on sibling boundary fields is the same one-heuristic-two-rules
+    # condition that produced the bug this field fixes.
+    #
+    # `output` stays REQUIRED alongside it: `_declared_output` must keep returning a
+    # TYPE (state.py builds `sub.output | None`, `dict[str, sub.output]`,
+    # `list[sub.output]`; the checkpoint fingerprint hashes it; compiler.py takes
+    # `.__name__`). This field says WHICH producer, never WHAT type.
+    #
+    # Usually unnecessary: the default rule already prefers the last declared item
+    # that produced the type. Reach for it when position is genuinely wrong, or when
+    # you want the boundary stated rather than inferred.
+    output_from: str | None = None
+
     # Default LLM config inherited by every node. Per-node llm_config merges
     # over this via LlmConfig.merged_with (node wins on conflicts). Common
     # use: setting output_strategy="json_mode" once for a whole pipeline

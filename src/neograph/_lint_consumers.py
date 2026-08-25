@@ -135,7 +135,15 @@ def _framework_field_reads(construct: Construct) -> tuple[set[tuple[str, str]], 
     # This construct's OWN declared output=. Every arm that satisfies the
     # boundary is a terminal producer, not just the last member -- a branch has
     # one terminal per arm, and `members[-1]` can only ever name one of them.
-    if isinstance(construct.output, type):
+    #
+    # GH #17: when `output_from` names the producer, exactly ONE member is the
+    # boundary, so this reads that member instead of every type-compatible one.
+    # Without this the author's declared port would draw a false
+    # `output_field_unconsumed` WARN -- the field is read, by the boundary itself.
+    port = getattr(construct, "output_from", None)
+    if port:
+        whole_roots.add(field_name_for(port))
+    elif isinstance(construct.output, type):
         for inner in iter_with_arms(construct):
             declared = normalize_outputs(getattr(inner, "outputs", None)).primary
             if isinstance(declared, type) and issubclass(declared, construct.output):

@@ -81,6 +81,7 @@ from neograph._agent_spec_markers import (  # noqa: E402,F401
     _MARK_VARIANT,
     Branch,
     _import_agent_spec_flow_classes,
+    attach_boundary_marker,  # noqa: E402
 )
 from neograph._agent_spec_modifier_lowering import (  # noqa: E402,F401
     _lower_each,
@@ -476,4 +477,4 @@ def _to_agent_spec_with(construct: Construct, *, provider: ApiProviderResolver) 
         control_flow_connections=control_edges,
         data_flow_connections=data_edges or None,
     )
-    return flow
+    return attach_boundary_marker(flow, construct)

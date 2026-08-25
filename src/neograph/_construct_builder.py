@@ -52,6 +52,7 @@ def construct_from_module(
     llm_config: dict[str, Any] | LlmConfig | None = None,
     input: type[BaseModel] | None = None,
     output: type[BaseModel] | None = None,
+    output_from: str | None = None,
 ) -> Construct:
     """Walk a module's pipeline members, sort topologically, return a Construct.
 
@@ -78,6 +79,10 @@ def construct_from_module(
             llm_config merges over this (node wins on conflicts).
         input: Input type for sub-construct boundary.
         output: Output type for sub-construct boundary.
+        output_from: Name of the member whose output IS the boundary, per
+            GH #17. Optional -- the default rule already prefers the last
+            declared member producing ``output``; name it when position is wrong
+            or you want the boundary stated rather than inferred.
     """
     construct_name = name or mod.__name__.split(".")[-1]
     return _build_construct_from_decorated(
@@ -87,6 +92,7 @@ def construct_from_module(
         llm_config,
         construct_input=input,
         construct_output=output,
+        construct_output_from=output_from,
         source="module",
     )
 
@@ -98,6 +104,7 @@ def construct_from_functions(
     llm_config: dict[str, Any] | LlmConfig | None = None,
     input: type[BaseModel] | None = None,
     output: type[BaseModel] | None = None,
+    output_from: str | None = None,
 ) -> Construct:
     """Build a Construct from an explicit list of pipeline members.
 
@@ -136,6 +143,7 @@ def construct_from_functions(
         llm_config,
         construct_input=input,
         construct_output=output,
+        construct_output_from=output_from,
     )
 
 
@@ -230,6 +238,7 @@ def _build_construct_from_decorated(
     llm_config: dict[str, Any] | LlmConfig | None,
     construct_input: type[BaseModel] | None = None,
     construct_output: type[BaseModel] | None = None,
+    construct_output_from: str | None = None,
     source: Literal["module", "list"] = "list",
 ) -> Construct:
     """Core pipeline builder shared by construct_from_module and
@@ -286,4 +295,5 @@ def _build_construct_from_decorated(
         llm_config=(llm_config if isinstance(llm_config, LlmConfig) else LlmConfig(**(llm_config or {}))),
         input=construct_input,
         output=construct_output,
+        output_from=construct_output_from,
     )

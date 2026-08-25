@@ -38,7 +38,9 @@ _MARK_BRANCH = "neograph/branch"
 _MARK_PORTAL_SPEC = "neograph/portal_spec"
 _MARK_PORTAL_OPERATOR_SPEC = "neograph/portal_operator_spec"
 _MARK_PROMPT_SPEC = "neograph/prompt_spec"
+_MARK_BOUNDARY_SPEC = "neograph/boundary_spec"
 _MARK_PORTAL_MEMBER_SPEC = "neograph/portal_member_spec"
+
 
 # --- Branch labels -----------------------------------------------------------
 # The ``from_branch`` arm names the export side writes onto ``ControlFlowEdge``
@@ -116,3 +118,24 @@ def _import_agent_spec_flow_classes() -> Any:
         "pyagentspec.tools",
         found="ImportError on pyagentspec.flows/property/tools",
     )
+
+
+def attach_boundary_marker(subflow: Any, item: Any) -> Any:
+    """Stamp a Construct's declared boundary PORT onto its exported sub-Flow.
+
+    GH #17. ``output_from`` names a MEMBER, and ``Flow.inputs``/``Flow.outputs``
+    carry Properties -- i.e. TYPES -- so the boundary port has no natural place on
+    the wire. Without this marker an export -> import round trip DROPS it and the
+    reimported construct silently falls back to the positional rule: green, and
+    quietly answering a different question. ``_agent_spec_group_import``'s own
+    docstring records that exact failure already happening once for
+    ``input``/``output`` themselves.
+
+    Stamped on the sub-FLOW rather than the wrapping ``FlowNode`` because
+    ``_construct_from_subflow`` reads the boundary off the Flow -- the Swarm C1
+    import path has only a Flow to work with.
+    """
+    port = getattr(item, "output_from", None)
+    if port:
+        subflow.metadata = {**(getattr(subflow, "metadata", None) or {}), _MARK_BOUNDARY_SPEC: {"output_from": port}}
+    return subflow

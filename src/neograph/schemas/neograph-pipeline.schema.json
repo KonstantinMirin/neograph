@@ -16,6 +16,18 @@
           "title": "Output",
           "type": "string"
         },
+        "output_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output From"
+        },
         "nodes": {
           "items": {
             "type": "string"

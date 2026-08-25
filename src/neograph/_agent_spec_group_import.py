@@ -24,6 +24,7 @@ from collections.abc import Callable
 from typing import Any
 
 from neograph._agent_spec_markers import (
+    _MARK_BOUNDARY_SPEC,
     _MARK_EACH_SPEC,
     _MARK_GROUP_ID,
     _MARK_LOOP_SPEC,
@@ -75,6 +76,14 @@ def _construct_from_subflow(subflow: Any, name: str, from_spec: Callable[[Any], 
         restored["input"] = port_in
     if port_out is not None:
         restored["output"] = port_out
+    # GH #17: the boundary PORT rides a marker because it is a member NAME with no
+    # Property representation. Without reading it back, a construct that declared
+    # its boundary explicitly returns from a round trip on the positional rule --
+    # green, and quietly answering a different question. Same trap this function's
+    # docstring already records for input/output themselves.
+    boundary = (getattr(subflow, "metadata", None) or {}).get(_MARK_BOUNDARY_SPEC) or {}
+    if boundary.get("output_from"):
+        restored["output_from"] = boundary["output_from"]
     return sub.model_copy(update=restored)
 
 

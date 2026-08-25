@@ -268,6 +268,7 @@ def _build_sub_construct(
         name=name,
         input=input_type,
         output=output_type,
+        output_from=construct_spec.output_from,
         nodes=nodes,
     )
 

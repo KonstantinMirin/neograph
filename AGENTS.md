@@ -194,6 +194,46 @@ Same pattern as inputs/input:
 - **`Node.outputs`** (plural, `dict[str, type] | type | None`) — declares what a node *produces* to the state bus. Dict form enables multi-output; single-type form is a convenience shorthand.
 - **`Construct.output`** (singular, `type[BaseModel] | None`) — declares the *boundary port* when a Construct is used as a sub-construct. It defines what surfaces from the isolated sub-pipeline, not a multi-output mapping.
 
+### The boundary is ELIGIBILITY-scoped, and `output_from` names the producer
+
+`output=` says what TYPE crosses; **which member supplies it** is resolved over the
+fields the construct's OWN declared items write (`item_field_names`, `_subconstruct.py`),
+last declared item first. A value the child was merely HANDED — a `context=` field
+forwarded from the parent, `neo_subgraph_input`, a framework key — is **never eligible**,
+even when it matches `output=` exactly.
+
+That restriction IS the fix for GH #17 (`neograph-35mur`), and the reason it is worded as
+eligibility rather than "reverse iteration": the child's final state legitimately holds
+more than the child computed, and letting any of it compete to BE the output is what
+returned a wrong answer on a green run. Measured when the rule landed: 270 boundary
+resolutions, 26 with more than one type match, 2 changed — both the bug.
+
+- **`Construct.output_from`** (`str | None`) — the explicit override, naming the member
+  whose output is the boundary. Resolved EAGERLY to a type at assembly, so
+  `_declared_output` keeps returning a type and its type-consuming call sites are
+  untouched. A name matching no item, or matching a forwarded context field, raises
+  `ConstructError` from `check_output_from` (`_validation_outputs.py`) at `Construct(...)`.
+- **It is a separate field on purpose.** `Portal.output` and `ConstructSpec.output`
+  already accept a `str` meaning a TYPE NAME (via `lookup_type`). One spelling with two
+  contradictory meanings on sibling boundary fields is the same duplicated-authority
+  condition that produced the bug.
+- **The type scan survives, deliberately, in two places.** A multi-arm branch's boundary
+  is satisfied by a different node per arm (`output_reachable_on_every_arm`), which one
+  name cannot express; and Portal mode-(b) dispatch invokes a flow emitted at RUNTIME
+  whose item names are unknowable at assembly. The latter is the ONLY caller allowed to
+  pass `eligible=None`, pinned by `TestSubConstructBoundaryEligibilityMonopoly`.
+- **A port has no Property representation**, so the Agent Spec export stamps it as a
+  `neograph/boundary_spec` marker (`attach_boundary_marker`, called from the exporter so
+  every export path carries it) and `_construct_from_subflow` restores it. Without that,
+  export→import drops the port and the construct silently reverts to the positional rule.
+
+**Rule for anything that resolves a value out of a bag of state**: read the eligibility
+set, do not re-derive one. Three more sites still answer this question their own way —
+`_scan_subgraph_input` (`neograph-5suot` unknown #5), and `_extract_single_type` plus its
+Agent Spec export mirror, which disagree with each other about precedence badly enough
+that the exported artifact wires a different edge than the runtime takes
+(`neograph-t1nbp`, P1).
+
 ---
 
 ## Layer discipline
