@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.10] - 2026-08-26
+
+### Fixed
+
+- **A hand-built `ToolInteraction` renders its payload again, not a blank line** (`neograph-k7pjj`, [GH #19](https://github.com/KonstantinMirin/neograph/issues/19)). `ToolInteraction.result: str = ""` defaults empty, and `_render_tool_interactions` rendered `f"{tool_name}:\n{ti.result}"` with no fallback — silently fine for the agent loop's OWN tool calls, which always populate both `result` (rendered) and `typed_result` (typed) at `_build_tool_interaction`. A caller building a `ToolInteraction` directly — e.g. a scripted node making its own tool call so the next agent starts pre-grounded — typically sets only `typed_result`, the validated object it already has, and the packet renders as the tool name and an empty body. Nothing catches it: `lint()` sees a correctly typed, correctly consumed channel (the defect is in RENDERING, not wiring); a `${...}`-survival prompt guard sees the placeholder correctly substituted, just with `""`. Reporter's cost: three deterministic opening tool calls rendered as three blank bodies on every run, including every paid evaluation run, and the agent silently re-fetched everything itself and still completed green — the failure was indistinguishable from a tool that legitimately returned nothing. The body is now `.result` when non-empty, else `describe_value(.typed_result)` when set, else `""` (the genuinely-empty case, unchanged) — the reporter's own preferred fix, reusing `describe_value` rather than inventing a second renderer. `args`/`duration_ms` stay omitted; they are bookkeeping, `typed_result` is the payload.
+
 ## [0.7.9] - 2026-08-21
 
 ### Added
