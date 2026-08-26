@@ -295,7 +295,7 @@ The **keys are dropped**: an `Each` barrier collects results in arrival order un
 
 ### `list[ToolInteraction]` -- research packet
 
-An `agent`/`act` node that declares a `tool_log` output produces a `list[ToolInteraction]`. When a downstream LLM node consumes it, the BAML default folds each interaction into a **research packet** -- a `{tool_name}:` header plus its `.result` (the already-rendered tool output), entries joined by a `\n\n---\n\n` separator:
+An `agent`/`act` node that declares a `tool_log` output produces a `list[ToolInteraction]`. When a downstream LLM node consumes it, the BAML default folds each interaction into a **research packet** -- a `{tool_name}:` header plus a body, entries joined by a `\n\n---\n\n` separator:
 
 ```
 search_records:
@@ -307,7 +307,7 @@ fetch_rfc:
 fetched RFC-6749 section 4.1
 ```
 
-The `tool_name` is kept as **provenance** -- a downstream node reasoning over a tool_log must know which tool produced each result. Only the bookkeeping fields (`args`, `duration_ms`, `typed_result`) are omitted.
+The body is `.result` (the pre-rendered form the agent loop always populates for its own tool calls) when non-empty, falling back to `describe_value(.typed_result)` when it is not -- a `ToolInteraction` you build by hand (e.g. a scripted node making its own tool call) typically sets only `typed_result`, and the fallback renders that instead of a blank body. The `tool_name` is kept as **provenance** -- a downstream node reasoning over a tool_log must know which tool produced each result. `args`/`duration_ms` stay omitted; they are bookkeeping, never the payload.
 
 ### `None` and `str`
 

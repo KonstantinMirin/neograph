@@ -287,16 +287,16 @@ def _is_tool_interaction_list(value: Any) -> bool:
 
 
 def _render_tool_interactions(value: list) -> str:
-    """Fold a ``list[ToolInteraction]`` into a research packet: each entry is its
-    ``tool_name`` header + ``.result`` (already the rendered form), entries joined
-    by ``_TOOL_PACKET_SEP``.
+    """Fold a ``list[ToolInteraction]`` into a research packet: ``tool_name`` header (provenance,
+    test_composition's gather->produce chain asserts it) + a body, joined by ``_TOOL_PACKET_SEP``.
+    Body is ``.result`` when non-empty, else ``describe_value(.typed_result)`` -- a caller-built
+    interaction commonly sets only ``typed_result``, and the default-empty ``result`` would else
+    silently drop the only field with data (neograph-k7pjj, GH #19). ``args``/``duration_ms`` omitted."""
 
-    The ``tool_name`` is kept, not dropped: a downstream node consuming a tool_log
-    must see WHICH tool produced each result — that provenance is the observability
-    contract (test_composition's gather->produce chain asserts it). Only the
-    bookkeeping fields (``args``/``duration_ms``/``typed_result``) are omitted.
-    """
-    return _TOOL_PACKET_SEP.join(f"{ti.tool_name}:\n{ti.result}" for ti in value)
+    def body(ti: ToolInteraction) -> str:
+        return ti.result or (describe_value(ti.typed_result) if ti.typed_result is not None else "")
+
+    return _TOOL_PACKET_SEP.join(f"{ti.tool_name}:\n{body(ti)}" for ti in value)
 
 
 def _render_model_dict(value: dict) -> str:
