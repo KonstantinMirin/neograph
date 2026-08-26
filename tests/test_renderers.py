@@ -2870,6 +2870,54 @@ class TestContainerRendering:
         assert "find_evidence" in out["log"]
         assert "ref: auth.py:42" in out["log"]
 
+    def test_hand_built_tool_interaction_renders_typed_result_when_result_is_empty(self):
+        """GH issue #19: a ToolInteraction built by the CALLER's own code (not
+        the framework's agent loop) typically sets typed_result and leaves
+        result at its default "" -- the renderer must not silently drop the
+        only field carrying data. Exact repro shape from the issue."""
+        from neograph.renderers import to_rendered
+        from neograph.tool import ToolInteraction
+
+        class NrtMetrics(BaseModel):
+            conversions: int
+            spend: float
+
+        typed = NrtMetrics(conversions=12, spend=340.5)
+        ti = ToolInteraction(tool_name="getDealNrtMetrics", args={"dealId": 4819}, typed_result=typed)
+
+        rendered = str(to_rendered([ti], None))
+
+        assert rendered != "getDealNrtMetrics:\n", "typed_result must not render as a blank body"
+        assert "12" in rendered
+        assert "340.5" in rendered
+
+    def test_tool_interaction_with_populated_result_ignores_typed_result(self):
+        """The framework's own agent-loop path already populates .result
+        (the pre-rendered form) -- that value must keep winning; typed_result
+        is only a FALLBACK for the hand-built case, not a second source that
+        could disagree with an already-rendered result."""
+        from neograph.renderers import to_rendered
+        from neograph.tool import ToolInteraction
+
+        class Payload(BaseModel):
+            n: int
+
+        ti = ToolInteraction(tool_name="search", result="found X", typed_result=Payload(n=999))
+        rendered = str(to_rendered([ti], None))
+        assert rendered == "search:\nfound X"
+        assert "999" not in rendered
+
+    def test_tool_interaction_with_neither_result_nor_typed_result_still_renders_empty_body(self):
+        """A tool that legitimately returned nothing must still be
+        distinguishable in shape from the bug -- both render an empty body,
+        which is correct: there is genuinely nothing to show."""
+        from neograph.renderers import to_rendered
+        from neograph.tool import ToolInteraction
+
+        ti = ToolInteraction(tool_name="ping")
+        rendered = str(to_rendered([ti], None))
+        assert rendered == "ping:\n"
+
     def test_none_value_renders_as_empty_string(self):
         from neograph.renderers import render_input
 
