@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IR ownership: the decision, explained</title>
+<style>
+:root{
+  --bg:#fbfbfa; --fg:#1c1c1a; --muted:#5c5c56; --rule:#e0dfd9;
+  --card:#fff; --accent:#1a5c7a; --bad:#a03028; --good:#2b6a3f; --warn:#8a6212;
+  --code-bg:#f4f3ef;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16171a; --fg:#e6e5e1; --muted:#a3a29c; --rule:#2e3034;
+    --card:#1d1f23; --accent:#6db3d4; --bad:#e0796e; --good:#7cc294; --warn:#d9ae5c;
+    --code-bg:#232529;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16171a; --fg:#e6e5e1; --muted:#a3a29c; --rule:#2e3034;
+  --card:#1d1f23; --accent:#6db3d4; --bad:#e0796e; --good:#7cc294; --warn:#d9ae5c;
+  --code-bg:#232529;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:920px;margin:0 auto;padding:56px 24px 120px}
+h1{font-size:2.1rem;line-height:1.2;margin:0 0 8px;letter-spacing:-.02em}
+h2{font-size:1.5rem;margin:64px 0 4px;letter-spacing:-.01em;padding-top:16px;border-top:1px solid var(--rule)}
+h3{font-size:1.15rem;margin:36px 0 4px}
+h4{font-size:1rem;margin:24px 0 4px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-size:.78rem}
+p,li{color:var(--fg)}
+.sub{color:var(--muted);font-size:1.05rem;margin:0 0 32px}
+.meta{color:var(--muted);font-size:.86rem;border-bottom:1px solid var(--rule);padding-bottom:20px;margin-bottom:36px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em;background:var(--code-bg);padding:1px 5px;border-radius:4px}
+pre{background:var(--code-bg);border:1px solid var(--rule);border-radius:8px;padding:14px 16px;overflow-x:auto;font-size:.84rem;line-height:1.55}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;margin:18px 0;font-size:.92rem;display:block;overflow-x:auto}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-weight:600;color:var(--muted);font-size:.8rem;text-transform:uppercase;letter-spacing:.05em}
+.card{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:18px 20px;margin:20px 0}
+.card.bad{border-left:3px solid var(--bad)}
+.card.good{border-left:3px solid var(--good)}
+.card.warn{border-left:3px solid var(--warn)}
+.card.key{border-left:3px solid var(--accent)}
+.card h4{margin-top:0}
+.lede{font-size:1.06rem}
+figure{margin:26px 0;text-align:center}
+figcaption{color:var(--muted);font-size:.84rem;margin-top:10px;text-align:left}
+svg{max-width:100%;height:auto}
+.tag{display:inline-block;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;border-radius:20px;border:1px solid var(--rule);color:var(--muted);margin-right:6px}
+.tag.bad{color:var(--bad);border-color:var(--bad)}
+.tag.good{color:var(--good);border-color:var(--good)}
+.tag.warn{color:var(--warn);border-color:var(--warn)}
+ul,ol{padding-left:22px}
+li{margin:6px 0}
+.toc{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:16px 20px;margin:28px 0 44px}
+.toc ol{margin:6px 0 0;padding-left:20px}
+.toc a{color:var(--accent);text-decoration:none}
+.toc a:hover{text-decoration:underline}
+.small{font-size:.88rem;color:var(--muted)}
+blockquote{margin:18px 0;padding:2px 0 2px 18px;border-left:3px solid var(--accent);color:var(--fg)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>IR ownership: answering “which value is meant” once</h1>
+<p class="sub">A proposed change to how neograph resolves data flow internally — the problem, the evidence, how other systems solve it, what we propose, and what it costs.</p>
+<p class="meta">
+neograph · branch <code>develop</code> · written 2026-08-27<br>
+Sources: <code>docs/design/ir-ownership-2026-08-27.md</code> (decision) and
+<code>docs/design/ir-ownership-roadmap-validation-2026-08-27.md</code> (validation).
+Every figure below was measured on the tree; the commands are cited inline.
+</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+<li><a href="#problem">The problem</a></li>
+<li><a href="#symptoms">How you observe it</a></li>
+<li><a href="#cause">Why it keeps coming back</a></li>
+<li><a href="#peers">How other systems solve this</a></li>
+<li><a href="#proposal">What we propose</a></li>
+<li><a href="#why">Why this is the right shape</a></li>
+<li><a href="#alternatives">Alternatives, and why they lose</a></li>
+<li><a href="#surface">What changes for someone using neograph</a></li>
+<li><a href="#agentspec">What it means for Agent Spec</a></li>
+<li><a href="#amendments">The five amendments</a></li>
+<li><a href="#plan">Migration, risk, and the decision you owe</a></li>
+</ol>
+</div>
+
+<h2 id="problem">1. The problem</h2>
+
+<p class="lede">A neograph pipeline stores every node's output in one shared bag. When a node needs a value, something has to answer: <em>which value in the bag is meant?</em></p>
+
+<p>Today, several parts of the framework answer that question independently, each by scanning the bag and comparing types. They do not all agree. When they disagree, nothing raises — a wrong value is returned and the run completes.</p>
+
+<div class="card bad">
+<h4>The shape of every instance</h4>
+<pre><code>for value in state:              # walk the bag
+    if isinstance(value, Claim): # match by type
+        return value             # take the first (or last) hit</code></pre>
+<p class="small" style="margin-bottom:0">There is no record of <em>which</em> producer was meant. The answer is recomputed from scratch, at each site that needs it, from a bag whose contents depend on declarations those sites know nothing about.</p>
+</div>
+
+<p>Two consequences have shipped to a user, both silently:</p>
+
+<div class="card bad">
+<h4>Consequence 1 — a boundary returned the wrong object</h4>
+<p>A sub-construct declared <code>output=Case</code>. It also declared <code>context=["opening"]</code>, which puts a second <code>Case</code> into the same bag. The scan matched the injected one.</p>
+<pre><code>the node computed  : Case(docket='D-1', readings=5, claims=3)
+the boundary returned: Case(docket='D-1', readings=5, claims=0)   # the opening case
+
+context=None        -> boundary = SETTLED
+context=['opening'] -> boundary = OPENING       no error, exit 0</code></pre>
+<p style="margin-bottom:0">Adding an <em>input</em> declaration silently re-pointed an unrelated <em>output</em>. The user found it by dumping compiled state and comparing it against what the branch demonstrably computed.</p>
+</div>
+
+<div class="card bad">
+<h4>Consequence 2 — the exported artifact computes a different answer than the pipeline</h4>
+<p>The runtime scanned forward and took the first match. The Agent Spec exporter scanned in reverse and took the last. Same construct:</p>
+<pre><code>runtime : sink consumes a     (forward scan, first match)
+export  : wires  b -&gt; sink    (reverse scan, last match)</code></pre>
+<p style="margin-bottom:0">Export a working pipeline, run it elsewhere, get a different answer. Neither surface complains.</p>
+</div>
+
+<h2 id="symptoms">2. How you observe it</h2>
+
+<p>This class of defect has no failure signal. It has these symptoms instead.</p>
+
+<table>
+<thead><tr><th>Symptom</th><th>What you actually see</th></tr></thead>
+<tbody>
+<tr><td><strong>Green runs, wrong data</strong></td><td>The pipeline completes, every gate passes, and a downstream step reasons over a value nobody selected.</td></tr>
+<tr><td><strong>Action at a distance</strong></td><td>Adding an unrelated declaration changes an existing binding. Nothing in the changed line mentions the thing that broke.</td></tr>
+<tr><td><strong>Types invented for distinctness</strong></td><td>A user adds a wrapper type whose only job is to be unique in a bag. One shipped with the docstring <em>“distinctness is the whole of its job”</em>, against that codebase's own rule about types that only move shapes.</td></tr>
+<tr><td><strong>The same fix, repeatedly</strong></td><td>Five times in five months, someone discovered this fresh and fixed it the same way.</td></tr>
+<tr><td><strong>Comments citing authorities that do not exist</strong></td><td>Three verified. One asserted it mirrored “the assembly-time validator's single-type resolution” — the validator performs no resolution.</td></tr>
+</tbody>
+</table>
+
+<div class="card warn">
+<h4>The recurrence, measured</h4>
+<p>Each of these is the same fix — resolve the answer once at assembly, store it as a field on the IR, have consumers read the field. Found and applied independently, five times:</p>
+<pre><code>fan_out_param        2026-04-06
+handoff_param        2026-07-13
+handoff_channel      2026-07-14
+output_from          2026-08-25
+input_source_field   2026-08-27</code></pre>
+<p class="small" style="margin-bottom:0"><code>git log --reverse -S&lt;field&gt; -- src/neograph/node.py src/neograph/construct.py</code></p>
+</div>
+
+<p>The last two are two days and one day old. The convergence is the tell: when unrelated people independently invent the same fix, the fix is a missing rule, not a series of coincidences.</p>
+
+<h2 id="cause">3. Why it keeps coming back</h2>
+
+<p>The correct pattern is already written down in <code>AGENTS.md</code>. It is written as <strong>a precedent</strong> — “the pattern to copy for any future new IR capability” — not as an invariant. A precedent is something you may follow. Nothing stops you doing otherwise.</p>
+
+<p>And there is a reason to do otherwise: the shortcut is always available. As long as code can enumerate the bag, re-deriving the answer locally is easier than finding the field someone stamped.</p>
+
+<figure>
+<svg viewBox="0 0 860 300" role="img" aria-label="Diagram: today, five modules each independently scan the state bag with different rules; proposed, one normalizer resolves and all modules read the answer.">
+  <style>
+    .bx{fill:var(--card);stroke:var(--rule);stroke-width:1.5}
+    .bxbad{fill:var(--card);stroke:var(--bad);stroke-width:1.5}
+    .bxgood{fill:var(--card);stroke:var(--good);stroke-width:2}
+    .t{fill:var(--fg);font:12px ui-monospace,Menlo,monospace}
+    .tl{fill:var(--muted);font:11px -apple-system,sans-serif}
+    .ttl{fill:var(--fg);font:600 13px -apple-system,sans-serif}
+    .ar{stroke:var(--bad);stroke-width:1.3;fill:none;marker-end:url(#ah)}
+    .arg{stroke:var(--good);stroke-width:1.5;fill:none;marker-end:url(#ahg)}
+  </style>
+  <defs>
+    <marker id="ah" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="var(--bad)"/></marker>
+    <marker id="ahg" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="var(--good)"/></marker>
+  </defs>
+
+  <text x="10" y="18" class="ttl">Today — five answers, no agreement</text>
+  <rect x="10" y="30" width="150" height="34" rx="6" class="bxbad"/><text x="20" y="51" class="t">runtime input</text>
+  <rect x="10" y="72" width="150" height="34" rx="6" class="bxbad"/><text x="20" y="93" class="t">subgraph in</text>
+  <rect x="10" y="114" width="150" height="34" rx="6" class="bxbad"/><text x="20" y="135" class="t">subgraph out</text>
+  <rect x="10" y="156" width="150" height="34" rx="6" class="bxbad"/><text x="20" y="177" class="t">agent-spec export</text>
+  <rect x="10" y="198" width="150" height="34" rx="6" class="bxbad"/><text x="20" y="219" class="t">validation hints</text>
+  <rect x="255" y="88" width="120" height="120" rx="8" class="bx"/>
+  <text x="278" y="140" class="t">the bag</text><text x="272" y="158" class="tl">(enumerable)</text>
+  <path d="M165,47 C215,47 215,120 250,132" class="ar"/>
+  <path d="M165,89 C215,89 215,125 250,138" class="ar"/>
+  <path d="M165,131 C205,131 215,140 250,146" class="ar"/>
+  <path d="M165,173 C215,173 215,165 250,156" class="ar"/>
+  <path d="M165,215 C215,215 215,180 250,164" class="ar"/>
+  <text x="168" y="255" class="tl">each scans and type-matches, with its own precedence</text>
+
+  <text x="470" y="18" class="ttl">Proposed — one answer, read everywhere</text>
+  <rect x="470" y="40" width="170" height="40" rx="6" class="bxgood"/>
+  <text x="482" y="58" class="t">_ir_normalize</text><text x="482" y="73" class="tl">resolves once, at assembly</text>
+  <rect x="470" y="100" width="170" height="34" rx="6" class="bx"/><text x="482" y="121" class="t">Source (on the IR)</text>
+  <path d="M555,82 L555,98" class="arg"/>
+  <rect x="700" y="96" width="150" height="30" rx="6" class="bx"/><text x="712" y="115" class="t">runtime reads</text>
+  <rect x="700" y="134" width="150" height="30" rx="6" class="bx"/><text x="712" y="153" class="t">exporters fold</text>
+  <rect x="700" y="172" width="150" height="30" rx="6" class="bx"/><text x="712" y="191" class="t">lint / diagnostics</text>
+  <path d="M645,115 L695,111" class="arg"/>
+  <path d="M645,120 L695,147" class="arg"/>
+  <path d="M645,126 L695,185" class="arg"/>
+  <rect x="470" y="180" width="170" height="34" rx="6" class="bx"/>
+  <text x="482" y="201" class="t">the bag</text>
+  <text x="470" y="238" class="tl">not enumerable — no keys()</text>
+  <text x="470" y="254" class="tl">a scan is not writeable, not merely banned</text>
+</svg>
+<figcaption><strong>The change in one picture.</strong> Not “add a rule telling people to stop scanning” — remove the ability to scan, and make the resolved answer the only thing there is to read.</figcaption>
+</figure>
+
+<h2 id="peers">4. How other systems solve this</h2>
+
+<p>This is not a novel problem. Any system where steps produce values into a shared space, and later steps consume them, meets it. The solutions converge, and they converge on the same answer.</p>
+
+<table>
+<thead><tr><th>System</th><th>Same problem</th><th>How it is solved</th></tr></thead>
+<tbody>
+<tr>
+<td><strong>Compilers</strong><br><span class="small">any language with scopes</span></td>
+<td>Which declaration does this identifier refer to?</td>
+<td>A dedicated <strong>name-resolution pass</strong> builds a symbol table. Later passes read the resolved binding. Type checking, optimisation and codegen never re-resolve a name; if they did, they could disagree.</td>
+</tr>
+<tr>
+<td><strong>SSA form</strong><br><span class="small">LLVM and most modern IRs</span></td>
+<td>Which assignment does this use read?</td>
+<td>Each value gets exactly one definition, and every use <strong>points at that definition directly</strong>. The question stops existing. Where control flow makes it genuinely ambiguous, a <code>phi</code> node names the alternatives explicitly rather than leaving it implicit.</td>
+</tr>
+<tr>
+<td><strong>Build systems</strong><br><span class="small">Bazel, Buck</span></td>
+<td>Which output satisfies this input?</td>
+<td>Dependencies are <strong>declared, not discovered</strong>. A build rule cannot glob the output directory looking for something that fits. That restriction is what makes the build reproducible and remotely cacheable.</td>
+</tr>
+<tr>
+<td><strong>Terraform</strong></td>
+<td>Which resource does this attribute come from?</td>
+<td>An explicit reference (<code>aws_instance.web.id</code>) creates a graph edge. There is no “find a resource of this type”. Ambiguity is a plan-time error, not a runtime surprise.</td>
+</tr>
+<tr>
+<td><strong>Airflow XCom</strong><br><span class="small">the closest analogue</span></td>
+<td>Tasks push values into a shared store; downstream tasks pull them.</td>
+<td>Instructive as a <em>negative</em> example. Classic XCom pull-by-key is exactly a bag lookup, and it produced the same class of bug. The fix, in the TaskFlow API, was to make outputs into <strong>explicit, referenced objects</strong> (<code>XComArg</code>) so the dependency is declared, not searched for.</td>
+</tr>
+<tr>
+<td><strong>DI containers</strong><br><span class="small">Spring, Guice, Dagger</span></td>
+<td>Which bean satisfies this dependency?</td>
+<td>Resolution happens once at wiring time. Two candidates of the same type is an <strong>error at startup</strong> (<code>NoUniqueBeanDefinitionException</code>) that you fix by naming one (<code>@Qualifier</code>). Notably: <em>they refuse rather than guess</em>, and Dagger moves the whole resolution to compile time.</td>
+</tr>
+<tr>
+<td><strong>LangGraph</strong><br><span class="small">the substrate neograph compiles to</span></td>
+<td>A dict of state channels shared by every node.</td>
+<td>It does not solve it — it is the bag. That is fine for LangGraph, whose contract is “you manage state”. neograph's entire value proposition is being stricter than that, which is exactly why the responsibility lands here.</td>
+</tr>
+</tbody>
+</table>
+
+<div class="card key">
+<h4>The pattern the field has settled on</h4>
+<p style="margin-bottom:0">Resolve references in <strong>one dedicated pass</strong>, <strong>reify</strong> the answer as data attached to the program, and have every later consumer <strong>read</strong> that data rather than recompute it. Where the reference is genuinely ambiguous, either <strong>refuse</strong> (DI containers) or <strong>name the alternatives explicitly</strong> (SSA's <code>phi</code>). What nobody does is let five consumers each search a shared namespace with their own precedence rule.</p>
+</div>
+
+<p>The proposal below is that pattern, named in the vocabulary the codebase already uses.</p>
+
+<h2 id="proposal">5. What we propose</h2>
+
+<h3>5.1 One owner</h3>
+<p><code>_ir_normalize.py</code>, which already runs inside <code>Construct.__init__</code>, becomes the only place that answers “which value is meant”. It is the right owner for a concrete reason: assembly is the <em>only</em> moment when declaration order, the modifier-adjusted producer set, and the enclosing boundary all exist at once. The runtime has the values but has lost the intent; the exporters have the declarations but have repeatedly diverged from the runtime.</p>
+
+<h3>5.2 The answer becomes data</h3>
+<p>A small closed set of types, each naming one kind of place a value can come from:</p>
+<pre><code>PeerField(field)        # a named upstream producer's state field
+Port()                  # the enclosing construct's input port
+EachItem()              # the fanned-out item
+LoopCarry()             # this node's own append-list, latest element
+HandoffChannel(channel) # a Portal mesh channel
+LastPresent(fields)     # ordered candidates; take the last one PRESENT</code></pre>
+
+<p>These are stored in a table the normalizer writes and nobody else can: <code>Node.sources</code>, <code>Construct.boundary_source</code>, <code>Construct.input_source</code>.</p>
+
+<div class="card">
+<h4>Why <code>LastPresent</code> is not the scan wearing a disguise</h4>
+<p>It is the honest encoding of one legitimate case: a branch boundary satisfied by a different node per arm. The <strong>candidate set and its order are decided at assembly</strong> — type filtering happens there, once. All that remains at runtime is <em>which arm actually ran</em>, which reduces to whether a field is present.</p>
+<p style="margin-bottom:0">No <code>isinstance</code> at runtime. Presence cannot pick the wrong one of two values; type-matching can. This is the same move SSA makes with <code>phi</code>: make the alternatives explicit instead of leaving them to a search.</p>
+</div>
+
+<h3>5.3 One rule for every consumer, with no exemptions</h3>
+<blockquote>A module that needs to know which value is meant does exactly one of: read a <code>Source</code> and interpret it via <code>read_source(bus, source)</code>; serialize <code>Source</code> values from <code>iter_resolved_edges(construct)</code>; or render a <code>Resolution</code> the resolver returned. No module outside the normalizer applies a type-compatibility test to <em>choose</em> among candidates.</blockquote>
+
+<p>Checking is still allowed everywhere — verifying that a named pair is type-compatible is not choosing. The banned operation is <em>selection</em>.</p>
+
+<div class="card good">
+<h4>The part that answers a specific objection</h4>
+<p>An earlier draft argued that <code>_suggest_hint</code> — which scans producers only to compose an error message — was a lesser case, because it cannot return a wrong answer. That reasoning was rejected, correctly: being diagnostic-only is not a licence to re-derive.</p>
+<p style="margin-bottom:0">So the resolver returns <code>Resolved(source)</code> or <code>Unresolved(candidates)</code>, where each candidate carries a near-miss reason the resolver computed. The error builder <em>renders</em> that object. The diagnostic consumer and the authoritative consumer now follow the same pattern — “diagnostic-only” stops being a category, because there is nothing left it would exempt you from.</p>
+</div>
+
+<h3>5.4 Two capability removals, so the wrong way stops being writeable</h3>
+<ol>
+<li><strong><code>StateBus</code> loses <code>keys()</code>.</strong> The bag becomes non-enumerable through the interface. A scan is no longer a bad pattern — it is code that does not compile against the bus.</li>
+<li><strong><code>Source</code> values can only be constructed in <code>_ir_normalize.py</code></strong>, enforced by extending a construction ban the project already runs for five string fields. A consumer cannot fabricate a resolution; it can only read one.</li>
+</ol>
+
+<h3>5.5 A rule for when ambiguity is legitimate</h3>
+<p>The design separates two things that were being confused, which is why an earlier attempt to “just refuse ambiguity” failed with 33 test failures:</p>
+
+<table>
+<thead><tr><th>Kind</th><th>Example</th><th>Mechanism</th></tr></thead>
+<tbody>
+<tr><td><strong>Authored</strong><br><span class="small">the author could have named it</span></td><td>Two same-typed inputs; two conflicting markers on one field</td><td><strong>Refuse</strong> at assembly. Already the house posture in three places.</td></tr>
+<tr><td><strong>Emergent</strong><br><span class="small">a runtime fact nobody can name in advance</span></td><td>Which mesh member ran last; which branch arm executed</td><td><strong>Funnel</strong>: the mechanism that creates the fact writes it to one named channel, and consumers read that channel.</td></tr>
+<tr><td><strong>Everything else</strong></td><td>One right answer, derivable at assembly</td><td><strong>Resolve once</strong>, store a <code>Source</code>.</td></tr>
+</tbody>
+</table>
+
+<figure>
+<svg viewBox="0 0 860 250" role="img" aria-label="Decision diagram: could the author have named the value? If yes, refuse at assembly. If no because it is a runtime fact, funnel it into a named channel. Otherwise resolve once and store a Source.">
+  <style>
+    .n{fill:var(--card);stroke:var(--rule);stroke-width:1.5}
+    .ng{fill:var(--card);stroke:var(--good);stroke-width:2}
+    .nb{fill:var(--card);stroke:var(--bad);stroke-width:2}
+    .nw{fill:var(--card);stroke:var(--warn);stroke-width:2}
+    .q{fill:var(--fg);font:600 12px -apple-system,sans-serif}
+    .d{fill:var(--fg);font:12px -apple-system,sans-serif}
+    .s{fill:var(--muted);font:11px -apple-system,sans-serif}
+    .m{fill:var(--fg);font:12px ui-monospace,Menlo,monospace}
+    .e{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#a2)}
+  </style>
+  <defs><marker id="a2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="var(--muted)"/></marker></defs>
+
+  <rect x="8" y="94" width="190" height="52" rx="8" class="n"/>
+  <text x="20" y="116" class="q">Two values could match.</text>
+  <text x="20" y="134" class="s">Which one is meant?</text>
+
+  <path d="M202,120 L246,120" class="e"/>
+  <rect x="250" y="88" width="196" height="64" rx="8" class="n"/>
+  <text x="262" y="110" class="q">Could the author have</text>
+  <text x="262" y="127" class="q">named it at assembly?</text>
+  <text x="262" y="144" class="s">i.e. is it knowable then?</text>
+
+  <path d="M350,84 L350,52 L516,52" class="e"/>
+  <text x="360" y="45" class="s">yes — authored</text>
+  <rect x="520" y="22" width="330" height="56" rx="8" class="nb"/>
+  <text x="534" y="44" class="d"><tspan style="font-weight:600">REFUSE</tspan> at assembly, naming the fix</text>
+  <text x="534" y="62" class="s">two same-typed inputs · two markers on one field</text>
+
+  <path d="M350,156 L350,196 L516,196" class="e"/>
+  <text x="360" y="190" class="s">no — emergent runtime fact</text>
+  <rect x="520" y="168" width="330" height="56" rx="8" class="nw"/>
+  <text x="534" y="190" class="d"><tspan style="font-weight:600">FUNNEL</tspan> into one named channel</text>
+  <text x="534" y="208" class="s">which mesh member ran · which arm executed</text>
+
+  <path d="M450,120 L516,120" class="e"/>
+  <rect x="520" y="96" width="330" height="48" rx="8" class="ng"/>
+  <text x="534" y="118" class="d"><tspan style="font-weight:600">RESOLVE ONCE</tspan>, store a <tspan class="m">Source</tspan></text>
+  <text x="534" y="135" class="s">one right answer, derivable at assembly</text>
+</svg>
+<figcaption><strong>The rule that replaces re-arguing each case.</strong> An earlier attempt applied the top branch universally and broke 33 tests, because it demanded a name for values nobody can name in advance. Separating the two kinds is what makes a single rule workable.</figcaption>
+</figure>
+
+<p>The earlier refusal experiment failed because it treated emergent ambiguity as authored — demanding a name the author cannot possibly know. With this taxonomy, the next “should this refuse?” question gets classified instead of re-argued.</p>
+
+<h2 id="why">6. Why this is the right shape</h2>
+
+<table>
+<thead><tr><th>Principle</th><th>How it applies here</th></tr></thead>
+<tbody>
+<tr><td><strong>Information Expert</strong></td><td>The logic goes where the information is. Only assembly has declaration order, the producer set, and the boundary at the same time. The runtime and the exporters each hold half the facts, which is precisely why their answers diverged.</td></tr>
+<tr><td><strong>High Cohesion</strong></td><td>The rules interlock — port-versus-peer precedence, producer ordering, framework-key exclusion. Interlocking rules split across five modules is the five-fix history restated.</td></tr>
+<tr><td><strong>Low Coupling</strong></td><td>Consumers depend on a small typed contract, not on the bag's shape or on each other's precedence conventions. A new resolution rule changes one module.</td></tr>
+<tr><td><strong>Parse, don't validate</strong></td><td>The unresolved question is parsed once into a type that can only represent resolved answers. Downstream code cannot express the unresolved state, so it cannot mishandle it.</td></tr>
+<tr><td><strong>The project's own north star</strong></td><td><em>“A LangGraph in which a class of broken programs cannot be written.”</em> This applies that inward: a class of broken <em>framework</em> code stops being writeable.</td></tr>
+</tbody>
+</table>
+
+<div class="card key">
+<h4>The property that pays for the whole change</h4>
+<p style="margin-bottom:0">When a resolution rule lands in the normalizer, the edge stream changes — and <strong>both exporters change behaviour with no edit</strong>. There is no exporter-side rule left to forget to update. That is the direct fix for a defect currently open in the tree, where a boundary feature shipped two days ago and neither exporter learned it.</p>
+</div>
+
+<h2 id="alternatives">7. Alternatives, and why they lose</h2>
+
+<table>
+<thead><tr><th>Alternative</th><th>Why not</th></tr></thead>
+<tbody>
+<tr><td><strong>Refuse all ambiguity</strong></td><td><span class="tag bad">measured</span> Tried: 33 test failures. Worse than the number — it makes a <em>correct</em> program unwritable. A consumer placed after a Portal mesh has no name it could give, because which member ran last is a runtime fact.</td></tr>
+<tr><td><strong>A lint or AST guard</strong></td><td>Detects the symptom after someone writes it. The project already has such a guard; it makes the right path mandatory while leaving the wrong path available. That is how five instances happened.</td></tr>
+<tr><td><strong>Capability-token state keys</strong><br><span class="small">keys mintable only by one module</span></td><td>Stops <em>forging</em> a key. Does not stop <em>choosing</em> among keys you legitimately hold — which is the actual defect.</td></tr>
+<tr><td><strong>A separate lowered IR</strong></td><td>Buys a property that normalising inside <code>Construct.__init__</code> already provides, at the cost of doubling the object model.</td></tr>
+<tr><td><strong>Thread resolutions through call signatures</strong></td><td>Every consumer needs a new parameter, and any missed call site silently falls back to old behaviour — the failure mode being removed.</td></tr>
+<tr><td><strong>Fix the six open tickets individually and stop</strong></td><td>This is the measured status quo. It produced five convergent fixes, four false authority citations, and a sixth instance found last week.</td></tr>
+</tbody>
+</table>
+
+<h2 id="surface">8. What changes for someone using neograph</h2>
+
+<p class="lede">Most of this is invisible. The parts that are not are improvements, plus one breaking change that only affects code reaching into internals.</p>
+
+<h3>8.1 Behaviour a user notices</h3>
+<table>
+<thead><tr><th>Change</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td class="small"><span class="tag good">fix</span> Boundaries stop returning the wrong object</td><td>Adding <code>context=</code> can no longer re-point an unrelated <code>output=</code>. Pipelines that were silently wrong become right.</td></tr>
+<tr><td class="small"><span class="tag good">fix</span> Export matches runtime</td><td>An exported artifact wires the edges the pipeline actually takes.</td></tr>
+<tr><td class="small"><span class="tag good">fix</span> Wrapper types stop being necessary</td><td>No more inventing a type so it is unique in a bag.</td></tr>
+<tr><td class="small"><span class="tag good">better errors</span> Near-miss diagnostics</td><td>“No producer” errors carry resolver-computed reasons for each rejected candidate, instead of a separately-derived guess.</td></tr>
+<tr><td class="small"><span class="tag warn">new failures</span> Some ambiguity now refuses at assembly</td><td>Where an author <em>could</em> have named the value and did not, assembly fails with a message naming the fix. A pipeline relying on an accidental type-scan win will now fail loudly. That is intended: it was returning an arbitrary value.</td></tr>
+</tbody>
+</table>
+
+<h3>8.2 Public API</h3>
+<p>No change to <code>@node</code>, <code>Construct</code>, <code>compile</code>, <code>run</code>, or any decorator. <code>output_from=</code> (shipped two days ago) keeps its spelling and finally works in export and <code>dump_spec</code>.</p>
+
+<h3>8.3 The breaking change</h3>
+<div class="card warn">
+<p><strong><code>StateBus.keys()</code> is removed</strong>, and four IR fields — <code>fan_out_param</code>, <code>handoff_param</code>, <code>handoff_channel</code>, <code>input_source_field</code> — are absorbed into the <code>sources</code> table.</p>
+<p style="margin-bottom:0">These are internal. They affect you only if you read neograph's IR directly or subclass its state plumbing. On a 0.x project with one downstream consumer this is the sanctioned kind of break; the alternative — keeping both representations — is the same disease in miniature, since two representations of one fact is exactly what is being removed.</p>
+</div>
+
+<h2 id="agentspec">9. What it means for the Agent Spec initiative</h2>
+
+<p>Agent Spec export was the second surface where the divergence showed up, so this decision changes that work substantially — mostly by removing work.</p>
+
+<table>
+<thead><tr><th>Agent Spec item</th><th>Before</th><th>After</th></tr></thead>
+<tbody>
+<tr><td>Emit an edge for an <code>Each</code> fan-out source</td><td>Exporter-side derivation, its own rule</td><td>A slot kind in one shared edge stream</td></tr>
+<tr><td>Emit an edge for a branch decision</td><td>Same, separately</td><td>Same stream</td></tr>
+<tr><td>Emit port and <code>context=</code> edges</td><td>Missing entirely — an open defect</td><td>Same stream</td></tr>
+<tr><td>Honour <code>output_from=</code></td><td>Ignored by both exporters — an open P1</td><td>Read from <code>boundary_source</code></td></tr>
+<tr><td>Adding a resolution rule</td><td>Edit each exporter, remember both</td><td>No exporter edit; behaviour follows</td></tr>
+</tbody>
+</table>
+
+<div class="card">
+<h4>Import needs work this decision did not originally cover</h4>
+<p>Validation found the inbound direction is lossier than anyone had written down. When a foreign Flow is imported, the code reads only the source node's <em>name</em> and discards <code>source_output</code> and <code>destination_input</code> entirely; it also silently drops any edge whose source is not already a reconstructed top-level item. Two foreign edges into one input quietly become a neograph fan-in.</p>
+<p style="margin-bottom:0">This matters more than it sounds, because import is on a hot path: Portal dispatch imports a runtime-emitted flow on every call. Amendment A4 gives import its own section and a harness leg. <span class="small">Verified at <code>_agent_spec_node_import.py:75-83</code>.</span></p>
+</div>
+
+<div class="card good">
+<h4>The best news from validation</h4>
+<p style="margin-bottom:0">The roadmap feature most likely to invalidate the design — <code>provides</code>/<code>requires</code> named-contract data flow, whose explicit goal is to <em>decouple a consumer from a producer's name</em> — turns out to be <strong>absorbed rather than threatened</strong>. The <code>sources</code> table <em>is</em> the single-writer indirection layer that feature's own ticket says it needs. Contract aliasing becomes a normalizer rule; <code>PeerField</code>'s meaning does not change. It must land <em>after</em> the foundational steps, or it mints a fifth legacy field.</p>
+</div>
+
+<h2 id="amendments">10. The five amendments</h2>
+
+<p>An independent validation pass against the known roadmap returned <strong>adopt with amendments</strong>. The core survives every roadmap item examined. Three of its claims were narrower than written.</p>
+
+<table>
+<thead><tr><th></th><th>Amendment</th><th>Why it matters</th></tr></thead>
+<tbody>
+<tr><td><strong>A1</strong></td><td>The edge stream must cover <em>all</em> data edges, not only the resolution tables</td><td><span class="tag bad">the big one</span> <code>Each.over</code>, branch-decision reads and <code>context=</code> references live in named declarations outside those tables. As originally specced, each would land as a <em>second</em> exporter-side enumeration next to the fold — the same disease with a named field instead of a positional rule. One open defect is already that bug.</td></tr>
+<tr><td><strong>A2</strong></td><td>Write down the growth rule for the closed set</td><td>Variants must track <em>kinds of state channel</em>, never features. Otherwise it becomes a tagged union gaining a case per feature. The roadmap implies exactly one new variant in two quarters.</td></tr>
+<tr><td><strong>A3</strong></td><td>Admission criteria for <code>LastPresent</code></td><td>It is the variant every hard case will reach for. Without criteria it becomes last-write-wins under a blessed name — the exact semantics the project has already identified as the disease.</td></tr>
+<tr><td><strong>A4</strong></td><td>Import gets its own section</td><td>See above. Import is a foreign-bag ingestion site and is on the dispatch hot path.</td></tr>
+<tr><td><strong>A5</strong></td><td>Classify output-field population explicitly</td><td><code>Carried</code>, <code>Selected</code> and the proposed projection features populate output <em>fields</em>. They are a different question and get no <code>Source</code> variant — stating that prevents someone filing them under this decision later.</td></tr>
+</tbody>
+</table>
+
+<h2 id="plan">11. Migration, risk, and the decision you owe</h2>
+
+<h3>11.1 The steps</h3>
+<p>Nine steps, each independently landable and gate-verified. The first two stand alone and are worth doing even if the rest is deferred.</p>
+<table>
+<thead><tr><th>Step</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><strong>0</strong></td><td>Add the types and the construction ban. Build the differential-export harness: <em>two constructs differing only in X must not export identically</em>.</td></tr>
+<tr><td><strong>1</strong></td><td>Fix the open P1 where both exporters ignore <code>output_from=</code>. Delete the false authority comments.</td></tr>
+<tr><td><strong>2</strong></td><td>Stamp the sub-construct port, delete the last input scan, then remove <code>StateBus.keys()</code>.</td></tr>
+<tr><td class="small">3–6</td><td>Loop self-feedback; diagnostics as renderers; boundary naming; the foreign-bag marker rule.</td></tr>
+<tr><td><strong>7</strong></td><td>Collapse the four legacy fields into the table.</td></tr>
+<tr><td><strong>8</strong></td><td>Close the “should ambiguity refuse?” question with the taxonomy as the recorded answer.</td></tr>
+</tbody>
+</table>
+
+<h3>11.2 What is not covered, stated plainly</h3>
+<div class="card warn">
+<p style="margin-bottom:0">The runtime side becomes literally impossible to get wrong. <strong>The export side is containment, not impossibility</strong> — a construct's node list has to stay walkable, so nothing stops a future exporter from deriving its own edges. The substitute is the differential harness, which turns “the exporter did not learn the new field” from something a reviewer must remember into a test that fails. That is a weaker guarantee, and the design says so rather than glossing it.</p>
+</div>
+
+<h3>11.3 The main risk</h3>
+<p>The accumulator channel feature — many nodes appending to one channel, read downstream as a union — is the one roadmap item that breaks a <em>premise</em> rather than adding a case. One-producer-per-field is currently load-bearing in three places. The closed set survives with one new variant; the producer model does not survive unchanged. This is known now rather than discovered mid-implementation.</p>
+
+<h3>11.4 How we will know it worked</h3>
+<div class="card good">
+<p><strong>Success, by February 2027:</strong> a sweep finds type-match selection only in the normalizer; the bag is still non-enumerable; and the next “which value” feature ships touching only the normalizer and its types, while exporter behaviour changes anyway — proven by the harness, not by review.</p>
+<p style="margin-bottom:0"><strong>Failure:</strong> a sixth convergent fix appears outside the normalizer, or a closed-set allowlist grows, or a feature needs per-consumer edits. Any of those means answers are still being delivered as storage rather than as a contract.</p>
+</div>
+
+<h3>11.5 The one question for you</h3>
+<div class="card key">
+<p><strong>Should the edge stream be total from step 0, or cover only the resolution tables with named edges deferred?</strong></p>
+<p><strong>Recommendation: total from step 0.</strong> Deferring turns three open tickets into three exporter edits — which is precisely the class this decision exists to abolish. Making it total converts them into slot kinds in one fold, graded by the harness from day one. The marginal cost now is much smaller than the rework later.</p>
+<p style="margin-bottom:0" class="small">Everything else in the plan can be re-sequenced without rework. This one cannot.</p>
+</div>
+
+<p class="small" style="margin-top:56px;border-top:1px solid var(--rule);padding-top:20px">
+Written for review, not as a record of a decision taken. The two source documents carry the file-and-line citations behind every measurement quoted here.
+</p>
+
+</div>
+</body>
+</html>
