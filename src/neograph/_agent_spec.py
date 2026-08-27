@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from neograph._ir_branch import iter_with_arms
 from neograph._normalize import normalize_inputs, normalize_outputs
+from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
 from neograph.naming import field_name_for, split_output_field
@@ -125,6 +126,17 @@ successor edge leaves FROM, plus the ``from_branch`` it must name (``None`` for
 an unconditional node). An item has several only when its lowering genuinely
 forks — an Operator reconverges its gate's DEFAULT_BRANCH and its post-pause
 continuation on the same successor."""
+
+
+def _writes_field(candidate: Node, state_field: str) -> bool:
+    """Does ``candidate`` write ``state_field``?
+
+    Either as its bare single-output field, or as one of its per-output-key
+    ``{base}_{key}`` fields. Uses the shared ``split_output_field`` parser rather
+    than a second prefix test, so it cannot drift from the build side.
+    """
+    base = field_name_for(candidate.name)
+    return state_field == base or split_output_field(state_field, base) is not None
 
 
 def to_agent_spec(construct: Construct, api_provider: str | None = None, *, llm_factory: Any = None) -> Flow:
@@ -380,44 +392,50 @@ def _to_agent_spec_with(construct: Construct, *, provider: ApiProviderResolver) 
                         _emit_input_edges(item.name, upstream_name, source_node, prop.title)
             continue
 
-        # Single-type inputs (convenience shorthand): the producer is
-        # resolved by an O(N) type-compatibility scan over preceding
-        # items, mirroring the assembly-time validator's single-type
-        # resolution (_construct_validation.py) rather than a dict key.
+        # Single-type inputs (convenience shorthand): the producer is the ONE
+        # named by ``node.input_source_field``, resolved at assembly by
+        # ``_ir_normalize.resolve_single_type_source`` and READ here -- the same
+        # name the runtime reads, so the exported artifact and the run agree by
+        # construction.
+        #
+        # This replaced a reverse scan over preceding items whose comment claimed
+        # it mirrored "the assembly-time validator's single-type resolution". The
+        # validator performs no resolution -- its plain-input path is an existence
+        # check that discards which producer matched -- so there was nothing to
+        # mirror, and the runtime's own scan ran in the OPPOSITE direction. The
+        # citation is deleted rather than reworded: a comment asserting parity
+        # with a named module is what kept the divergence invisible.
+        source_field = item.input_source_field if isinstance(item, Node) else None
+        if source_field is None or source_field == StateKeys.SUBGRAPH_INPUT:
+            # Nothing to wire: no resolvable producer, or the source is the
+            # sub-construct port, which is not a peer item at this level.
+            continue
         input_props = {p.title for p in _properties_for(ni.single_type)}
-        for upstream in reversed(ordered_items[:idx]):
-            if not isinstance(upstream, Node):
-                continue
-            no = normalize_outputs(upstream.outputs)
-            if no.is_none:
-                continue
-            source_node = data_node_by_item_name[upstream.name]
-            if no.is_dict_form:
-                # B4: a dict-form-output producer is no longer skipped. Match the
-                # consumer's single input type against each output KEY; wire the
-                # matching key's qualified output Property to the consumer's
-                # bare ``{field}`` input (source/dest decoupled, same as the
-                # dict-form-input branch above).
-                matched = False
-                for key, ktype in no.all_keys.items():
-                    if not isinstance(ktype, type) or not isinstance(ni.single_type, type):
-                        continue
-                    if not (issubclass(ktype, ni.single_type) or issubclass(ni.single_type, ktype)):
-                        continue
-                    for prop in _properties_for({key: ktype}):
-                        field = split_property_title(prop.title)[1]
-                        if field in input_props:
-                            _emit_input_edges(item.name, "", source_node, prop.title, dest_title=field)
-                            matched = True
-                if matched:
-                    break
-                continue
-            if not (issubclass(no.primary, ni.single_type) or issubclass(ni.single_type, no.primary)):
-                continue
+        upstream = next(
+            (u for u in ordered_items[:idx] if isinstance(u, Node) and _writes_field(u, source_field)),
+            None,
+        )
+        if upstream is None:
+            continue
+        no = normalize_outputs(upstream.outputs)
+        if no.is_none:
+            continue
+        source_node = data_node_by_item_name[upstream.name]
+        if no.is_dict_form:
+            # B4: a dict-form-output producer is addressed per output KEY. The
+            # resolved field already names the key, so match on it rather than
+            # re-testing every key by type.
+            key = split_output_field(source_field, field_name_for(upstream.name))
+            ktype = no.all_keys.get(key) if key else None
+            if ktype is not None:
+                for prop in _properties_for({key: ktype}):
+                    field = split_property_title(prop.title)[1]
+                    if field in input_props:
+                        _emit_input_edges(item.name, "", source_node, prop.title, dest_title=field)
+        else:
             upstream_props = {p.title for p in _properties_for(no.primary)}
             for shared_title in input_props & upstream_props:
                 _emit_input_edges(item.name, "", source_node, shared_title)
-            break
 
     if not entries:
         raise ConfigurationError.build(

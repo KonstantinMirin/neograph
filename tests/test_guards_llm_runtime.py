@@ -1087,7 +1087,9 @@ class TestNormalizeIrIsSoleIrFieldWriter:
     # written in decorators.py / _construct_builder.py — only inferred by the
     # normalizer, identically for all three surfaces (@node, declarative,
     # programmatic pipe).
-    IR_FIELDS = frozenset({"fan_out_param", "oracle_gen_type", "handoff_param", "handoff_channel"})
+    IR_FIELDS = frozenset(
+        {"fan_out_param", "oracle_gen_type", "handoff_param", "handoff_channel", "input_source_field"}
+    )
 
     # Sanctioned (file, field) pre-population writes outside _ir_normalize.
     # After neograph-k7bg, _construct_builder no longer writes fan_out_param —
@@ -1210,14 +1212,29 @@ class TestNormalizeIrIsSoleIrFieldWriter:
         adds ZERO new Node-level IR field (design portal-tool-triggered-handoff
         §6 guard 3): the capability reuses ``Portal.to`` + the existing
         ``handoff_param``/``handoff_channel`` machinery. This pins the
-        single-writer set to exactly the four fields — a new normalizer-written
-        field would have to be added here, failing this test and forcing a
-        conscious review — and confirms the trigger sub-mode lives on the Portal
-        modifier and the transient handoff sentinel is a state-bus key, neither a
-        Node IR field."""
+        single-writer set EXACTLY — a new normalizer-written field has to be
+        added here, failing this test and forcing a conscious review — and
+        confirms the trigger sub-mode lives on the Portal modifier and the
+        transient handoff sentinel is a state-bus key, neither a Node IR field.
+
+        The set grew to five deliberately: ``input_source_field`` was added by
+        neograph-t1nbp, which resolves a single-type ``inputs=`` binding to ONE
+        producer name at assembly so the runtime and the Agent Spec export read
+        the same answer instead of each scanning the state bag in opposite
+        directions. It is normalizer-written for the same reason the other four
+        are: the resolution needs the construct-level view of declared producers,
+        which no single assembly path has."""
         from neograph.node import Node
 
-        assert self.IR_FIELDS == frozenset({"fan_out_param", "oracle_gen_type", "handoff_param", "handoff_channel"})
+        assert self.IR_FIELDS == frozenset(
+            {
+                "fan_out_param",
+                "oracle_gen_type",
+                "handoff_param",
+                "handoff_channel",
+                "input_source_field",
+            }
+        )
         for field in self.IR_FIELDS:
             assert field in Node.model_fields, f"IR field {field!r} must exist on the Node model"
         # The trigger sub-mode is a Portal field; the tool-trigger sentinel is a

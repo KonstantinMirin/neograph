@@ -30,10 +30,15 @@ preserved.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
 from pydantic import BaseModel
 
+from neograph._construct_validation import (
+    _types_compatible,
+    effective_producer_type,
+    effective_producer_type_for,
+)
 from neograph._ir_branch import _BranchNode, iter_item_slots
 from neograph._ir_protocols import ConstructItem
 from neograph._normalize import normalize_inputs, normalize_outputs
@@ -42,10 +47,16 @@ from neograph._sidecar import infer_oracle_gen_type
 from neograph._state_keys import StateKeys
 from neograph.modifiers import _group_portal_members
 from neograph.naming import field_name_for, output_field_name
-from neograph.node import Node
+from neograph.node import Node, TypeSpecStatic
 
 if TYPE_CHECKING:
     from neograph.construct import Construct
+
+
+# Preserves the concrete item type through the stamping helper: a slot in
+# ``construct.nodes`` is typed ``Node | Construct``, and a stamp returns the same
+# item (or a ``model_copy`` of it), never a widened one.
+_ItemT = TypeVar("_ItemT", bound=ConstructItem)
 
 
 class IrNormalizer(Protocol):
@@ -124,6 +135,71 @@ def fan_out_candidates(node: Node, known_field_names: set[str]) -> list[str]:
     return [
         key for key in ni.by_name if field_name_for(key) not in known_field_names and field_name_for(key) != self_field
     ]
+
+
+def resolve_single_type_source(
+    node: Node,
+    preceding: list[tuple[str, TypeSpecStatic, ConstructItem]],
+    construct_input: type[BaseModel] | None,
+) -> str | None:
+    """The ONE answer to "which state field satisfies this node's single-type
+    ``inputs=X``".
+
+    ``preceding`` is the ordered ``(field_name, effective_type)`` list of the
+    producers declared BEFORE ``node`` at this construct level; ``construct_input``
+    is the enclosing construct's ``input=`` port type (or ``None``).
+
+    Three rules, each of them measured rather than assumed:
+
+    1. **The candidate set is the declared producers, plus the own port.** The
+       scan this replaces walked the whole state bag, so framework bookkeeping
+       competed to be input -- a ``neo_node_fingerprints`` entry (a dict of SHA
+       prefixes) matched as a legitimate candidate in 25 measured sites.
+
+    2. **The port stays eligible, and this is NOT the output side's rule.**
+       ``item_field_names`` excludes ``neo_subgraph_input`` by design: on the
+       OUTPUT boundary it is the paradigm "value the child was merely HANDED"
+       (GH #17). On the INPUT side that same value IS the legitimate source --
+       195 of 918 measured resolutions are a sub-construct's first node reading
+       its port. Transplanting the output-side eligibility rule here would break
+       every one of them. Two different sets, one shared SHAPE.
+
+    3. **A peer producer outranks the port**, so the port is consulted only when
+       no declared producer matches. Not a new rule: ``_param_classify`` already
+       states it for port params ("peer @node takes priority").
+
+    Returns the resolved field name, or ``None`` when there is nothing to
+    resolve.
+    """
+    ni = normalize_inputs(node.inputs)
+    if ni.is_dict_form or ni.is_none:
+        return None
+    input_type = ni.single_type
+    if input_type is None:
+        return None
+
+    matches = [
+        field
+        for field, prod_type, _producer in preceding
+        if prod_type is not None and _types_compatible(prod_type, input_type)
+    ]
+    if matches:
+        # LAST compatible producer wins: the node's IMMEDIATE upstream, which is
+        # what an author reading a pipeline top to bottom means by "the Claims"
+        # -- and, not incidentally, the answer the Agent Spec export was already
+        # giving. The runtime's forward scan was the side that was wrong.
+        #
+        # This RESOLVES rather than REFUSES, which is the first of the two
+        # outcomes this ticket's acceptance allows. Refusing was implemented and
+        # measured first, and rejected on evidence: a consumer placed AFTER a
+        # Portal mesh has no name it could correctly give, because WHICH member
+        # ran last is a runtime fact. Refusal there would make a correct program
+        # unwritable -- the inverse of the restriction this ticket adds. The
+        # measurement and the open question are in neograph-t1nbp and neograph-5fvsu.
+        return matches[-1]
+    if construct_input is not None and _types_compatible(construct_input, input_type):
+        return StateKeys.SUBGRAPH_INPUT
+    return None
 
 
 class _FanOutParamNormalizer:
@@ -238,6 +314,66 @@ _NORMALIZERS: list[IrNormalizer] = [
 ]
 
 
+def _producer_pairs(item: ConstructItem) -> list[tuple[str, TypeSpecStatic, ConstructItem]]:
+    """``(state_field, effective_type, producing_item)`` for everything ``item``
+    produces.
+
+    Field names come from :func:`declared_output_fields` and types from
+    ``effective_producer_type`` -- the two existing authorities, composed. This
+    is deliberately NOT a third derivation of either.
+    """
+    name = getattr(item, "name", None)
+    if name is None:
+        return []
+    base = field_name_for(name)
+    if not isinstance(item, Node):
+        return [(base, effective_producer_type(item), item)]
+    no = normalize_outputs(item.outputs)
+    if no.is_none:
+        return []
+    if no.is_dict_form:
+        return [
+            (output_field_name(base, key), effective_producer_type_for(key_type, item.modifier_set), item)
+            for key, key_type in no.all_keys.items()
+        ]
+    return [(base, effective_producer_type(item), item)]
+
+
+def _stamp_single_type_sources(construct: Construct) -> None:
+    """Resolve every single-type ``inputs=`` binding to a NAMED state field, so the runtime and the Agent Spec export read one answer
+    instead of each scanning the state bag in opposite directions.
+
+    Walks declaration order accumulating producers, which makes "preceding" mean
+    what a reader means by it. Branch arms are SCOPED: each arm resolves against
+    the producers visible before the branch, never against its sibling arm's --
+    otherwise a false-arm node could be stamped with a true-arm field, which is
+    the cross-arm read the validator already refuses.
+    """
+    construct_input = getattr(construct, "input", None)
+
+    def _stamp(item: _ItemT, visible: list[tuple[str, TypeSpecStatic, ConstructItem]]) -> _ItemT:
+        if not isinstance(item, Node) or item.input_source_field is not None:
+            return item
+        source = resolve_single_type_source(item, visible, construct_input)
+        return item if source is None else item.model_copy(update={"input_source_field": source})
+
+    visible: list[tuple[str, TypeSpecStatic, ConstructItem]] = []
+    for i, item in enumerate(construct.nodes):
+        if isinstance(item, _BranchNode):
+            meta = item._neo_branch_meta
+            for arm in (meta.true_arm_nodes, meta.false_arm_nodes):
+                scoped: list[tuple[str, TypeSpecStatic, ConstructItem]] = list(visible)
+                for j in range(len(arm)):
+                    arm[j] = _stamp(arm[j], scoped)
+                    scoped.extend(_producer_pairs(arm[j]))
+            for arm in (meta.true_arm_nodes, meta.false_arm_nodes):
+                for arm_item in arm:
+                    visible.extend(_producer_pairs(arm_item))
+            continue
+        construct.nodes[i] = _stamp(item, visible)
+        visible.extend(_producer_pairs(construct.nodes[i]))
+
+
 def normalize_ir(construct: Construct) -> None:
     """Apply every registered IR normalizer to every Node in ``construct``.
 
@@ -335,3 +471,7 @@ def normalize_ir(construct: Construct) -> None:
                 updates["handoff_channel"] = group_channel
         if updates:
             container[idx] = item.model_copy(update=updates)
+
+    # Runs LAST: the pass above may replace node objects, and this one resolves
+    # against the final IR.
+    _stamp_single_type_sources(construct)

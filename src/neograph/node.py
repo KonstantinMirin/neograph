@@ -147,6 +147,23 @@ class Node(Modifiable, BaseModel):
     # written ONLY by _ir_normalize.py (single-writer, review H2 / neograph-k7bg).
     handoff_channel: str | None = None
 
+    # Which state field satisfies this node's SINGLE-TYPE ``inputs=X`` binding
+    #. Resolved once at assembly from the declared producers,
+    # so the runtime reads a NAME instead of scanning the state bag for a type
+    # match, and the Agent Spec export reads the SAME name instead of running a
+    # second scan in the opposite direction.
+    #
+    # Written ONLY by the IR normalizer (_ir_normalize.py) -- the same
+    # single-writer ownership as fan_out_param / handoff_param / handoff_channel
+    # (neograph-k7bg, review H2). No assembly path may write it.
+    #
+    # ``None`` means "no single-type source to resolve" -- dict-form inputs, no
+    # inputs at all, or no compatible producer and no compatible port. It NEVER
+    # means "ambiguous": two eligible producers raise ConstructError at
+    # assembly, so ambiguity cannot reach the runtime. A None here must not fall
+    # back to a type scan; that would leave every resolved site a silent bypass.
+    input_source_field: str | None = None
+
     # Pluggable prompt-input renderer. When set, the factory layer renders
     # input data through this renderer before prompt insertion. Dispatch
     # hierarchy: model.render_for_prompt() > node.renderer > global > None.

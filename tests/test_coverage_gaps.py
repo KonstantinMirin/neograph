@@ -1013,8 +1013,16 @@ class TestExtractInputEdgeCases:
         from neograph._input_shape import _extract_input
         from neograph._state_bus import adapt_state
 
-        # Node expects Draft (single type), state has a list from Loop
-        n = Node("consumer", inputs=Draft, outputs=RawText)
+        # Node expects Draft (single type), state has a list from Loop.
+        # input_source_field is what Construct assembly stamps for a single-type
+        # input; set it directly because this test builds a bare Node and a fake
+        # state model rather than a real Construct. The subject here is the LOOP
+        # UNWRAP, not the resolution -- before neograph-t1nbp the node found
+        # 'producer' by scanning the state bag for a type match, which is the
+        # mechanism that ticket removed.
+        n = Node("consumer", inputs=Draft, outputs=RawText).model_copy(
+            update={"input_source_field": "producer"}
+        )
 
         StateModel = create_model(
             "FakeState",

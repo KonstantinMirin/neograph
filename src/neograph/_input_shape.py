@@ -132,13 +132,61 @@ def _extract_fan_in_dict(state: StateBus, node: Node) -> dict[str, Any]:
     return result
 
 
+# The framework channels that re-home a node's input across an ISOLATION
+# BOUNDARY, in precedence order. Each is a single-purpose key written by exactly
+# one mechanism, so unlike the whole-state scan this replaced, no two USER
+# producers can compete here -- that ambiguity is refused at assembly.
+#
+# They are consulted only AFTER the node's declared source, because a boundary
+# does not always re-home: an Oracle's isolated cycle carries the upstream in as
+# SUBGRAPH_INPUT, while the same node outside a cycle reads the peer field
+# directly, and both shapes must work for one stamped node.
+#
+#   SUBGRAPH_INPUT   a sub-construct's declared port, and the channel an Oracle
+#                    generator cycle carries its upstream value in on
+#   ISOLATED_INPUT   Node.run_isolated() seeds a typed instance here; there is no
+#                    construct, so no producer could have been resolved at all
+_FRAMEWORK_PORT_KEYS: tuple[str, ...] = (StateKeys.SUBGRAPH_INPUT, StateKeys.ISOLATED_INPUT)
+
+
+def _source_candidates(node: Node) -> tuple[str, ...]:
+    """The ordered, EXPLICIT field list a single-type input may be read from.
+
+    The node's assembly-resolved source first, then the framework port channels.
+    Short and named on purpose: the defect this replaced was that the candidate
+    set was "every key in state", so framework bookkeeping (a
+    ``neo_node_fingerprints`` dict of SHA prefixes, measured in 25 sites)
+    competed to be a node's input.
+    """
+    if node.input_source_field is None:
+        return _FRAMEWORK_PORT_KEYS
+    if node.input_source_field in _FRAMEWORK_PORT_KEYS:
+        return _FRAMEWORK_PORT_KEYS
+    return (node.input_source_field, *_FRAMEWORK_PORT_KEYS)
+
+
 def _extract_single_type(state: StateBus, node: Node) -> Any:
-    """Scan state fields for first value matching the node's input type."""
-    for attr_name in state.keys():
-        # REQUIRED: iterating state.keys() — every key is by definition present.
-        val = state.get_required(attr_name, node_label=node.name)
-        val = _unwrap_loop_value(val, node.inputs)
-        val = _unwrap_each_dict(val, node.inputs)
+    """Read the ONE state field that satisfies the node's single-type ``inputs=``.
+
+    ``node.input_source_field`` is resolved at ASSEMBLY by
+    ``_ir_normalize.resolve_single_type_source``, so this is a
+    named read, not a search. It replaced a forward scan over ``state.keys()``
+    that returned the first ``isinstance`` match -- which meant the whole state
+    bag competed to be this node's input (framework bookkeeping included), and
+    which disagreed with the Agent Spec export's own reverse scan, so a green run
+    and its exported artifact wired different edges.
+
+    ``None`` means there is nothing to resolve, NOT that resolution was
+    ambiguous: two eligible producers raise at assembly. So there is deliberately
+    no fallback scan here -- a fallback would leave every resolved site a silent
+    bypass and make the ban on a second resolver prove nothing.
+    """
+    for field in _source_candidates(node):
+        # StateBus.get optional: the resolved field may be absent on this
+        # superstep (a Loop's iteration-0 read, an unreached branch arm's
+        # producer, or a framework port that only exists inside an isolation
+        # boundary).
+        val = _unwrap_each_dict(_unwrap_loop_value(state.get(field), node.inputs), node.inputs)
         if val is not None and _isinstance_safe(val, node.inputs):
             return val
     return None
