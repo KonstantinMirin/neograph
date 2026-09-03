@@ -131,6 +131,11 @@
       "severity": "ERROR"
     },
     {
+      "kind": "model_authored_null_rejecting_default",
+      "meaning": "A field of an LLM node's declared output that carries a default and whose type rejects null. `describe_type` renders it as `... or null`, so the model is told it may send a value the type cannot hold; the runtime coerces the null back to the default, which means the model can decline to author the field and the default ships looking like an answer. Found by recursing into nested models, because both reported production failures were below the declared output, not on it.",
+      "severity": "WARN"
+    },
+    {
       "kind": "output_field_unconsumed",
       "meaning": "A field of a node's typed output that nothing reads: no downstream node takes the model, no template reads it by name, and it is not the graph's terminal output. It costs tokens on every call and cannot affect the answer.",
       "severity": "WARN"

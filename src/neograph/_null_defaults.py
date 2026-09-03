@@ -4,18 +4,28 @@ Extracted from ``_llm_retry.py`` (neograph-3ffdg.15) as a pure file split — th
 functions below are unchanged, only their home moved. ``_llm_retry.py``
 re-exports them, so existing imports keep resolving.
 
-Some providers emit the STRING "null" for an Optional field rather than a real
-null. The descent here is shape-driven: one recursive classifier reaches every
-leaf model dict at any depth, which is what replaced the hand-enumerated
+Two callers, ONE coercion. A Pydantic default applies only when a key is
+ABSENT; a present-and-null value overrides it and fails validation, and models
+emit present-and-null routinely. :func:`_apply_null_defaults` repairs that
+before validation on the json_mode path (``_parse_json_response``), and
+:func:`recover_null_defaults` applies the SAME function to the payload a
+structured-output provider already emitted, so the two output strategies agree
+about what a declared output can be (the house rule from GH #14, neograph-5s8f6).
+
+Some providers also emit the STRING "null" for an Optional field rather than a
+real null. The descent here is shape-driven: one recursive classifier reaches
+every leaf model dict at any depth, which is what replaced the hand-enumerated
 (bare-model, bare-list-of-model) walk that silently skipped every container
 shape it did not spell out.
 """
 
 from __future__ import annotations
 
+import copy
+import json as _json
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticUndefined
 
 _STRINGLY_NULL = frozenset({"null", "none", "nil", "n/a", "na"})
@@ -94,6 +104,31 @@ def _is_stringly_null(val: Any, annotation: Any) -> bool:
     return low == "" and not any(t is str for t in non_none)
 
 
+def _sequence_item_annotation(annotation: Any) -> Any | None:
+    """The ONE element annotation of a homogeneous sequence, else ``None``.
+
+    JSON decodes every array to a Python ``list``, so which interiors the
+    descent can reach is decided by the ANNOTATION, not by the runtime
+    container: ``list[X]``, ``set[X]``, ``frozenset[X]``, the variadic
+    ``tuple[X, ...]`` and a fixed ``tuple[X, X]`` all have a single element type
+    and are descended.
+
+    ``tuple[A, B]`` has none, and is left alone. That heterogeneous case is what
+    the original "tuples are out of scope" exclusion was actually about --
+    ``tuple[X, ...]`` is a list with a different constructor, and it is what a
+    FROZEN Pydantic domain model uses, which is the same reason 0.7.9 widened
+    ``Each`` to accept it. neograph-sjwny.
+    """
+    from typing import get_args, get_origin
+
+    if get_origin(annotation) not in (list, set, frozenset, tuple):
+        return None
+    args = [a for a in get_args(annotation) if a is not Ellipsis]
+    if not args:
+        return None
+    return args[0] if all(a == args[0] for a in args) else None
+
+
 def _descend_null_defaults(val: Any, annotation: Any) -> None:
     """Recurse :func:`_apply_null_defaults` into any BaseModel dict nested within
     *val*, driven by *annotation*'s container shape.
@@ -111,8 +146,12 @@ def _descend_null_defaults(val: Any, annotation: Any) -> None:
     its leaf model dicts. This replaced a hand-enumerated (bare-model,
     bare-list-of-model) descent that silently skipped every shape it did not
     spell out, which is how the Optional-wrapped and dict-of-model interiors
-    kept crashing. See neograph-zhwgh. (``tuple[...]`` is intentionally out of
-    scope -- LLM structured output does not emit heterogeneous tuples.)
+    kept crashing. See neograph-zhwgh. Which sequences it reaches is decided by
+    :func:`_sequence_item_annotation`: every HOMOGENEOUS one (list, set,
+    frozenset, ``tuple[X, ...]``, ``tuple[X, X]``). A heterogeneous
+    ``tuple[A, B]`` has no single element type and stays out of scope --
+    neograph-sjwny, which is the only part of the original tuple exclusion that
+    ever held.
     """
     from typing import get_args, get_origin
 
@@ -129,11 +168,11 @@ def _descend_null_defaults(val: Any, annotation: Any) -> None:
                     _descend_null_defaults(item, args[1])
         return
 
-    if isinstance(val, list) and get_origin(annotation) is list:
-        args = get_args(annotation)
-        if args:
+    if isinstance(val, list):
+        item_annotation = _sequence_item_annotation(annotation)
+        if item_annotation is not None:
             for item in val:
-                _descend_null_defaults(item, args[0])
+                _descend_null_defaults(item, item_annotation)
 
 
 def _apply_null_defaults(data: dict, model: type[BaseModel]) -> None:
@@ -181,3 +220,55 @@ def _apply_null_defaults(data: dict, model: type[BaseModel]) -> None:
         # interiors are normalized at every depth. ``val`` is a concrete
         # dict/list here (the None branches above returned).
         _descend_null_defaults(val, field_info.annotation)
+
+
+def recover_null_defaults(raw_msg: Any, model: Any) -> BaseModel | None:
+    """Re-validate a structured-output payload after the null-default coercion.
+
+    The ``structured`` strategy hands validation to the provider adapter, so a
+    present-and-null value that overrides a field default surfaces as a
+    ``ValidationError`` its caller can only re-prompt — while ``json_mode``,
+    parsing the same bytes itself, repairs it and succeeds. This closes that
+    disagreement by applying the SAME :func:`_apply_null_defaults` to the
+    payload the provider ALREADY produced. No re-prompt, no extra round-trip.
+
+    Reads the payload wherever the provider put it: ``tool_calls[*]["args"]``
+    for ``method="function_calling"`` (whose message content is empty), else the
+    message content parsed as strict JSON. Strict, never ``repair_json``: a
+    constrained decode emits machine-produced JSON, and running the repairer
+    over arbitrary text here could manufacture a payload out of prose.
+
+    Returns ``None`` — leaving the caller's re-prompt path exactly as it was —
+    unless the coercion ACTUALLY changed the payload AND the changed payload
+    validates. That guard is what stops an unrelated validation failure from
+    being silently reclassified as a success.
+    """
+    if not (isinstance(model, type) and issubclass(model, BaseModel)):
+        return None
+
+    candidates: list[dict] = []
+    for call in getattr(raw_msg, "tool_calls", None) or []:
+        args = call.get("args") if isinstance(call, dict) else getattr(call, "args", None)
+        if isinstance(args, dict):
+            candidates.append(args)
+    content = getattr(raw_msg, "content", None)
+    if isinstance(content, str) and content.strip():
+        try:
+            loaded = _json.loads(content)
+        except ValueError:
+            loaded = None
+        if isinstance(loaded, dict):
+            candidates.append(loaded)
+
+    for payload in candidates:
+        # Same exception set json_mode's coercion site swallows (ValueError /
+        # TypeError from a hostile default_factory) — parity, not extra hardening.
+        try:
+            repaired = copy.deepcopy(payload)
+            _apply_null_defaults(repaired, model)
+            if repaired == payload:
+                continue
+            return model.model_validate(repaired)
+        except (ValidationError, ValueError, TypeError):
+            continue
+    return None

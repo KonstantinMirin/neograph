@@ -118,6 +118,10 @@ _KNOWN_LINT_KIND_FLOOR = frozenset(
         "template_input_unreferenced",
         "output_field_unconsumed",
         "template_placeholder_unresolvable",
+        # neograph-bek2f: the static half of GH #20 -- a model-authored output
+        # field carrying a default whose type rejects null, found by recursing
+        # into nested models.
+        "model_authored_null_rejecting_default",
         "template_var_requires_async_driver",
         "tool_requires_async_driver",
     }

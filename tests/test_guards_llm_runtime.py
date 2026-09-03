@@ -285,15 +285,6 @@ class TestLlmResponsibilityDiscipline:
                 "_is_truncated",
                 "_build_continuation_msg",
                 "_retry_msg_for_failure",
-                # stark-h46: stringly-null repair. GLM emits the STRING "null" for
-                # Optional numeric/enum fields; _is_stringly_null (guarded by
-                # _optional_inner_types so only nullable fields are touched)
-                # normalizes the sentinel to None inside _apply_null_defaults.
-                # neograph-zhwgh: shape-driven nested descent. _unwrap_optional
-                # peels one Optional layer; _descend_null_defaults is the single
-                # recursive classifier that reaches interiors of Optional-wrapped
-                # models/lists, dict-of-models, and list-of-optional-models so
-                # _apply_null_defaults no longer hand-enumerates container shapes.
             }
         ),
         # neograph-3ffdg.15 split _llm_retry.py: the JSON-extraction and
@@ -304,11 +295,26 @@ class TestLlmResponsibilityDiscipline:
         "_null_defaults.py": frozenset(
             {
                 "_is_list_annotation",
+                # stark-h46: stringly-null repair. GLM emits the STRING "null" for
+                # Optional numeric/enum fields; _is_stringly_null (guarded by
+                # _optional_inner_types so only nullable fields are touched)
+                # normalizes the sentinel to None inside _apply_null_defaults.
                 "_optional_inner_types",
                 "_unwrap_optional",
                 "_is_stringly_null",
+                # neograph-sjwny: the descent's shape dispatcher covered
+                # BaseModel/list/dict and declared tuples out of scope on a
+                # reason that only holds for HETEROGENEOUS tuples.
+                # _sequence_item_annotation is the single homogeneous-sequence
+                # classifier -- list/set/frozenset/tuple[X, ...]/tuple[X, X] in,
+                # tuple[A, B] still out.
+                "_sequence_item_annotation",
                 "_descend_null_defaults",
                 "_apply_null_defaults",
+                # neograph-5s8f6: the structured path's entry into that SAME
+                # coercion. Pure -- it re-validates the payload the provider
+                # already emitted, never re-prompts.
+                "recover_null_defaults",
             }
         ),
         "_llm_render.py": frozenset(
@@ -421,6 +427,15 @@ class TestLlmResponsibilityDiscipline:
         # under 500, so the repo-wide guard makes no claim about them: they stay
         # as the tighter, topic-scoped anti-accretion proxy behind this class's
         # load-bearing name-set assertion.
+        # 0.7.11 forward-port (neograph-5s8f6 / neograph-sjwny): main ratcheted
+        # _llm_retry.py 698 -> 550 on the null-default split. NOT resurrected here
+        # -- develop's deletion above puts the file under the repo-wide sub-500
+        # rule, which binds it harder than 550. The new module's budget IS carried,
+        # since develop has no entry for it: the extracted cluster plus
+        # recover_null_defaults (the structured path's entry into the one coercion)
+        # plus _sequence_item_annotation (which widened the descent from list-only
+        # to every homogeneous sequence).
+        "_null_defaults.py": 275,
         # neograph-v569: 310 -> 445. The public standalone compile_prompt landed
         # here (its change axis) with a thorough public docstring, a shared
         # render-then-compile core (_render_and_compile, which render_prompt now
@@ -460,7 +475,14 @@ class TestLlmResponsibilityDiscipline:
         # neograph-zcxd: 220 -> 235. _classify_lc_result now discriminates a
         # ValidationError parsing_error (weak decode -> Failed, retryable) from the
         # silent parsed=None (stays Raw); IncludeRawCompat also catches ValidationError.
-        "_llm_structured_compat.py": 235,
+        # neograph-5s8f6: 235 -> 245. A RAISE, and the only one in this change --
+        # recorded rather than golfed away. _classify_lc_result now offers the
+        # ValidationError arm to the shared null-default coercion before calling it
+        # a failure, which is +9 lines (one import, the call and its guarded return,
+        # and the five-line rationale). Net across the LLM vertical this change is
+        # -139 budget lines, because _llm_retry.py ratchets 698 -> 550 above. Zero
+        # new top-level names here; the recovery logic lives in _null_defaults.py.
+        "_llm_structured_compat.py": 245,
     }
 
     def _top_level_defs(self, path: pathlib.Path) -> set[str]:
@@ -1674,7 +1696,8 @@ class TestDefaultFactoryCoercionIsGuarded:
 
     def test_apply_null_defaults_guards_default_factory(self):
         """Live tree: the coercion in _apply_null_defaults is TypeError-guarded."""
-        # neograph-3ffdg.15 moved _apply_null_defaults to _null_defaults.py.
+        # neograph-3ffdg.15 moved _apply_null_defaults to _null_defaults.py; the
+        # guard follows the function, it does not relax.
         src = (SRC_DIR / "_null_defaults.py").read_text()
         assert self._func_default_factory_is_typeerror_guarded(src, "_apply_null_defaults")
 

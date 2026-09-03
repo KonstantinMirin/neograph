@@ -788,6 +788,90 @@ class TestParseJsonResponseLenientParsing:
         result = _parse_json_response(text, Catalog)
         assert result.by_sku["x"].price is None
 
+    def test_null_default_coerced_inside_a_tuple_of_models(self):
+        """The descent reaches interiors of ``tuple[Model, ...]``, not only lists.
+
+        neograph-sjwny: the shape dispatcher covered BaseModel / list / dict and
+        the comment declared tuples out of scope because "LLM structured output
+        does not emit heterogeneous tuples". True of ``tuple[A, B]``, irrelevant
+        to ``tuple[X, ...]``, which is a list with a different constructor -- and
+        it is the container GH #20's reporter actually used, because a FROZEN
+        Pydantic domain model uses tuples (the same reason 0.7.9 widened ``Each``
+        to accept them). So a null on a defaulted field one level inside the
+        tuple was left raw while the byte-identical shape under a ``list`` was
+        repaired.
+        """
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _parse_json_response
+
+        class Change(BaseModel):
+            path: str
+            kind: str = "edit"
+
+        class RootCause(BaseModel):
+            label: str
+            changes: tuple[Change, ...] = ()
+
+        text = '{"label": "x", "changes": [{"path": "a.py", "kind": null}]}'
+        result = _parse_json_response(text, RootCause)
+        assert result.changes[0].kind == "edit"
+
+    def test_null_default_coerced_inside_a_fixed_tuple_and_a_frozenset(self):
+        """The same descent reaches a fixed homogeneous tuple and a set/frozenset.
+
+        neograph-sjwny: ``tuple[Change, Change]`` and ``set[...]``/``frozenset[...]``
+        are the remaining homogeneous containers whose interiors the dispatcher
+        skipped. A JSON array decodes to a Python list for all of them, so the
+        descent is driven by the ANNOTATION's element type, not by the runtime
+        container.
+        """
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _parse_json_response
+
+        class Change(BaseModel):
+            path: str
+            kind: str = "edit"
+
+        class Frozen(Change):
+            model_config = {"frozen": True}
+
+        class Fixed(BaseModel):
+            pair: tuple[Change, Change]
+            bag: frozenset[Frozen] = frozenset()
+
+        text = (
+            '{"pair": [{"path": "a.py", "kind": null}, {"path": "b.py", "kind": null}], '
+            '"bag": [{"path": "c.py", "kind": null}]}'
+        )
+        result = _parse_json_response(text, Fixed)
+        assert [c.kind for c in result.pair] == ["edit", "edit"]
+        assert [c.kind for c in result.bag] == ["edit"]
+
+    def test_heterogeneous_tuple_interiors_stay_out_of_scope(self):
+        """A ``tuple[A, B]`` has no single element type, so the descent leaves it.
+
+        neograph-sjwny widened the dispatcher to HOMOGENEOUS tuples only; the
+        original exclusion's actual subject is preserved.
+        """
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _apply_null_defaults
+
+        class A(BaseModel):
+            x: str = "ax"
+
+        class B(BaseModel):
+            y: str = "by"
+
+        class Pair(BaseModel):
+            pair: tuple[A, B]
+
+        data = {"pair": [{"x": None}, {"y": None}]}
+        _apply_null_defaults(data, Pair)
+        assert data == {"pair": [{"x": None}, {"y": None}]}
+
     def test_stringly_null_coerced_inside_list_of_optional_models(self):
         """Stringly-null coercion recurses into list[Model | None] items.
 

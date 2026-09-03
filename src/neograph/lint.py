@@ -31,6 +31,7 @@ from neograph._lint_kind_registry import (  # noqa: E402,F401
     LintIssue,
     LintKindMeta,
 )
+from neograph._lint_nullable_defaults import _check_null_rejecting_defaults
 from neograph._lint_predict import (  # noqa: E402,F401
     _di_resource_template_var_names,
     _di_template_var_names,
@@ -156,8 +157,8 @@ def lint(
         template_resolver=template_resolver,
         conditions=conditions,
         tool_factories=tool_factory_lookup,
-        di_inputs_enabled=_compiler_accepts_di_inputs(prompt_compiler),
-        context_enabled=_compiler_accepts_context(prompt_compiler),
+        di_inputs_enabled=_compiler_accepts(prompt_compiler, "di_inputs"),
+        context_enabled=_compiler_accepts(prompt_compiler, "context"),
         resource_producer_present=_has_resource_link_producer(construct),
     )
     # Construct-level: a field is dead only when every consumer axis misses it.
@@ -221,35 +222,25 @@ def _check_resource_hydration(
             )
 
 
-def _compiler_accepts_di_inputs(prompt_compiler: Any) -> bool:
-    """True when *prompt_compiler* declares a ``di_inputs`` param (or ``**kwargs``).
+def _compiler_accepts(prompt_compiler: Any, channel: str) -> bool:
+    """True when *prompt_compiler* declares *channel* as a param (or ``**kwargs``).
 
-    This is the third column of the inline/template-ref key asymmetry: a
-    FromInput/FromConfig parameter name is a VALID template-ref placeholder only
-    when the app's compiler opts in by accepting ``di_inputs`` — otherwise the
-    resolved DI value never reaches the template and the placeholder is
-    unresolvable. Reuses the ONE signature-introspection helper
-    (``_accepted_params``) that the runtime uses to gate the kwarg.
+    ONE predicate for the two opt-in columns of the inline/template-ref key
+    asymmetry, which were byte-identical twins differing only in the name they
+    looked for. ``di_inputs`` is the THIRD column: a FromInput/FromConfig
+    parameter name is a valid template-ref placeholder only when the app's
+    compiler opts in, since otherwise the resolved value never reaches the
+    template. ``context`` is the FOURTH: a node's declared ``context=`` field
+    name is valid only when the compiler actually receives the channel — until
+    neograph-cbfd9 the shipped compiler swallowed it, so lint calling the
+    placeholder unresolvable was CORRECT, and fixing the runtime turned that
+    true positive into a false one. Reuses the ONE signature-introspection
+    helper (``_accepted_params``) that the runtime uses to gate the kwarg.
     """
     if prompt_compiler is None:
         return False
     params = _accepted_params(prompt_compiler)
-    return params is _ACCEPT_ALL or "di_inputs" in params
-
-
-def _compiler_accepts_context(prompt_compiler: Any) -> bool:
-    """True when *prompt_compiler* declares a ``context`` param or ``**kwargs``.
-
-    The FOURTH column, and the exact twin of :func:`_compiler_accepts_di_inputs`:
-    a node's declared ``context=`` field name is a valid template-ref placeholder
-    only when the compiler actually receives the channel. Until neograph-cbfd9 the
-    shipped compiler swallowed it, so lint reporting the placeholder unresolvable
-    was CORRECT; fixing the runtime turned that true positive into a false one.
-    """
-    if prompt_compiler is None:
-        return False
-    params = _accepted_params(prompt_compiler)
-    return params is _ACCEPT_ALL or "context" in params
+    return params is _ACCEPT_ALL or channel in params
 
 
 def _emit_missing_llm_kwargs_issue(
@@ -365,6 +356,9 @@ def _walk(
 
     # 6. act-mode node whose tools are ALL idempotent (probably mode='agent')
     _check_act_mode_all_idempotent(item, issues)
+
+    # 7. a model-authored output field with a default whose type rejects null
+    _check_null_rejecting_defaults(item, issues)
 
 
 def _check_template_placeholders(
