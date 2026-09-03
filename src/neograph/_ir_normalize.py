@@ -40,9 +40,9 @@ from neograph._construct_validation import (
     effective_producer_type_for,
 )
 from neograph._ir_branch import _BranchNode, iter_item_slots
-from neograph._ir_fields import declared_output_fields, fan_out_candidates
+from neograph._ir_fields import declared_output_fields, fan_out_candidates, port_source_field
 from neograph._ir_protocols import ConstructItem, ConstructLike
-from neograph._ir_source import PortRef
+from neograph._ir_source import Peer, PortRef
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._sidecar import infer_oracle_gen_type
@@ -89,17 +89,10 @@ def resolve_output_from(construct: ConstructLike) -> PortRef | None:
     and saying otherwise here would be the false-parity citation this epic exists to
     remove -- written by it.
 
-    Four sites hand-rolled ``getattr(construct, "output_from", None)`` and then made
-    their own member->field hop: validation, the runtime (``_subconstruct``), lint
-    (``_lint_consumers``) and the Agent Spec marker (``_agent_spec_markers``). That is
-    the form AGENTS.md bans for ``output`` ("do NOT hand-roll
-    ``getattr(item, 'output', None)`` -- call ``_declared_output(item)``").
-
-    STATE TODAY, precisely: validation reads THIS; lint's member->field hop was fixed
-    here to resolve the dotted form correctly, but still reads the attribute itself;
-    the runtime and the marker still hand-roll both halves. They convert in step 2
-    (neograph-9axw6.3), which is what stamps the address they would read -- converting
-    them now would mean two hops to the same answer rather than one.
+    Four sites hand-rolled ``getattr(construct, "output_from", None)`` plus their own
+    member->field hop -- the form AGENTS.md bans for ``output``. Validation, the
+    runtime and lint now call this; ``_agent_spec_markers`` still reads the attribute
+    directly, for the reason stated there.
 
     Two spellings, one meaning:
 
@@ -484,3 +477,23 @@ def normalize_ir(construct: Construct) -> None:
     # Runs LAST: the pass above may replace node objects, and this one resolves
     # against the final IR.
     _stamp_single_type_sources(construct)
+    stamp_sub_construct_ports(construct)
+
+
+def stamp_sub_construct_ports(construct: Construct) -> None:
+    """Resolve each sub-construct's input PORT to a parent field, once.
+
+    Replaces the runtime scan of the whole parent bag. The PARENT is the only place
+    this is answerable: a sub-construct normalises during its own ``__init__``,
+    before it is placed, so it cannot see the producers that will feed it. Never
+    overwrites -- a construct placed twice keeps the first answer, the same
+    discipline the other stamps here follow.
+    """
+    preceding: list[tuple[str, TypeSpecStatic, ConstructItem]] = []
+    for container, idx in iter_item_slots(construct):
+        item = container[idx]
+        if not isinstance(item, Node) and getattr(item, "nodes", None) is not None and item.port_source is None:
+            field = port_source_field(preceding, item.input, _types_compatible)
+            if field is not None:
+                item.port_source = Peer(PortRef(field))
+        preceding.extend(_producer_pairs(item))

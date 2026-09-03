@@ -49,7 +49,9 @@ class StateBus(Protocol):
 
     def get_counter(self, key: str) -> int: ...
 
-    def keys(self) -> list[str]: ...
+    def snapshot(self) -> dict[str, Any]: ...
+
+    def fields_with_prefix(self, prefix: str) -> list[str]: ...
 
 
 class _DictStateBus:
@@ -69,8 +71,11 @@ class _DictStateBus:
     def get_counter(self, key: str) -> int:
         return _as_counter(self._state.get(key))
 
-    def keys(self) -> list[str]:
-        return list(self._state.keys())
+    def snapshot(self) -> dict[str, Any]:
+        return dict(self._state)
+
+    def fields_with_prefix(self, prefix: str) -> list[str]:
+        return [k for k in self._state if k.startswith(prefix)]
 
 
 class _ModelStateBus:
@@ -91,8 +96,11 @@ class _ModelStateBus:
     def get_counter(self, key: str) -> int:
         return _as_counter(getattr(self._state, key, None))
 
-    def keys(self) -> list[str]:
-        return list(self._state.__class__.model_fields.keys())
+    def snapshot(self) -> dict[str, Any]:
+        return {k: getattr(self._state, k, None) for k in self._state.__class__.model_fields}
+
+    def fields_with_prefix(self, prefix: str) -> list[str]:
+        return [k for k in self._state.__class__.model_fields if k.startswith(prefix)]
 
 
 def adapt_state(state: BaseModel | dict[str, Any]) -> StateBus:
@@ -109,10 +117,15 @@ def adapt_state(state: BaseModel | dict[str, Any]) -> StateBus:
 def snapshot_state(bus: StateBus) -> dict[str, Any]:
     """Return a full ``{field_name: value}`` snapshot of bound state.
 
-    The SINGLE source of the full-state-snapshot pattern. Routers that build a
-    ``Send`` payload from the entire parent state call this instead of
-    re-deriving ``{k: getattr(state, k) for k in state.__class__.model_fields}``
-    inline. All access is routed through the StateBus (``keys()`` + ``get()``),
-    so no raw ``getattr``/``model_fields`` escapes into caller modules.
+    The SINGLE source of the full-state-snapshot pattern. Routers building a
+    ``Send`` payload from the entire parent state call this rather than re-deriving
+    ``{k: getattr(state, k) for k in state.__class__.model_fields}`` inline.
+
+    BROADCAST, not selection -- and that distinction is why this survived the
+    removal of ``keys()``. Copying every channel into a payload cannot pick the
+    wrong one of two values; enumerating the keys and choosing among them by type is
+    exactly what could, and is what ``keys()`` made expressible. So the capability
+    the bus now offers is "copy everything" and "name the fields under a prefix",
+    neither of which can select, and the enumerate-then-choose primitive is gone.
     """
-    return {key: bus.get(key) for key in bus.keys()}
+    return bus.snapshot()

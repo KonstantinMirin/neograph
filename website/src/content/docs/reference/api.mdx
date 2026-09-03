@@ -145,7 +145,7 @@ ConformanceTier(*values)
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-Construct(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, description: str = '', nodes: list[neograph._ir_protocols.ConstructItem] = <factory:list>, input: type[pydantic.main.BaseModel] | None = None, output: type[pydantic.main.BaseModel] | None = None, output_from: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, renderer: neograph.renderers.Renderer | None = None)
+Construct(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, description: str = '', nodes: list[neograph._ir_protocols.ConstructItem] = <factory:list>, input: type[pydantic.main.BaseModel] | None = None, output: type[pydantic.main.BaseModel] | None = None, output_from: str | None = None, port_source: neograph._ir_source.Peer | neograph._ir_source.Port | neograph._ir_source.EachItem | neograph._ir_source.LoopCarry | neograph._ir_source.HandoffChannel | neograph._ir_source.LastPresent | neograph._ir_source.Accumulated | None = None, llm_config: LlmConfig = <factory:LlmConfig>, renderer: neograph.renderers.Renderer | None = None)
 ```
 
 | Field | Type | Required | Default |
@@ -157,6 +157,7 @@ Construct(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, descript
 | <span id="construct-input"></span>`input` | `type[pydantic.main.BaseModel] | None` | no | `None` |
 | <span id="construct-output"></span>`output` | `type[pydantic.main.BaseModel] | None` | no | `None` |
 | <span id="construct-output_from"></span>`output_from` | `str | None` | no | `None` |
+| <span id="construct-port_source"></span>`port_source` | `neograph._ir_source.Peer | neograph._ir_source.Port | neograph._ir_source.EachItem | neograph._ir_source.LoopCarry | neograph._ir_source.HandoffChannel | neograph._ir_source.LastPresent | neograph._ir_source.Accumulated | None` | no | `None` |
 | <span id="construct-llm_config"></span>`llm_config` | `LlmConfig` | no | `<factory:LlmConfig>` |
 | <span id="construct-renderer"></span>`renderer` | `neograph.renderers.Renderer | None` | no | `None` |
 
@@ -267,7 +268,7 @@ export_conformance(construct: 'Construct', *, strict: 'bool' = True) -> 'Conform
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-ForwardConstruct(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, description: str = '', nodes: list[neograph._ir_protocols.ConstructItem] = <factory:list>, input: type[pydantic.main.BaseModel] | None = None, output: type[pydantic.main.BaseModel] | None = None, output_from: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, renderer: neograph.renderers.Renderer | None = None)
+ForwardConstruct(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, description: str = '', nodes: list[neograph._ir_protocols.ConstructItem] = <factory:list>, input: type[pydantic.main.BaseModel] | None = None, output: type[pydantic.main.BaseModel] | None = None, output_from: str | None = None, port_source: neograph._ir_source.Peer | neograph._ir_source.Port | neograph._ir_source.EachItem | neograph._ir_source.LoopCarry | neograph._ir_source.HandoffChannel | neograph._ir_source.LastPresent | neograph._ir_source.Accumulated | None = None, llm_config: LlmConfig = <factory:LlmConfig>, renderer: neograph.renderers.Renderer | None = None)
 ```
 
 ### from_agent_spec

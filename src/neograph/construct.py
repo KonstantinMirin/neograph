@@ -29,6 +29,7 @@ from neograph._construct_validation import ConstructError, _validate_node_chain
 from neograph._ir_branch import _BranchNode, iter_item_slots
 from neograph._ir_normalize import normalize_ir, resolve_output_from
 from neograph._ir_protocols import ConstructItem
+from neograph._ir_source import Source
 from neograph._llm_config import LlmConfig
 from neograph.modifiers import Modifiable, ModifierSet
 from neograph.node import Node
@@ -141,6 +142,14 @@ class Construct(Modifiable, BaseModel):
     # that produced the type. Reach for it when position is genuinely wrong, or when
     # you want the boundary stated rather than inferred.
     output_from: str | None = None
+
+    #: FRAMEWORK-WRITTEN, do not pass. Which PARENT field feeds this construct's
+    #: input port, resolved once by ``_ir_normalize`` when the PARENT is assembled
+    #: -- a sub-construct normalises before it is placed, so it cannot see its own
+    #: feeders. Replaces a runtime reverse-scan of the whole parent state bag that
+    #: returned the first ``isinstance`` match, which let framework bookkeeping and
+    #: forwarded ``context=`` fields compete to be the port's value.
+    port_source: Source | None = None
 
     # Default LLM config inherited by every node. Per-node llm_config merges
     # over this via LlmConfig.merged_with (node wins on conflicts). Common

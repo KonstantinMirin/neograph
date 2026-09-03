@@ -30,22 +30,6 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
-def _scan_subgraph_input(state: StateBus, sub_input_type: type) -> Any:
-    """Scan parent state in reverse order for first value matching sub.input.
-
-    Reverse iteration so later pipeline nodes take precedence (e.g., loop
-    output over seed). Unwraps append-lists by checking val[-1] against the
-    declared input type.
-    """
-    for attr_name in reversed(state.keys()):
-        # REQUIRED: iterating state.keys() — every key is by definition present.
-        val = state.get_required(attr_name)
-        check_val = _unwrap_loop_value(val, object)
-        if check_val is not None and isinstance(check_val, sub_input_type):
-            return check_val
-    return None
-
-
 def item_field_names(construct: Construct) -> list[str]:
     """State-field names the construct's OWN DECLARED ITEMS write, in declaration order.
 
@@ -227,10 +211,21 @@ def make_subgraph_fn(
             if channel_val is not None:
                 input_data = channel_val
 
-        # First iteration, non-loop, or input!=output loop re-entry:
-        # extract input by type from parent state.
-        if input_data is None and sub.input is not None:
-            input_data = _scan_subgraph_input(bus, sub.input)
+        # Last rung: read the PORT from the field the normalizer resolved at
+        # assembly. This was a reverse scan of the entire parent bag taking the
+        # first isinstance match, so framework bookkeeping and forwarded context=
+        # fields competed to be the port's value and dict ordering decided the
+        # winner. The precedence is unchanged -- last declared compatible producer
+        # -- but it is now computed from DECLARATIONS once, and the runtime asks
+        # only whether the named field is present.
+        if input_data is None and sub.input is not None and sub.port_source is not None:
+            # StateBus.get optional: the resolved field may be unbound on this
+            # superstep (a Loop's iteration-0 read, an unreached branch arm).
+            # _unwrap_loop_value because a Loop-modified producer's field holds an
+            # APPEND-LIST, and the port wants the latest element -- the scan this
+            # replaced unwrapped before its isinstance check, so dropping the unwrap
+            # handed a list[Draft] to a port declaring Draft.
+            input_data = _unwrap_loop_value(bus.get(sub.port_source.ref.field), object)
 
         # Run sub-graph with isolated state.
         # StateBus.get optional: framework — node_id is a DI-style context key

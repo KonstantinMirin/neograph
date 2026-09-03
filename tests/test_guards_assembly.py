@@ -1303,7 +1303,9 @@ class TestSubconstructBoundary:
         names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
         for required in (
             "make_subgraph_fn",
-            "_scan_subgraph_input",
+            # "_scan_subgraph_input" REMOVED by neograph-9axw6.4: the reverse scan of the
+            # whole parent state bag is deleted, not relocated. The sub-construct port is
+            # resolved once at assembly and stamped, so there is no symbol to require.
             "_scan_subgraph_output",
         ):
             assert required in names, f"_subconstruct.py must define {required} (gm-4 Cluster C)."

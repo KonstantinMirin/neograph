@@ -21,12 +21,14 @@ importable at module level from both sides of the old cycle.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from neograph._ir_protocols import ConstructItem
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
-__all__ = ["declared_output_fields", "fan_out_candidates"]
+__all__ = ["declared_output_fields", "fan_out_candidates", "port_source_field"]
 
 
 def declared_output_fields(item: ConstructItem) -> set[str]:
@@ -84,3 +86,40 @@ def fan_out_candidates(node: Node, known_field_names: set[str]) -> list[str]:
     return [
         key for key in ni.by_name if field_name_for(key) not in known_field_names and field_name_for(key) != self_field
     ]
+
+
+def port_source_field(
+    candidates: list[tuple[str, object, object]],
+    sub_input: type | None,
+    compatible: Callable[[object, type], bool],
+) -> str | None:
+    """Which PARENT field feeds a sub-construct's input port.
+
+    The assembly-time answer to a question the runtime used to ask by scanning.
+    ``_scan_subgraph_input`` reverse-iterated the ENTIRE parent state bag and
+    returned the first value that passed ``isinstance`` against the declared
+    ``input=`` -- so framework bookkeeping, forwarded ``context=`` fields and every
+    unrelated producer all competed to be the port's value, and which one won
+    depended on dict ordering at run time.
+
+    Same PRECEDENCE, computed once from declarations instead of values: the LAST
+    declared producer whose effective type can satisfy the port. Reverse iteration
+    was the scan's own rule -- later pipeline nodes take precedence over earlier
+    ones, e.g. a loop's output over its seed -- so preserving it is what keeps this
+    a relocation of the answer rather than a change to it.
+
+    ``candidates`` are ``(field_name, effective_type, item)`` triples in declaration
+    order, and ``compatible`` is the caller's type predicate: this module is a leaf
+    and must not reach into the validation cluster for one.
+
+    Returns ``None`` when nothing can satisfy the port, which is not an error here
+    -- the runtime's remaining ladder rungs (loop carry, fanned item, mesh channel)
+    may still supply a value, and a genuinely unsatisfiable port is the validator's
+    to refuse.
+    """
+    if sub_input is None:
+        return None
+    for field, effective, _item in reversed(candidates):
+        if effective is not None and compatible(effective, sub_input):
+            return field
+    return None

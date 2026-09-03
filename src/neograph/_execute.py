@@ -82,12 +82,23 @@ def _inject_resource_manifest(state: BaseModel, node: Node, config: RunnableConf
         return config
     if not any(b.kind is DIKind.FROM_RESOURCE and b.ref_kind is not None for b in param_res.values()):
         return config
+    # Goes through the bus. This walked type(state).model_fields directly, which
+    # bypassed StateBus entirely -- so removing StateBus.keys() would NOT have made
+    # the bag non-enumerable, and the epic's own acceptance ("the state bag is not
+    # enumerable") would have shipped false with a green suite. The design document's
+    # caller list omitted this line; it was found by sweeping rather than by reading.
+    #
+    # fields_with_prefix is deliberately narrower than keys(): it answers "which
+    # channels are resource manifests", a question with one answer, instead of
+    # handing out the whole key set for a consumer to pick through by type.
+    bus = adapt_state(state)
     refs: list[Any] = []
-    for fname in type(state).model_fields:
-        if fname.startswith(StateKeys.RESOURCE_MANIFEST_PREFIX):
-            val = getattr(state, fname, None)
-            if val:
-                refs.extend(val)
+    for fname in bus.fields_with_prefix(StateKeys.RESOURCE_MANIFEST_PREFIX):
+        # StateBus.get optional: a manifest channel is present only when some node
+        # actually produced resource refs on this superstep.
+        val = bus.get(fname)
+        if val:
+            refs.extend(val)
     return _with_configurable(config, **{StateKeys.RESOURCE_MANIFEST_INJECT: refs})
 
 

@@ -955,6 +955,12 @@
           "required": false
         },
         {
+          "annotation": "neograph._ir_source.Peer | neograph._ir_source.Port | neograph._ir_source.EachItem | neograph._ir_source.LoopCarry | neograph._ir_source.HandoffChannel | neograph._ir_source.LastPresent | neograph._ir_source.Accumulated | None",
+          "default": "None",
+          "name": "port_source",
+          "required": false
+        },
+        {
           "annotation": "LlmConfig",
           "default": "<factory:LlmConfig>",
           "name": "llm_config",
@@ -969,7 +975,7 @@
       ],
       "kind": "pydantic_model",
       "name": "Construct",
-      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, description: str = '', nodes: list[neograph._ir_protocols.ConstructItem] = <factory:list>, input: type[pydantic.main.BaseModel] | None = None, output: type[pydantic.main.BaseModel] | None = None, output_from: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, renderer: neograph.renderers.Renderer | None = None)"
+      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, description: str = '', nodes: list[neograph._ir_protocols.ConstructItem] = <factory:list>, input: type[pydantic.main.BaseModel] | None = None, output: type[pydantic.main.BaseModel] | None = None, output_from: str | None = None, port_source: neograph._ir_source.Peer | neograph._ir_source.Port | neograph._ir_source.EachItem | neograph._ir_source.LoopCarry | neograph._ir_source.HandoffChannel | neograph._ir_source.LastPresent | neograph._ir_source.Accumulated | None = None, llm_config: LlmConfig = <factory:LlmConfig>, renderer: neograph.renderers.Renderer | None = None)"
     },
     {
       "anchor": "forwardconstruct",
@@ -980,7 +986,7 @@
       "fields": [],
       "kind": "pydantic_model",
       "name": "ForwardConstruct",
-      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, description: str = '', nodes: list[neograph._ir_protocols.ConstructItem] = <factory:list>, input: type[pydantic.main.BaseModel] | None = None, output: type[pydantic.main.BaseModel] | None = None, output_from: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, renderer: neograph.renderers.Renderer | None = None)"
+      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, description: str = '', nodes: list[neograph._ir_protocols.ConstructItem] = <factory:list>, input: type[pydantic.main.BaseModel] | None = None, output: type[pydantic.main.BaseModel] | None = None, output_from: str | None = None, port_source: neograph._ir_source.Peer | neograph._ir_source.Port | neograph._ir_source.EachItem | neograph._ir_source.LoopCarry | neograph._ir_source.HandoffChannel | neograph._ir_source.LastPresent | neograph._ir_source.Accumulated | None = None, llm_config: LlmConfig = <factory:LlmConfig>, renderer: neograph.renderers.Renderer | None = None)"
     },
     {
       "anchor": "typespecstatic",
