@@ -90,6 +90,26 @@ Bind a fanned item or a loop carry as a **port parameter** instead: drop the DI 
 
 Both are WARN. Demand is read from template text, so a `prompt_compiler` that composes the final message can consume a name the template never spells.
 
+## Can the model actually author this output?
+
+The checks above are about wiring. This one is about whether a declared type can hold what the model will send.
+
+A Pydantic default applies only when the key is **absent**. A present-and-null value overrides it and fails validation — and neograph's own schema rendering invites exactly that: `describe_type` appends ` or null` to any field that carries a default and whose annotation is not already nullable. So `status: ClaimStatus = "proposed"` reaches the model as `status: "proposed" or "accepted" or null`, and the model, reasonably, sometimes sends null.
+
+- `model_authored_null_rejecting_default` — a field of a `think`/`agent`/`act` node's declared output that carries a default and whose type rejects null.
+
+**It recurses.** Both production failures that motivated this check were on types reachable *from* a node's output, not on the output itself — one of them a `tuple[Change, ...] = ()` a level down. A check that walks top-level fields only reports clean on a tree that already contains the defect. Nested models are followed to any depth, with cycle protection, and the report names the dotted path (`root.changes`) so it says *where*.
+
+It stays WARN, because the runtime coerces the null back to the default on both output strategies, so the pipeline runs. That is also why it is worth reading: the model can quietly decline to author the field and the default ships looking like an answer.
+
+Three repairs, depending on what the field is for:
+
+- the **pipeline** sets it, not the model → exclude it from the model-facing schema (`Field(exclude=True)` or `Annotated[T, ExcludeFromOutput]`);
+- the **model** should author it → drop the default so the field is required;
+- it is **genuinely optional** → make the type nullable (`T | None = None`).
+
+Scripted nodes are exempt: their output is built in Python, where a default is ordinary. So are the framework-collected secondary keys of a dict-form `outputs=` (`tool_log`), and fields the schema never shows the model.
+
 ## Checking a specific payload
 
 Pass `config=` when you want a different question answered: does *this* caller payload satisfy *this* graph. Then `lint()` checks each parameter name against the keys you supplied:
