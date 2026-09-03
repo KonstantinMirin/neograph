@@ -102,6 +102,16 @@ LINT_KIND_META: dict[str, LintKindMeta] = {
         "terminal output. It costs tokens on every call and cannot affect the "
         "answer.",
     ),
+    "model_authored_null_rejecting_default": LintKindMeta(
+        "WARN",
+        "A field of an LLM node's declared output that carries a default and "
+        "whose type rejects null. `describe_type` renders it as `... or null`, "
+        "so the model is told it may send a value the type cannot hold; the "
+        "runtime coerces the null back to the default, which means the model "
+        "can decline to author the field and the default ships looking like an "
+        "answer. Found by recursing into nested models, because both reported "
+        "production failures were below the declared output, not on it.",
+    ),
     "template_placeholder_unresolvable": LintKindMeta(
         "ERROR",
         "Prompt placeholder not found in predicted input keys or known extras.",

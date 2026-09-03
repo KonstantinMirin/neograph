@@ -31,6 +31,7 @@ from neograph._lint_kind_registry import (  # noqa: E402,F401
     LintIssue,
     LintKindMeta,
 )
+from neograph._lint_nullable_defaults import _check_null_rejecting_defaults
 from neograph._lint_predict import (  # noqa: E402,F401
     _di_resource_template_var_names,
     _di_template_var_names,
@@ -365,6 +366,9 @@ def _walk(
 
     # 6. act-mode node whose tools are ALL idempotent (probably mode='agent')
     _check_act_mode_all_idempotent(item, issues)
+
+    # 7. a model-authored output field with a default whose type rejects null
+    _check_null_rejecting_defaults(item, issues)
 
 
 def _check_template_placeholders(

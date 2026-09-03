@@ -30,6 +30,7 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel, ValidationError
 
 from neograph._dsml import contains_dsml, message_text
+from neograph._null_defaults import recover_null_defaults
 
 
 @dataclass(frozen=True)
@@ -92,7 +93,7 @@ class StructuredOutputAdapter(Protocol):
     ) -> StructuredResult: ...
 
 
-def _classify_lc_result(result: Any) -> StructuredResult:
+def _classify_lc_result(result: Any, model: type[BaseModel] | None = None) -> StructuredResult:
     """Pure classifier for a with_structured_output(include_raw=True) return.
 
     Shared by LangChainStructuredAdapter.invoke and .ainvoke so the sync and
@@ -113,6 +114,14 @@ def _classify_lc_result(result: Any) -> StructuredResult:
         # distinct from the genuinely-undecodable parsed=None (no ValidationError)
         # that stays Raw and fails loud.
         if isinstance(parsing_error, ValidationError):
+            # neograph-5s8f6: a present-and-null value overriding a field default is
+            # a COERCIBLE payload, not a failed decode. json_mode repairs it before
+            # validating; apply the same repair to what the provider already sent so
+            # the two strategies agree. Returns None unless the repair changed the
+            # payload AND the changed payload validates, so nothing else is masked.
+            recovered = recover_null_defaults(raw_msg, model)
+            if recovered is not None:
+                return Parsed(model=recovered, usage=usage)
             return Failed(error=parsing_error, raw_text=message_text(raw_msg))
         return Raw(
             raw_text=message_text(raw_msg),
@@ -135,7 +144,7 @@ class LangChainStructuredAdapter:
             result = structured.invoke(messages, config=config)
         except TypeError as exc:
             return Failed(error=exc, raw_text=message_text(messages[-1]) if messages else None)
-        return _classify_lc_result(result)
+        return _classify_lc_result(result, model)
 
     async def ainvoke(self, llm, model, messages, config) -> StructuredResult:
         try:
@@ -143,7 +152,7 @@ class LangChainStructuredAdapter:
             result = await structured.ainvoke(messages, config=config)
         except TypeError as exc:
             return Failed(error=exc, raw_text=message_text(messages[-1]) if messages else None)
-        return _classify_lc_result(result)
+        return _classify_lc_result(result, model)
 
 
 class IncludeRawCompatDecorator:
