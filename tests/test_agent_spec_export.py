@@ -1501,7 +1501,7 @@ class TestPortalMeshMemberPromptNeverShipsRawPlaceholder:
 from neograph.modifiers import Each, Loop, ModifierCombo, Operator, Oracle  # noqa: E402
 from neograph.node import Node  # noqa: E402
 
-from .test_agent_spec_matrix import UNSUPPORTED_COMBOS  # noqa: E402
+from .test_agent_spec_matrix import SUPPORTED_COMBOS, UNSUPPORTED_COMBOS  # noqa: E402
 
 # DERIVED, never hand-listed: the matrix's UNSUPPORTED_COMBOS is the loud
 # partition over ModifierCombo (SUPPORTED | UNSUPPORTED == set(ModifierCombo),
@@ -1511,7 +1511,32 @@ from .test_agent_spec_matrix import UNSUPPORTED_COMBOS  # noqa: E402
 # that falls through to the generic "no Agent Spec lowering yet" raise. Deriving
 # it this way means a new ModifierCombo cannot silently escape this pin.
 _PORTAL_COMBOS: frozenset[ModifierCombo] = frozenset({ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR})
-FALLTHROUGH_COMBOS: tuple[ModifierCombo, ...] = tuple(sorted(UNSUPPORTED_COMBOS - _PORTAL_COMBOS, key=lambda c: c.name))
+
+
+def _fallthrough_combos(unsupported: frozenset[ModifierCombo]) -> tuple[ModifierCombo, ...]:
+    """The derivation, as a FUNCTION so it can be run against a simulated set.
+
+    ``FALLTHROUGH_COMBOS`` is a module-level constant fixed at import, which
+    makes the ratchet below unexercisable unless the rule itself is callable.
+    """
+    return tuple(sorted(unsupported - _PORTAL_COMBOS, key=lambda c: c.name))
+
+
+def _assert_no_fallthrough(combos: tuple[ModifierCombo, ...]) -> None:
+    """The invariant, stated ONCE (neograph-e8wiv).
+
+    Used both on the real ``FALLTHROUGH_COMBOS`` (the guard) and on a simulated
+    repopulated set (the ratchet test), so the two cannot disagree about what
+    "no combo falls through" means.
+    """
+    assert {c.name for c in combos} == set(), (
+        "a combo fell back out of SUPPORTED_COMBOS -- every non-Portal combo must "
+        "have a real Agent Spec lowering since neograph-s7zt3.10; do not re-add a "
+        f"provisional raise for {sorted(c.name for c in combos)}"
+    )
+
+
+FALLTHROUGH_COMBOS: tuple[ModifierCombo, ...] = _fallthrough_combos(UNSUPPORTED_COMBOS)
 
 
 class TestUnsupportedComboFallthroughRaise:
@@ -1527,10 +1552,23 @@ class TestUnsupportedComboFallthroughRaise:
     is unreachable and ``_raise_no_agent_spec_lowering`` was DELETED rather than
     left as dead code behind a green suite.
 
+    SECOND POLARITY CHANGE -- neograph-e8wiv. Two tests here used to carry
+    ``@pytest.mark.parametrize("combo", FALLTHROUGH_COMBOS)`` and assert the
+    verbatim provisional message. Once Phase 7 emptied the set they parametrized
+    over nothing, and pytest renders an empty parameter set as SKIPPED -- which
+    ``scripts/check_skips.py`` (no allowlist, by design) cannot distinguish from
+    a test that failed to run. They are DELETED rather than converted: their
+    bodies asserted the text of a raiser that no longer exists, so no input could
+    reach them, and the emptiness they encoded is asserted directly below. Do not
+    re-add a parametrize over a set that is empty by construction -- state the
+    emptiness as an assertion, which is also what makes it exercisable.
+
     What still needs pinning, and is pinned below:
       * FALLTHROUGH_COMBOS is now EMPTY -- derived, so a combo silently LEAVING
         SUPPORTED_COMBOS re-populates it and fails here instead of quietly
-        reintroducing a provisional raise.
+        reintroducing a provisional raise. That failure is not merely believed:
+        ``test_a_combo_leaving_supported_combos_repopulates_the_fallthrough_set``
+        simulates the departure and asserts the guard fires.
       * The dispatch-mode-Portal rejection is PERMANENT and must keep its own
         specific message -- the hazard the hoisted, unconditional Operator
         postlude created (a hoisted raise, or a ``case ... if ...`` guard, would
@@ -1599,15 +1637,32 @@ class TestUnsupportedComboFallthroughRaise:
         The set stays DERIVED (UNSUPPORTED_COMBOS - the Portal pair), so a combo
         that later LEAVES SUPPORTED_COMBOS repopulates it and fails here -- the
         ratchet against quietly reintroducing a "not supported yet" raise."""
-        assert {c.name for c in FALLTHROUGH_COMBOS} == set(), (
-            "a combo fell back out of SUPPORTED_COMBOS -- every non-Portal combo must "
-            "have a real Agent Spec lowering since neograph-s7zt3.10; do not re-add a "
-            f"provisional raise for {sorted(c.name for c in FALLTHROUGH_COMBOS)}"
-        )
+        _assert_no_fallthrough(FALLTHROUGH_COMBOS)
         assert _PORTAL_COMBOS <= UNSUPPORTED_COMBOS, (
             "the PORTAL combos must still be UNSUPPORTED -- they raise the SEPARATE, "
             "PERMANENT dispatch-mode-Portal error, not a provisional one"
         )
+
+    def test_a_combo_leaving_supported_combos_repopulates_the_fallthrough_set(self) -> None:
+        """The ratchet itself, exercised -- not merely believed.
+
+        ``test_no_combo_falls_through_to_a_provisional_raise`` is only a ratchet
+        if it goes RED when a combo leaves ``SUPPORTED_COMBOS``. Emptiness used
+        to be expressed as an ABSENCE (two ``@pytest.mark.parametrize`` marks
+        over the empty tuple, which pytest reports as a SKIP -- indistinguishable
+        to ``scripts/check_skips.py`` from a test that failed to run), and an
+        absence cannot be exercised. Deriving through ``_fallthrough_combos`` lets
+        this test simulate the departure and prove the guard fires."""
+        departed = ModifierCombo.EACH_ORACLE
+        assert departed in SUPPORTED_COMBOS, (
+            f"{departed.name} is no longer supported -- pick another supported combo to simulate"
+        )
+
+        simulated = _fallthrough_combos(frozenset(UNSUPPORTED_COMBOS | {departed}))
+        assert simulated == (departed,), "the derivation must repopulate from UNSUPPORTED, minus Portal"
+
+        with pytest.raises(AssertionError, match="EACH_ORACLE"):
+            _assert_no_fallthrough(simulated)
 
     def test_the_generic_fallthrough_raise_no_longer_exists(self) -> None:
         """The provisional raiser is DELETED, not merely unreachable.
@@ -1660,58 +1715,3 @@ class TestUnsupportedComboFallthroughRaise:
         assert "no Agent Spec lowering yet" not in message, (
             "PORTAL's PERMANENT rejection was downgraded to the provisional wording"
         )
-
-    @pytest.mark.parametrize("combo", FALLTHROUGH_COMBOS, ids=lambda c: c.name)
-    def test_unsupported_combo_raises_configuration_error_with_exact_message(self, combo: ModifierCombo) -> None:
-        """The exact user-visible contract: type ``ConfigurationError``, and the
-        full four-line structured body (what / expected / found / hint) verbatim.
-
-        Asserting the WHOLE message (not a regex fragment) is deliberate -- the
-        migration must not reword, re-order, or drop any structured field, and a
-        substring match would not catch a lost ``expected=``/``hint=``."""
-        from neograph._agent_spec import to_agent_spec
-        from neograph.errors import ConfigurationError
-
-        self._register()
-        construct = self._construct_for(combo)
-
-        with pytest.raises(ConfigurationError) as exc_info:
-            to_agent_spec(construct)
-
-        assert str(exc_info.value) == (
-            f"node 'target' has modifier combination {combo.name} — no Agent Spec lowering yet\n"
-            "  expected: BARE, ORACLE, EACH, LOOP, or OPERATOR\n"
-            f"  found: {combo.name}\n"
-            "  hint: composed modifier lowering (e.g. Each+Oracle) is out of scope for "
-            "i3zsh's primitive-level export"
-        )
-
-    @pytest.mark.parametrize("combo", FALLTHROUGH_COMBOS, ids=lambda c: c.name)
-    def test_fallthrough_is_not_the_dispatch_mode_portal_raise(self, combo: ModifierCombo) -> None:
-        """The two raises in ``_lower_construct_item`` must stay DISTINCT sites.
-
-        The dispatch-mode-Portal rejection is PERMANENT ('no Agent Spec
-        lowering' -- there is no runtime-flow-synthesis primitive); the fusion
-        fallthrough is provisional ('...yet', owned by neograph-s7zt3.10).
-        Hoisting the ``has_operator`` check out of the per-shape arms into one
-        pre-dispatch test would collapse them and silently downgrade PORTAL's
-        permanent message to the provisional one -- so pin that they do not
-        cross-fire."""
-        from neograph._agent_spec import to_agent_spec
-        from neograph.errors import ConfigurationError
-
-        self._register()
-        construct = self._construct_for(combo)
-
-        with pytest.raises(ConfigurationError) as exc_info:
-            to_agent_spec(construct)
-
-        message = str(exc_info.value)
-        assert "dispatch-mode Portal" not in message, (
-            f"{combo.name} fired the dispatch-mode-Portal raise instead of the generic fallthrough"
-        )
-        assert "Each x Oracle fusion is not supported on sub-constructs" not in message, (
-            f"{combo.name} fired the SUB_CONSTRUCT_UNSUPPORTED_COMBOS gate -- that gate is "
-            "Construct-item-only and must not capture a bare Node"
-        )
-        assert message.endswith("i3zsh's primitive-level export")

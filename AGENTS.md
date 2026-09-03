@@ -560,6 +560,8 @@ git tag -a vX.Y.Z -m "..." && git push origin main && git push origin vX.Y.Z
 
 **A skip is invisible in a pass count**, so `skipcheck` fails on ANY skip and there is **no allowlist**. One shipped briefly (`tests/skip_allowlist.txt`, "empty by design, may only shrink") and was deleted without a single entry ever being added: a test exists to verify a behaviour, so a test that does not run is a defect with a cause, and writing its reason into a file does not fix the cause — it only stops anyone being told about it. When a behaviour is genuinely known-broken, mark it `xfail(strict=True)`: reported distinctly from a pass, and it turns RED the moment the gap closes, so the exemption cannot outlive its reason. That is the property an allowlist can never have.
 
+**Never write an invariant as an empty `parametrize`.** `@pytest.mark.parametrize("x", DERIVED)` over a set that is empty BY CONSTRUCTION reads as a passing ratchet and reports as a SKIP, which `skipcheck` cannot tell from a test that failed to run — `neograph-e8wiv`, where two such tests sat in the gate because the set they ranged over was empty exactly when the code was correct. `pyproject.toml` sets `empty_parameter_set_mark = "fail_at_collect"`, so pytest now refuses one at collection in EVERY invocation, `make quality` included; `tests/test_guards_empty_parametrize.py` pins the setting. State the emptiness as an assertion instead — it is also the only form you can exercise, by feeding the rule a simulated non-empty input and asserting it fires.
+
 **Tag the commit you gated.** Not a later one, and not the branch tip if it moved.
 
 This exists because the same failure happened twice, in the same shape: a success signal compatible with the thing you care about not running.

@@ -151,6 +151,17 @@ testpaths = ["tests"]
 # a future warnings-as-error surprise.
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# neograph-e8wiv: an empty parametrize is a COLLECTION ERROR, never a skip.
+# pytest's default turns `@pytest.mark.parametrize(..., <empty>)` into a skipped
+# test with reason "got empty parameter set for (...)" -- and a skip is invisible
+# in a pass count, which is exactly what scripts/check_skips.py exists to refuse.
+# Worse, that skip is indistinguishable from a test that failed to run for a real
+# reason. 'fail_at_collect' makes the condition loud at collection, in EVERY
+# pytest invocation including `make quality`, rather than at the release gate.
+# An invariant that a set is empty must be written as an assertion on the set,
+# not encoded in the absence of parameters. Pinned by
+# tests/test_guards_empty_parametrize.py.
+empty_parameter_set_mark = "fail_at_collect"
 filterwarnings = [
     "ignore:Node '.*'.*single-type inputs:DeprecationWarning",
 ]
