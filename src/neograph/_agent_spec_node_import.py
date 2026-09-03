@@ -21,7 +21,7 @@ from neograph._agent_spec_markers import (
     _MARK_TOOL_SPEC,
 )
 from neograph._agent_spec_placeholders import split_property_title
-from neograph.errors import ConfigurationError
+from neograph.errors import ConfigurationError, ConstructError
 from neograph.node import Node
 from neograph.spec_types import (
     _import_agent_spec_property_classes,
@@ -76,10 +76,56 @@ def _inputs_from_data_edges(dest_name: str, flow: Any, output_types: dict[str, A
     if not edges:
         return None
     inputs: dict[str, Any] = {}
+    seen_dest: dict[str, str] = {}
     for edge in edges:
         source_name = edge.source_node.name
-        if source_name in output_types:
-            inputs[source_name] = output_types[source_name]
+        if source_name not in output_types:
+            continue
+        # TWO EDGES INTO ONE INPUT is authored ambiguity in the SOURCE document.
+        # Agent Spec resolves it last-write-wins; neograph refuses it, because
+        # silently keeping the last edge is how an imported graph comes to mean
+        # something different from the one that was exported. Design section 8
+        # records this decision rather than leaving it to whoever hits it first.
+        dest_input = getattr(edge, "destination_input", None) or dest_name
+        # A modifier group's own members are NAMED AFTER their owner
+        # ("ensemble__variant_1" under "ensemble"), and N of them feeding one merge
+        # input is STRUCTURAL fan-in that Agent Spec legitimately expresses -- not
+        # authored ambiguity. Measured: refusing it broke the documented
+        # stale-marker fallback, where variants are reconstructed as top-level
+        # primitives and their fan-in becomes visible here.
+        group_internal = source_name.startswith(f"{dest_name}__") or seen_dest.get(dest_input, "").startswith(
+            f"{dest_name}__"
+        )
+        if not group_internal and dest_input in seen_dest and seen_dest[dest_input] != source_name:
+            raise ConstructError.build(
+                f"two data edges feed the same input {dest_input!r} of {dest_name!r}",
+                expected="one edge per destination input",
+                found=f"edges from {seen_dest[dest_input]!r} and {source_name!r}",
+                hint=(
+                    "Agent Spec resolves this last-write-wins; neograph refuses it, because "
+                    "importing the last edge silently would give a graph that means something "
+                    "different from the one exported. Remove one edge in the source document."
+                ),
+                node=dest_name,
+            )
+        seen_dest[dest_input] = source_name
+        # source_output is NOT translated to a neograph port, and the reason is a
+        # representational gap rather than an oversight -- MEASURED, both ways.
+        #
+        # Agent Spec's source_output names a PROPERTY of the source's output model
+        # ("ingest" -> "text"), not a neograph dict-form output KEY. This importer
+        # reconstructs ONE type per node, so it cannot distinguish "the text property
+        # of ingest's single output" from "ingest's text output port" -- and both
+        # spellings of the mapping fail on exactly that: a dotted key names a state
+        # field nothing writes, and the {upstream}_{key} form asks for an upstream
+        # named "ingest_text" that does not exist. 55 suite failures each time.
+        #
+        # Faithful port preservation therefore needs the importer to reconstruct
+        # dict-form OUTPUTS first, which is not this step's scope. Filed rather than
+        # approximated: importing a plausible-looking wrong edge is worse than
+        # importing a coarser right one, because the coarse version is honest about
+        # what it lost.
+        inputs[source_name] = output_types[source_name]
     return inputs or None
 
 
