@@ -65,6 +65,7 @@ from dataclasses import dataclass
 from typing import assert_never
 
 from neograph.errors import ConstructError
+from neograph.naming import field_name_for, output_field_name
 
 __all__ = [
     "Accumulated",
@@ -100,6 +101,26 @@ class PortRef:
 
     member: str
     output: str | None = None
+
+    @property
+    def field(self) -> str:
+        """The STATE FIELD this address names.
+
+        The member->field hop, in one place. Four sites used to make it
+        independently, and one of them made it WRONG: after step 1 taught assembly
+        to accept the dotted ``"settle.result"``, ``_subconstruct`` still ran
+        ``field_name_for(port)`` on the whole string and looked for a field called
+        ``settle.result``. No node writes that -- the fields are ``settle_result``
+        and ``settle_extra`` -- so a correctly-named port assembled clean and died at
+        run time with "no internal node produced a compatible output value". The fix
+        for a hop computed in four places is not a fifth careful copy.
+
+        Uses ``naming``'s existing helpers rather than inventing a rule.
+        ``_ir_source``'s module docstring already sanctions importing ``naming``, and
+        only ``naming``, as acyclic.
+        """
+        base = field_name_for(self.member)
+        return output_field_name(base, self.output) if self.output else base
 
 
 class _SealedSource:

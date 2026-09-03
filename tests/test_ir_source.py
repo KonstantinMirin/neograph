@@ -226,3 +226,28 @@ class TestAccumulatedIsPreRegisteredNotDead:
             f"Accumulated is now referenced by {referencing}. If the accumulator "
             "channel has landed, delete this test; do not relax it."
         )
+
+
+class TestTheMemberToFieldHopIsComputedHere:
+    """``PortRef.field`` -- the member->field hop, in one place.
+
+    Four sites computed it independently and one had it WRONG: after step 1 taught
+    assembly to accept the dotted ``"settle.result"``, ``_subconstruct`` still ran
+    ``field_name_for`` on the whole string and looked for a field of that literal
+    name. Nothing writes it -- the fields are ``settle_result``/``settle_extra`` --
+    so a correctly-named port assembled clean and died at run time
+    (``neograph-fx3j7``). This is the assertion that must stay right.
+    """
+
+    def test_a_dotted_address_resolves_to_the_per_key_state_field(self) -> None:
+        assert PortRef("settle", "result").field == "settle_result"
+
+    def test_a_bare_address_resolves_to_the_member_field(self) -> None:
+        assert PortRef("settle").field == "settle"
+
+    def test_the_hop_never_yields_a_dotted_field_name(self) -> None:
+        """The specific failure mode: a field name containing a dot is one no node
+        writes, so it fails a presence check rather than a type check -- which is how
+        it reached runtime as "no internal node produced a compatible output value"
+        instead of anything naming the real cause."""
+        assert "." not in PortRef("settle", "result").field

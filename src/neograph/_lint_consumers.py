@@ -20,6 +20,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from neograph._ir_branch import _BranchNode, iter_with_arms
+from neograph._ir_normalize import resolve_output_from
 from neograph._lint_kind_registry import LintIssue
 from neograph._lint_predict import _extract_format_placeholders
 from neograph._normalize import normalize_inputs, normalize_outputs
@@ -140,16 +141,12 @@ def _framework_field_reads(construct: Construct) -> tuple[set[tuple[str, str]], 
     # boundary, so this reads that member instead of every type-compatible one.
     # Without this the author's declared port would draw a false
     # `output_field_unconsumed` WARN -- the field is read, by the boundary itself.
-    # The dotted address must be resolved to the REAL state field, not spelled
-    # straight into one: field_name_for("settle.result") returns "settle.result",
-    # which no node writes -- the field is "settle_result". Step 1 made the dotted
-    # form legal, so spelling it here would make lint emit a false
-    # output_field_unconsumed WARN on the very port the author declared.
-    port = getattr(construct, "output_from", None)
-    if port:
-        member, _, output_key = port.partition(".")
-        base = field_name_for(member)
-        whole_roots.add(output_field_name(base, output_key) if output_key else base)
+    # One call, through the shared hop. Step 1 resolved the dotted form here by hand;
+    # PortRef.field is now where that lives, so lint cannot drift from the runtime and
+    # the exporters on what "settle.result" means.
+    ref = resolve_output_from(construct)
+    if ref is not None:
+        whole_roots.add(ref.field)
     elif isinstance(construct.output, type):
         for inner in iter_with_arms(construct):
             declared = normalize_outputs(getattr(inner, "outputs", None)).primary

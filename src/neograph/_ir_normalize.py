@@ -313,9 +313,23 @@ def _producer_pairs(item: ConstructItem) -> list[tuple[str, TypeSpecStatic, Cons
     """``(state_field, effective_type, producing_item)`` for everything ``item``
     produces.
 
-    Field names come from :func:`declared_output_fields` and types from
-    ``effective_producer_type`` -- the two existing authorities, composed. This
-    is deliberately NOT a third derivation of either.
+    Types come from ``effective_producer_type``, the single authority for the
+    modifier-aware producer type.
+
+    The FIELD NAMES are derived inline here, and this docstring used to claim they
+    "come from :func:`declared_output_fields` ... deliberately NOT a third
+    derivation". It never called that function -- verified, zero call sites -- so the
+    claim was false, and it was written by the change that was meant to end exactly
+    this pattern. Deleted rather than reworded, per design 7.5: parity by CALLING,
+    never by asserting.
+
+    The two derivations do currently agree, and the reason they are not yet one call
+    is that this returns ``(field, type, item)`` triples while
+    ``declared_output_fields`` returns a name set -- collapsing them is the
+    input-side candidate-set work tracked as neograph-yz69e, which also has to add
+    the Portal dispatch field neither of them emits today. Stating the divergence is
+    the point: a reader who needs the field-name rule should look at both, not trust
+    a comment that says they are the same.
     """
     name = getattr(item, "name", None)
     if name is None:

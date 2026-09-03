@@ -454,3 +454,41 @@ class TestArmNamedPortIsNarrowedDeliberately:
         arm = Node.scripted("armnode", fn="arm_ok2", inputs=Case, outputs=Case)
         sub = self._arm_parent(arm, output_from=None, output=Case)
         assert sub.output_from is None
+
+
+class TestADottedPortRunsAndNotJustAssembles:
+    """neograph-fx3j7: step 1 made ``output_from="member.output"`` legal at assembly
+    and did NOT teach the runtime the hop, so a correctly-named port assembled clean
+    and died at run time.
+
+    ``_subconstruct`` ran ``field_name_for(port)`` on the whole dotted string, giving
+    a field called ``settle.result``. Nothing writes that -- the fields are
+    ``settle_result`` and ``settle_extra`` -- so the boundary scan found nothing and
+    raised "No internal node produced a compatible output value". The same
+    accept-at-assembly-then-fail-late shape step 1 existed to remove, recreated one
+    layer down BY that fix.
+
+    This test runs the pipeline. An assembly-only assertion passes against the bug,
+    which is exactly why the defect shipped: every assembly test was green.
+    """
+
+    def test_a_dotted_port_pipeline_runs_and_returns_the_named_port(self) -> None:
+        _register_bodies()
+        register_scripted("fx_multi", lambda _i, _c: {"result": Case(label="PORT", readings=3), "extra": Seed(tag="t")})
+        sub = Construct(
+            "branch",
+            input=Seed,
+            output=Case,
+            output_from="settle.result",
+            nodes=[Node.scripted("settle", fn="fx_multi", inputs=Seed, outputs={"result": Case, "extra": Seed})],
+        )
+        result = run(compile(_parent_with(sub), **build_test_compile_kwargs()), input={"node_id": "x"})
+        assert result.get("branch") == Case(label="PORT", readings=3), (
+            "the dotted port must resolve to the settle_result state field. A literal "
+            "'settle.result' lookup finds nothing and raises at runtime."
+        )
+
+    # The hop itself is pinned in tests/test_ir_source.py, the ONE module the
+    # construction monopoly allows to build a PortRef. Asserting it here as well
+    # would have needed that allowlist to GROW, which is the wrong trade for a
+    # duplicate assertion -- the guard caught this, correctly.

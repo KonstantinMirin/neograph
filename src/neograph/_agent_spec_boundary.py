@@ -54,7 +54,8 @@ from __future__ import annotations
 from typing import Any, cast
 
 from neograph._agent_spec_placeholders import _item_outputs, _properties_for
-from neograph._ir_branch import _BranchNode
+from neograph._ir_branch import _BranchNode, iter_with_arms
+from neograph._ir_normalize import resolve_output_from
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
 from neograph.modifiers import PrimaryShape, primary_shape
@@ -220,6 +221,24 @@ def close_sub_flow(
     )
 
 
+def _declared_terminal(construct: Any) -> Any | None:
+    """The member a construct's ``output_from`` names, or ``None`` when unnamed.
+
+    Reads the declaration through ``resolve_output_from`` -- the same reader
+    validation and the runtime use -- so the exported artifact and the run cannot
+    answer "which member is the boundary" differently. Deleted along with this
+    comment if it ever stops being a call: design 7.5 asks for parity BY CALLING,
+    never by asserting.
+    """
+    ref = resolve_output_from(construct)
+    if ref is None:
+        return None
+    for item in iter_with_arms(construct):
+        if getattr(item, "name", None) == ref.member:
+            return item
+    return None
+
+
 def resolve_end_node_sources(
     construct: Construct,
     data_node_by_item_name: dict[str, Any],
@@ -234,7 +253,17 @@ def resolve_end_node_sources(
     (see module docstring's scope boundary).
     """
     fallback: tuple[list[Any], list[tuple[Any, str]]] = (_properties_for(construct.output), [])
-    last = construct.nodes[-1]
+    # The DECLARED boundary port wins over position. Until neograph-9axw6.3 this read
+    # construct.nodes[-1] unconditionally and never looked at output_from, while the
+    # runtime honoured it -- so an exported Flow wired b -> EndNode for a construct
+    # whose run returned a's output. Measured on a two-member pair: the documents
+    # differed only in an inert metadata marker while the data-flow edges were
+    # identical, which is why the differential harness asserts on the edge SET rather
+    # than the document. That divergence is neograph-fnlrx / neograph-avmx4.
+    #
+    # A construct with no declared port keeps the positional rule exactly, so nothing
+    # regresses where nothing was declared.
+    last = _declared_terminal(construct) or construct.nodes[-1]
 
     if isinstance(last, _BranchNode):
         meta = last._neo_branch_meta

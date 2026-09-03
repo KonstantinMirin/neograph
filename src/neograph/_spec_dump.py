@@ -319,19 +319,13 @@ def _dump_node(node: Node, dump: _Dump, path: str) -> dict[str, Any]:
     if outputs.is_none:
         out["outputs"] = dump.lose("absent_outputs", f"{path}.outputs")
     elif outputs.is_dict_form:
-        out["outputs"] = {
-            key: dump.type_ref(value, f"{path}.outputs.{key}")
-            for key, value in outputs.all_keys.items()
-        }
+        out["outputs"] = {key: dump.type_ref(value, f"{path}.outputs.{key}") for key, value in outputs.all_keys.items()}
     else:
         out["outputs"] = dump.type_ref(outputs.primary, f"{path}.outputs")
 
     inputs = normalize_inputs(node.inputs)
     if inputs.is_dict_form:
-        out["inputs"] = {
-            key: dump.type_ref(value, f"{path}.inputs.{key}")
-            for key, value in inputs.by_name.items()
-        }
+        out["inputs"] = {key: dump.type_ref(value, f"{path}.inputs.{key}") for key, value in inputs.by_name.items()}
     elif not inputs.is_none:
         out["inputs"] = dump.type_ref(inputs.single_type, f"{path}.inputs")
 
@@ -377,6 +371,19 @@ def _dump_sub_construct(sub: Construct, dump: _Dump, path: str) -> dict[str, Any
             out[field] = dump.lose("absent_construct_boundary", f"{path}.{field}")
         else:
             out[field] = dump.type_ref(declared, f"{path}.{field}")
+
+    # The DECLARED boundary port. Omitted entirely until neograph-9axw6.3, which made
+    # the round trip asymmetric in a way nothing reported: ConstructSpec declares the
+    # field and _spec_loader reads it back, so a construct with a declared port dumped
+    # to a spec that silently reverted to the positional rule on reload. No schema
+    # change was needed -- only the dumper had never been taught.
+    #
+    # The DECLARED string is dumped, not the resolved address: the spec format's field
+    # is a declaration, and the loader re-normalises on import. Dumping a resolved
+    # field name would bake this version's resolution into an artifact meant to be
+    # re-resolved.
+    if sub.output_from is not None:
+        out["output_from"] = sub.output_from
 
     refs: list[Any] = []
     for index, member in enumerate(sub.nodes):
@@ -462,8 +469,7 @@ def dump_spec(construct: Construct, *, strict: bool = False) -> dict[str, Any]:
             "dump_spec(strict=True) cannot represent this construct",
             found=f"{first['id']} at {first['path']}",
             expected="a construct whose every field has a spec representation",
-            hint="drop strict= to receive the dump with in-band sentinels and a "
-            f'"{LOSSES_KEY}" index.',
+            hint=f'drop strict= to receive the dump with in-band sentinels and a "{LOSSES_KEY}" index.',
         )
 
     return payload

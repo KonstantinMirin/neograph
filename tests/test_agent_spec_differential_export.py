@@ -309,18 +309,16 @@ _CELLS: tuple[tuple[str, str], ...] = (
 #: PER-CELL, never per-axis -- a per-axis mark on ``output_from`` would XPASS at
 #: the document level and turn step 0's gate red.
 _XFAIL_CELLS: dict[tuple[str, str], str] = {
-    ("output_from", "to_agent_spec"): (
-        "the exporter's edge derivation ignores output_from: both variants wire "
-        "('boundary', 'b', 'items', 'boundary__end', 'items') from the positional "
-        "last-eligible-member rule. The only document-level difference is the inert "
-        "metadata['neograph/boundary_spec'] marker. neograph-9axw6.2 (step 2) closes it."
-    ),
-    ("output_from", "dump_spec"): (
-        "_spec_dump._dump_sub_construct iterates ('input', 'output') only and never "
-        "emits output_from, although _spec_schema.ConstructSpec declares the field "
-        "(:157) and _spec_loader reads it back (:271). The two dumps are BYTE-identical, "
-        "not merely equal under the projection."
-    ),
+    # ("output_from", "to_agent_spec") WAS HERE and is DELETED, not relaxed.
+    # neograph-9axw6.3 pointed resolve_end_node_sources at the declared port, the
+    # cell XPASSed, strict=True turned the gate red, and the exemption removed
+    # itself. That is the whole point of writing it as a live red rather than
+    # omitting the cell: the instrument reported its own obsolescence.
+    # ("output_from", "dump_spec") WAS HERE and is DELETED too. The dumper now emits
+    # output_from beside input/output, which closed an asymmetric round trip nothing
+    # reported: the schema declared the field and the loader read it back, so a
+    # construct with a declared port dumped to a spec that silently reverted to the
+    # positional rule on reload.
 }
 
 #: Cells deliberately NOT asserted, with the measurement that disqualified them.
@@ -457,35 +455,56 @@ class TestTheMeasurementsBehindTheXfails:
     for a different reason than the one recorded next to it.
     """
 
-    def test_dump_spec_drops_output_from_although_the_spec_schema_declares_it(self) -> None:
-        """The exact asymmetry that makes ``(output_from, dump_spec)`` red.
+    def test_dump_spec_now_emits_output_from_and_the_round_trip_is_symmetric(self) -> None:
+        """RE-RECORDED after step 2, and the asymmetry is the point.
 
-        This goes red alongside that cell's XPASS when the dumper is fixed --
-        deliberately: the reason and the exemption are removed together.
+        BEFORE: ``_dump_sub_construct`` iterated ``("input", "output")`` only and never
+        emitted ``output_from``, although ``ConstructSpec`` DECLARED the field and
+        ``_spec_loader`` READ IT BACK. So a construct with a declared port dumped to a
+        spec that silently reverted to the positional rule on reload -- a lossy round
+        trip with a schema that claimed otherwise, and nothing reported it because the
+        two dumps were byte-identical.
+
+        AFTER: the port survives dump -> load. No schema change was ever needed; only
+        the dumper had not been taught.
         """
         assert "output_from" in ConstructSpec.model_fields, (
-            "ConstructSpec.output_from is gone -- the dump_spec xfail's recorded reason "
-            "(schema declares it, dumper drops it) no longer describes reality"
+            "ConstructSpec.output_from is gone -- the round trip this test pins no longer exists"
         )
         a, _b = _output_from_pair()
         dumped = {c["name"]: c for c in dump_spec(a)["constructs"]}
         assert "boundary" in dumped, f"expected a dumped sub-construct named 'boundary', got {sorted(dumped)}"
-        assert "output" in dumped["boundary"], "the boundary TYPE is dumped -- only the port name is missing"
-        assert "output_from" not in dumped["boundary"], (
-            "_dump_sub_construct now emits output_from -- delete the "
-            "(output_from, dump_spec) xfail, which has become an XPASS"
+        assert dumped["boundary"].get("output_from") == "a", (
+            "the declared port is not in the dump, so a reload reverts to the positional "
+            f"rule. Got: {dumped['boundary'].get('output_from')!r}"
         )
+        assert "output" in dumped["boundary"], "the boundary TYPE must still be dumped alongside the port"
 
-    def test_the_output_from_pair_differs_only_in_the_inert_boundary_marker(self) -> None:
-        """Why the assertion is a projection: the documents DO differ, in one
-        inert key, while the wires do not. A whole-document ``!=`` would pass
-        here and call that success."""
+    def test_the_exporter_now_wires_the_declared_port(self) -> None:
+        """The measurement this file was built to take, RE-RECORDED after step 2.
+
+        BEFORE (step 0, measured): the two documents differed in exactly one key --
+        the inert ``metadata['neograph/boundary_spec']`` marker -- while the data-flow
+        edges were IDENTICAL. Both wired
+        ``('boundary', 'b', 'items', 'boundary__end', 'items')`` from the positional
+        last-eligible-member rule, including the construct that declared
+        ``output_from='a'``. A whole-document ``!=`` passed and called that success,
+        which is why this harness asserts on the edge SET.
+
+        AFTER (step 2): the EDGES differ, because ``resolve_end_node_sources`` reads
+        the declared port instead of ``construct.nodes[-1]``. The exported artifact
+        now wires the edge the run takes -- which was neograph-fnlrx / neograph-avmx4.
+
+        The old assertion is not relaxed but INVERTED, and the before/after pair is
+        kept in this docstring because the whole claim of the epic is that export
+        behaviour changes when resolution changes. This is that claim, measured twice.
+        """
         a, b = _output_from_pair()
-        assert _agent_spec_document(a) != _agent_spec_document(b), (
-            "the output_from pair's documents no longer differ -- the recorded "
-            "false-green measurement (an inert metadata marker moved) is stale"
+        edges_a, edges_b = _agent_spec_edges(a), _agent_spec_edges(b)
+        assert edges_a != edges_b, (
+            "the exporter has stopped honouring output_from -- it regressed to the "
+            "positional rule, and the exported artifact once again wires an edge the "
+            "run does not take"
         )
-        assert _agent_spec_edges(a) == _agent_spec_edges(b), (
-            "the exporter now wires output_from -- the (output_from, to_agent_spec) cell "
-            "has become an XPASS; delete its xfail"
-        )
+        terminals = {e[-2] for e in edges_a} | {e[-2] for e in edges_b}
+        assert len(terminals) >= 1, "the projection lost its terminal edges entirely"

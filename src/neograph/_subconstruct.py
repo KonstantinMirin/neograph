@@ -9,6 +9,7 @@ from langchain_core.runnables import RunnableConfig, RunnableLambda
 from pydantic import BaseModel
 
 from neograph._ir_branch import iter_with_arms
+from neograph._ir_normalize import resolve_output_from
 from neograph._normalize import _declared_output
 from neograph._oracle import _inject_oracle_config
 from neograph._state_bus import StateBus, adapt_state
@@ -56,10 +57,21 @@ def item_field_names(construct: Construct) -> list[str]:
     ``output=Case`` silently re-pointed at the injected case, five readings and
     zero claims, with a green run.
 
-    Shared deliberately: ``_scan_subgraph_input`` (neograph-5suot unknown #5) can
-    adopt this same eligibility set, and it agrees with
-    ``_agent_spec_boundary.resolve_end_node_sources``, which already answers
-    "which node is the boundary" positionally. One rule, not a fifth answer.
+    ``_scan_subgraph_input`` (neograph-5suot unknown #5) can adopt this same
+    eligibility set.
+
+    The claim that followed -- that this "agrees with
+    ``_agent_spec_boundary.resolve_end_node_sources`` ... One rule, not a fifth
+    answer" -- was FALSE when written and is deleted rather than reworded (design
+    7.5). They disagreed on two axes: that function read ``construct.nodes[-1]``
+    positionally and never looked at ``output_from`` at all, while this side honoured
+    it; and this side type-filters in declaration order, so it can select an item
+    that is NOT the last. The consequence was measured: an exported Flow wired one
+    member to the EndNode while the run returned another's output.
+    ``neograph-9axw6.3`` pointed that function at the declared port, so the two now
+    agree on the NAMED case by both calling ``resolve_output_from``. The unnamed case
+    is still two derivations -- positional there, type-filtered here -- so this notes
+    what is true instead of asserting a parity that is not.
     """
     fields: list[str] = []
     for item in iter_with_arms(construct):
@@ -257,8 +269,14 @@ def make_subgraph_fn(
             # GH #17: a declared port wins outright; otherwise the boundary
             # is the LAST DECLARED ITEM that produced the type -- never a forwarded
             # context value or another field the child was merely handed.
-            port = getattr(sub, "output_from", None)
-            eligible = [field_name_for(port)] if port else item_field_names(sub)
+            # The member->field hop goes through PortRef.field, the ONE place it is
+            # computed. Spelling it here was wrong for a dotted address: step 1 made
+            # output_from="settle.result" legal at assembly, and field_name_for on the
+            # whole string yields "settle.result", a field nothing writes -- so a
+            # correctly-named port assembled and then died below at "no internal node
+            # produced a compatible output value" neograph-fx3j7.
+            ref = resolve_output_from(sub)
+            eligible = [ref.field] if ref is not None else item_field_names(sub)
             output_val = _scan_subgraph_output(sub_result, sub.output, eligible=eligible)
 
         # Runtime defense: if no internal node produced a compatible output,

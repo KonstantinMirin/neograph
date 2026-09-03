@@ -135,6 +135,13 @@ def attach_boundary_marker(subflow: Any, item: Any) -> Any:
     ``_construct_from_subflow`` reads the boundary off the Flow -- the Swarm C1
     import path has only a Flow to work with.
     """
+    # getattr, deliberately, and the ONE remaining hand-rolled read of output_from.
+    # Two reasons it does not go through resolve_output_from: this runs per ITEM, and
+    # an item may be a Node, which has no output_from at all (the resolver takes a
+    # ConstructLike); and what belongs in the marker is the DECLARED STRING, which is
+    # the wire format _agent_spec_group_import reads back on import -- substituting a
+    # resolved field name would bake this version's resolution into an artifact meant
+    # to be re-resolved, and would break the round trip.
     port = getattr(item, "output_from", None)
     if port:
         subflow.metadata = {**(getattr(subflow, "metadata", None) or {}), _MARK_BOUNDARY_SPEC: {"output_from": port}}
