@@ -246,8 +246,6 @@ class TestLlmResponsibilityDiscipline:
             {
                 "_extract_json",
                 "_extract_balanced",
-                "_is_list_annotation",
-                "_apply_null_defaults",
                 "_parse_json_response",
                 "_build_retry_msg",
                 "_invoke_json_with_retry",
@@ -285,6 +283,20 @@ class TestLlmResponsibilityDiscipline:
                 "_is_truncated",
                 "_build_continuation_msg",
                 "_retry_msg_for_failure",
+                # neograph-5s8f6 split _llm_retry.py: the null-default cluster
+                # (_is_list_annotation, _optional_inner_types, _unwrap_optional,
+                # _is_stringly_null, _descend_null_defaults, _apply_null_defaults)
+                # moved to _null_defaults.py so the STRUCTURED path could share the
+                # one coercion instead of growing a second. Their names moved with
+                # them -- this table pins each module's OWN top-level names, so
+                # listing a moved name here would demand it be defined twice, which
+                # is the exact duplication the move exists to prevent. _llm_retry.py
+                # re-exports them (an import binding, not a def).
+            }
+        ),
+        "_null_defaults.py": frozenset(
+            {
+                "_is_list_annotation",
                 # stark-h46: stringly-null repair. GLM emits the STRING "null" for
                 # Optional numeric/enum fields; _is_stringly_null (guarded by
                 # _optional_inner_types so only nullable fields are touched)
@@ -298,6 +310,11 @@ class TestLlmResponsibilityDiscipline:
                 # _apply_null_defaults no longer hand-enumerates container shapes.
                 "_unwrap_optional",
                 "_descend_null_defaults",
+                "_apply_null_defaults",
+                # neograph-5s8f6: the structured path's entry into that SAME
+                # coercion. Pure -- it re-validates the payload the provider
+                # already emitted, never re-prompts.
+                "recover_null_defaults",
             }
         ),
         "_llm_render.py": frozenset(
@@ -399,7 +416,13 @@ class TestLlmResponsibilityDiscipline:
         # rationale at the call site. The eight per-site type_display_name()
         # calls it replaced were 1:1, not additive. Load-bearing assertion is
         # the name allowlist above, as ever.
-        "_llm_retry.py": 698,  # 698 actual — at ceiling
+        # neograph-5s8f6: 698 -> 550. A REAL shrink, not a raise: the null-default
+        # cluster (150 lines) moved out to _null_defaults.py because the module was
+        # AT its ceiling and the structured path needed to reach the same coercion.
+        # Ratcheted down to the new actual so the space cannot be silently re-filled.
+        "_llm_retry.py": 550,  # 548 actual
+        # neograph-5s8f6: the extracted cluster plus recover_null_defaults.
+        "_null_defaults.py": 250,  # 246 actual
         # neograph-v569: 310 -> 445. The public standalone compile_prompt landed
         # here (its change axis) with a thorough public docstring, a shared
         # render-then-compile core (_render_and_compile, which render_prompt now
@@ -418,7 +441,14 @@ class TestLlmResponsibilityDiscipline:
         # neograph-zcxd: 220 -> 235. _classify_lc_result now discriminates a
         # ValidationError parsing_error (weak decode -> Failed, retryable) from the
         # silent parsed=None (stays Raw); IncludeRawCompat also catches ValidationError.
-        "_llm_structured_compat.py": 235,
+        # neograph-5s8f6: 235 -> 245. A RAISE, and the only one in this change --
+        # recorded rather than golfed away. _classify_lc_result now offers the
+        # ValidationError arm to the shared null-default coercion before calling it
+        # a failure, which is +9 lines (one import, the call and its guarded return,
+        # and the five-line rationale). Net across the LLM vertical this change is
+        # -139 budget lines, because _llm_retry.py ratchets 698 -> 550 above. Zero
+        # new top-level names here; the recovery logic lives in _null_defaults.py.
+        "_llm_structured_compat.py": 245,
     }
 
     def _top_level_defs(self, path: pathlib.Path) -> set[str]:
@@ -1577,7 +1607,9 @@ class TestDefaultFactoryCoercionIsGuarded:
 
     def test_apply_null_defaults_guards_default_factory(self):
         """Live tree: the coercion in _apply_null_defaults is TypeError-guarded."""
-        src = (SRC_DIR / "_llm_retry.py").read_text()
+        # neograph-5s8f6 moved _apply_null_defaults to _null_defaults.py; the guard
+        # follows the function, it does not relax.
+        src = (SRC_DIR / "_null_defaults.py").read_text()
         assert self._func_default_factory_is_typeerror_guarded(src, "_apply_null_defaults")
 
     def test_scanner_flags_bare_factory_call(self):
