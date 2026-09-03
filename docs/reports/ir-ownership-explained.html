@@ -71,6 +71,10 @@ blockquote{margin:18px 0;padding:2px 0 2px 18px;border-left:3px solid var(--acce
 
 <h1>IR ownership: answering “which value is meant” once</h1>
 <p class="sub">A proposed change to how neograph resolves data flow internally — the problem, the evidence, how other systems solve it, what we propose, and what it costs.</p>
+<div class="card key" style="margin-top:0">
+<h4>Superseded in two respects</h4>
+<p style="margin-bottom:0">Review changed the model after this page was written. Addresses now name <strong>ports</strong>, not members, matching Agent Spec's <code>source_output</code>; and <strong>naming layers on top</strong> of resolution as the answer to ambiguity, rather than being absent from it. Sections 5 and 8 below reflect the earlier model. The current design is <code>docs/design/port-addressed-dataflow-2026-09-03.md</code>; everything else on this page still holds.</p>
+</div>
 <p class="meta">
 neograph · branch <code>develop</code> · written 2026-08-27<br>
 Sources: <code>docs/design/ir-ownership-2026-08-27.md</code> (decision) and
@@ -364,6 +368,25 @@ LastPresent(fields)     # ordered candidates; take the last one PRESENT</code></
 </figure>
 
 <p>The earlier refusal experiment failed because it treated emergent ambiguity as authored — demanding a name the author cannot possibly know. With this taxonomy, the next “should this refuse?” question gets classified instead of re-argued.</p>
+
+<h3>5.6 Addresses name ports</h3>
+<p>A member can declare several outputs, and each becomes its own state field. So a member name does not identify a value:</p>
+<pre><code>outputs={"result": Claims, "tool_log": Log}   ->  settle_result, settle_tool_log
+output_from="settle"                          ->  which one?</code></pre>
+<p>Agent Spec solved this already. A <code>DataFlowEdge</code> carries <code>source_output</code> and <code>destination_input</code>, so its edges join ports. neograph adopts the same model, which also removes an expressiveness gap: without it, a node-addressed name cannot round-trip a port-addressed edge, and the importer discards the port information entirely.</p>
+
+<h3>5.7 Naming layers on top</h3>
+<p>Naming is the disambiguator, not the default. You declare as you do today, and you name a port when neograph tells you it needs one.</p>
+<table>
+<thead><tr><th>Declaration</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td>Unnamed, one candidate</td><td>Resolve once. Nothing changes for you.</td></tr>
+<tr><td>Unnamed, several candidates</td><td>Refuse at assembly. The message lists the ports and shows the named form.</td></tr>
+<tr><td>Named</td><td>Resolve to that port exactly.</td></tr>
+<tr><td>Named, type mismatch</td><td>Fail at assembly, naming the port and both types.</td></tr>
+</tbody>
+</table>
+<p>This is what makes refusal workable. The earlier experiment refused without offering a way out, so it broke correct programs. Requiring names everywhere stays rejected for the same reason: topology changes at run time, and a mesh member cannot know which peer hands it a value.</p>
 
 <h2 id="why">6. Why this is the right shape</h2>
 
