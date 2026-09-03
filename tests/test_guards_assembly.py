@@ -107,15 +107,22 @@ class TestCommandConstructionMonopoly:
 
     @staticmethod
     def _command_call_lines(path: pathlib.Path) -> list[int]:
-        try:
-            tree = ast.parse(path.read_text(), filename=str(path))
-        except SyntaxError:
-            return []
-        hits: list[int] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Command":
-                hits.append(node.lineno)
-        return hits
+        """RE-POINTED at the shared detector (neograph-9axw6.1).
+
+        This walk used to be hand-rolled here. Step 0 needed the same
+        ast.Call -> ast.Name shape to confine Source/PortRef construction, and
+        copying it would have made two detectors answering one question -- the
+        duplicated-authority disease that epic removes. So the walk moved to
+        tests/guard_ast.py and both callers read it: the count of detectors is
+        1 -> 1, a re-key rather than a widening.
+
+        Behaviour is unchanged: same single name, same AST shape. The shared
+        helper additionally tolerates UnicodeDecodeError and returns sorted
+        lines, neither of which alters this guard's result.
+        """
+        from tests.guard_ast import construction_call_lines
+
+        return construction_call_lines(path, ("Command",))
 
     def test_command_constructed_only_in_allowed_files(self):
         violations: list[str] = []

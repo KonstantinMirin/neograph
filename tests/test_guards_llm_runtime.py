@@ -2741,3 +2741,222 @@ class TestTierResolutionAndLlmConfigConstructionMonopolies:
         """Non-vacuity: a predicate matching nothing would make both assertions
         above pass for the wrong reason."""
         assert self._call_sites(lambda f: isinstance(f, ast.Name) and f.id == "_get_llm")
+
+
+class TestSourceConstructionMonopoly:
+    """``Source``/``PortRef`` values are constructible ONLY in ``_ir_normalize.py``,
+    and the ``Source`` set is extensible ONLY in ``_ir_source.py``.
+
+    Step 0 of ``neograph-9axw6`` (design section 9, "Construction, by ban"). One
+    resolver owns "which upstream value is meant"; a consumer that could FABRICATE
+    a resolution could re-derive one, which is the disease the epic removes.
+
+    WHY THIS IS A SIBLING OF G3 AND NOT AN EXTENSION OF IT. The ticket says
+    "extend the existing guard rather than writing a parallel one", and this
+    deviates -- deliberately, recorded on ``neograph-9axw6.1``. G3
+    (``TestNormalizeIrIsSoleIrFieldWriter``) is about field WRITES: its name,
+    docstring, ``IR_FIELDS`` and ``ALLOWED_PREPOP`` (a file -> FIELDS map) all encode
+    that. A construction ban is a different AST shape, a flat file allowlist, and a
+    different scan scope (``rglob`` vs G3's ``glob`` at its other methods). Folding
+    them would put two answers to "what tree do we scan" in one class. The ticket's
+    INTENT -- one authority, not a parallel one -- is honoured differently: the
+    detector itself is SHARED (``tests/guard_ast.py``) and G1 is RE-POINTED at it,
+    so this guard adds no new hand-rolled walk.
+
+    Measured correction (``neograph-7277f``): "the count goes 1 -> 1" -- the claim
+    first written here -- was too narrow. 17 test modules hand-roll such a walk and
+    three re-ask G1's own ``Command`` question, so the count went 4 -> 3 plus a
+    shared helper, not 1 -> 1. Consolidating the rest is filed, not claimed.
+
+    HONEST STRENGTH. This is an AST ban, tier 2 of three (see ``_ir_source``'s module
+    docstring). It reads source text, so unlike the ``__init_subclass__`` tripwire it
+    cannot be spoofed -- but it is detection, not impossibility. The genuinely
+    subtractive tier is step 3's removal of ``StateBus.keys()``. Design section 13
+    already rejected "a lint or AST guard as the mechanism" on the grounds that such
+    a guard existed and five instances happened anyway; this guard is the floor, not
+    the fix.
+    """
+
+    # Every constructible name in _ir_source.py. Asserted total against the module
+    # below, so an eighth variant cannot be added without failing here.
+    SOURCE_TYPES = frozenset(
+        {
+            "PortRef",
+            "Peer",
+            "Port",
+            "EachItem",
+            "LoopCarry",
+            "HandoffChannel",
+            "LastPresent",
+            "Accumulated",
+            "Candidate",
+            "Resolved",
+            "Unresolved",
+        }
+    )
+
+    # The sealed base plus every variant: subclassing any of them extends the set.
+    SEALING_NAMES = frozenset({"_SealedSource"}) | SOURCE_TYPES
+
+    # POSIX RELATIVE paths, never basenames: under rglob a basename allowlist
+    # silently permits <anysubpackage>/_ir_normalize.py.
+    SRC_CONSTRUCTION_ALLOWED = frozenset({"_ir_normalize.py"})
+    SRC_SEALING_ALLOWED = frozenset({"_ir_source.py"})
+    TESTS_CONSTRUCTION_ALLOWED = frozenset({"test_ir_source.py"})
+
+    @staticmethod
+    def _src_root() -> pathlib.Path:
+        return SRC_DIR
+
+    @staticmethod
+    def _tests_root() -> pathlib.Path:
+        return pathlib.Path(__file__).resolve().parent
+
+    def test_source_types_are_constructed_only_in_the_normalizer(self):
+        from tests.guard_ast import construction_call_lines, iter_py_files, rel_posix
+
+        root = self._src_root()
+        violations: list[str] = []
+        for py_file in iter_py_files(root):
+            rel = rel_posix(py_file, root)
+            if rel in self.SRC_CONSTRUCTION_ALLOWED or rel in self.SRC_SEALING_ALLOWED:
+                continue
+            for lineno in construction_call_lines(py_file, self.SOURCE_TYPES):
+                violations.append(f"  {rel}:{lineno}: constructs a Source/PortRef outside the normalizer")
+        assert violations == [], (
+            f"\n{len(violations)} Source/PortRef construction(s) outside "
+            f"{sorted(self.SRC_CONSTRUCTION_ALLOWED)}:\n"
+            + "\n".join(violations)
+            + "\n\nRead the resolution the normalizer stamped; do not mint one. "
+            "A consumer that can fabricate a Resolution can re-derive it, which is "
+            "the disease neograph-9axw6 removes."
+        )
+
+    def test_the_source_set_is_extended_only_in_its_defining_module(self):
+        """Subclassing a variant is the OTHER way to extend the closed set, and the
+        one the runtime tripwire cannot stop: a class body can set
+        ``__module__ = "neograph._ir_source"`` in one line and pass
+        ``__init_subclass__``. Source text cannot be spoofed."""
+        from tests.guard_ast import iter_py_files, rel_posix, subclass_site_lines
+
+        root = self._src_root()
+        violations: list[str] = []
+        for py_file in iter_py_files(root):
+            rel = rel_posix(py_file, root)
+            if rel in self.SRC_SEALING_ALLOWED:
+                continue
+            for lineno in subclass_site_lines(py_file, self.SEALING_NAMES):
+                violations.append(f"  {rel}:{lineno}: subclasses a Source variant")
+        assert violations == [], (
+            f"\n{len(violations)} Source subclass site(s) outside "
+            f"{sorted(self.SRC_SEALING_ALLOWED)}:\n"
+            + "\n".join(violations)
+            + "\n\nSource is a CLOSED set. A new arrival mechanism extends "
+            "_ir_source.py -- which makes it visible and forces every "
+            "source_channel_kind consumer to be taught -- rather than being "
+            "subclassed in elsewhere. See design section 4.1's growth rule."
+        )
+
+    def test_tests_do_not_construct_source_types_outside_its_own_unit_test(self):
+        from tests.guard_ast import construction_call_lines, iter_py_files, rel_posix
+
+        root = self._tests_root()
+        violations: list[str] = []
+        for py_file in iter_py_files(root):
+            rel = rel_posix(py_file, root)
+            if rel in self.TESTS_CONSTRUCTION_ALLOWED:
+                continue
+            for lineno in construction_call_lines(py_file, self.SOURCE_TYPES):
+                violations.append(f"  tests/{rel}:{lineno}: constructs a Source/PortRef")
+        assert violations == [], (
+            f"\n{len(violations)} Source/PortRef construction(s) in tests outside "
+            f"{sorted(self.TESTS_CONSTRUCTION_ALLOWED)}:\n" + "\n".join(violations)
+        )
+
+    # ---- non-vacuity controls -------------------------------------------------
+    # At step 0 NOTHING constructs a Source, so the three bans above range over an
+    # EMPTY set. That is the neograph-e8wiv shape AGENTS.md bans ("never write an
+    # invariant as an empty parametrize"; a passing ratchet proves nothing). The
+    # rule is therefore exercised against simulated non-empty input, and -- unlike
+    # G1's two slip tests -- the SCAN SCOPE and the ALLOWLIST are controlled too,
+    # because those are the two places G1/G3 are already broken.
+
+    def test_detector_flags_a_stray_construction(self, tmp_path):
+        """Positive control: a construction in a non-allowlisted file is detected."""
+        from tests.guard_ast import construction_call_lines
+
+        bad = tmp_path / "stray.py"
+        bad.write_text(
+            "from neograph._ir_source import Peer, PortRef\n"
+            "ref = PortRef('a')\n"
+            "x = Peer(ref=ref)\n"
+        )
+        # BOTH constructions are hits, on their own lines. (Written on one line
+        # first, which returned [2, 2] -- the detector counting each Call
+        # separately is correct, and the one-line form hid that from the reader.)
+        assert construction_call_lines(bad, self.SOURCE_TYPES) == [2, 3]
+
+    def test_detector_ignores_a_construction_named_only_in_a_docstring(self, tmp_path):
+        """Negative control: prose mentioning the constructor is not a call."""
+        from tests.guard_ast import construction_call_lines
+
+        ok = tmp_path / "doc.py"
+        ok.write_text('"""We could return Peer(ref=PortRef(x)) here but do not."""\nY = 1\n')
+        assert construction_call_lines(ok, self.SOURCE_TYPES) == []
+
+    def test_detector_flags_a_subclass_site(self, tmp_path):
+        """Positive control for the sealing half, including the spoofed
+        ``__module__`` that defeats the runtime tripwire."""
+        from tests.guard_ast import subclass_site_lines
+
+        bad = tmp_path / "spoof.py"
+        bad.write_text(
+            "from neograph._ir_source import Peer\n"
+            "class Sneaky(Peer):\n"
+            '    __module__ = "neograph._ir_source"\n'
+        )
+        assert subclass_site_lines(bad, self.SEALING_NAMES) == [2]
+
+    def test_the_scan_reaches_subpackages_not_just_the_top_level(self):
+        """SCOPE control -- the only test that catches a regression from ``rglob``
+        back to ``glob``. ``src/neograph/testing/`` is invisible to G1 and G3 today
+        for exactly that reason, so the ban would be dodgeable by putting the
+        construction in a subpackage."""
+        from tests.guard_ast import iter_py_files, rel_posix
+
+        root = self._src_root()
+        scanned = {rel_posix(f, root) for f in iter_py_files(root)}
+        subpackage_files = {rel for rel in scanned if "/" in rel}
+        assert subpackage_files, (
+            "the scan found no files below the top level, so it is glob-shaped and "
+            "a construction in src/neograph/testing/ would be invisible"
+        )
+        assert any(rel.startswith("testing/") for rel in scanned), (
+            "src/neograph/testing/ is not in the scanned set -- the scan regressed "
+            f"to top-level-only. Saw {len(scanned)} files, {len(subpackage_files)} nested."
+        )
+
+    def test_every_allowlist_entry_names_a_file_that_exists(self):
+        """ALLOWLIST control: an entry pointing at a nonexistent file is silent
+        permission for a path nothing checks -- the same no-silent-headroom
+        discipline ``test_guards_file_size`` enforces with exact ceilings."""
+        src, tests = self._src_root(), self._tests_root()
+        missing = [rel for rel in self.SRC_CONSTRUCTION_ALLOWED | self.SRC_SEALING_ALLOWED if not (src / rel).is_file()]
+        missing += [f"tests/{rel}" for rel in self.TESTS_CONSTRUCTION_ALLOWED if not (tests / rel).is_file()]
+        assert missing == [], f"allowlist entries with no file on disk: {missing}"
+
+    def test_the_banned_name_set_is_total_over_the_module(self):
+        """SOURCE_TYPES must cover every constructible public name in
+        ``_ir_source``, so an eighth variant cannot slip in unbanned."""
+        import neograph._ir_source as mod
+
+        # Source and Resolution are type ALIASES over the variants -- there is no
+        # Source(...) to ban, so they are excluded by name rather than by a
+        # heuristic that would silently drop a future real variant.
+        aliases = {"Source", "Resolution"}
+        exported = {n for n in mod.__all__ if n[0].isupper()} - aliases
+        assert exported == self.SOURCE_TYPES, (
+            "SOURCE_TYPES has drifted from _ir_source.__all__.\n"
+            f"  only in module:    {sorted(exported - self.SOURCE_TYPES)}\n"
+            f"  only in guard set: {sorted(self.SOURCE_TYPES - exported)}"
+        )

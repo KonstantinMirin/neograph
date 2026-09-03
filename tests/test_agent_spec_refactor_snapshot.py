@@ -247,6 +247,12 @@ pytest.importorskip("pyagentspec")
 
 from neograph._agent_spec import _MARK_MODIFIER, _MARK_VARIANT, to_agent_spec  # noqa: E402
 
+# The canonical fold lived here while it had one caller. It has two now (this
+# golden and tests/test_agent_spec_differential_export.py), so it moved to the
+# shared tests/ reader module -- a PURE move, proven by this file staying
+# identically green across it (neograph-9axw6.1, plan item 4).
+from tests.agent_spec_canonical import _canonicalize  # noqa: E402
+
 # Reuse the matrix's mechanically-derived cell builder (NOT hand-typed constructs
 # -- the builder IS the factory, per the test conventions' factory/builder rule).
 from tests.test_agent_spec_matrix import CELLS, GREEN, build_cell  # noqa: E402
@@ -310,58 +316,6 @@ REPRESENTATIVE_CELLS: tuple[str, ...] = (
     "scripted-operator-dict",
     "think-operator-single",
 )
-
-
-def _collect_referenced_components(obj: Any, into: dict[str, Any]) -> None:
-    """Merge every ``$referenced_components`` map in the dump into one.
-
-    A subflow-bearing node (``MapNode``, ``FlowNode``) nests its own map, so the
-    top-level one is incomplete. UUID keys are globally unique, so merging is
-    collision-free (neograph-tjpn4 -- without this, EACH cells cannot be
-    canonicalized: their refs dangle and the nested UUID-keyed map itself makes
-    the tree non-deterministic).
-    """
-    if isinstance(obj, dict):
-        nested = obj.get("$referenced_components")
-        if isinstance(nested, dict):
-            into.update(nested)
-        for value in obj.values():
-            _collect_referenced_components(value, into)
-    elif isinstance(obj, list):
-        for item in obj:
-            _collect_referenced_components(item, into)
-
-
-def _canonicalize(flow: Any) -> Any:
-    """Fold ``flow.to_dict()`` into a deterministic, id-free tree.
-
-    Resolves every ``$component_ref`` inline against the MERGED
-    ``$referenced_components`` maps (top-level plus every nested subflow map)
-    and drops every random-UUID ``id`` field, plus the ``$referenced_components``
-    key at every depth. A ``$cycle``/``$unresolved_ref`` sentinel would surface a
-    structural surprise loudly rather than silently corrupt the snapshot
-    (asserted absent below).
-    """
-    d = flow.to_dict()
-    refs: dict[str, Any] = {}
-    _collect_referenced_components(d, refs)
-
-    def resolve(obj: Any, seen: frozenset[str]) -> Any:
-        if isinstance(obj, dict):
-            if set(obj.keys()) == {"$component_ref"}:
-                ref_id = obj["$component_ref"]
-                if ref_id in seen:
-                    return {"$cycle": refs.get(ref_id, {}).get("name", ref_id)}
-                target = refs.get(ref_id)
-                if target is None:
-                    return {"$unresolved_ref": ref_id}
-                return resolve(target, seen | {ref_id})
-            return {k: resolve(v, seen) for k, v in obj.items() if k not in ("id", "$referenced_components")}
-        if isinstance(obj, list):
-            return [resolve(item, seen) for item in obj]
-        return obj
-
-    return resolve(d, frozenset())
 
 
 def _load_golden() -> dict[str, Any]:
