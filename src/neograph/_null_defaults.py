@@ -105,6 +105,31 @@ def _is_stringly_null(val: Any, annotation: Any) -> bool:
     return low == "" and not any(t is str for t in non_none)
 
 
+def _sequence_item_annotation(annotation: Any) -> Any | None:
+    """The ONE element annotation of a homogeneous sequence, else ``None``.
+
+    JSON decodes every array to a Python ``list``, so which interiors the
+    descent can reach is decided by the ANNOTATION, not by the runtime
+    container: ``list[X]``, ``set[X]``, ``frozenset[X]``, the variadic
+    ``tuple[X, ...]`` and a fixed ``tuple[X, X]`` all have a single element type
+    and are descended.
+
+    ``tuple[A, B]`` has none, and is left alone. That heterogeneous case is what
+    the original "tuples are out of scope" exclusion was actually about --
+    ``tuple[X, ...]`` is a list with a different constructor, and it is what a
+    FROZEN Pydantic domain model uses, which is the same reason 0.7.9 widened
+    ``Each`` to accept it. neograph-sjwny.
+    """
+    from typing import get_args, get_origin
+
+    if get_origin(annotation) not in (list, set, frozenset, tuple):
+        return None
+    args = [a for a in get_args(annotation) if a is not Ellipsis]
+    if not args:
+        return None
+    return args[0] if all(a == args[0] for a in args) else None
+
+
 def _descend_null_defaults(val: Any, annotation: Any) -> None:
     """Recurse :func:`_apply_null_defaults` into any BaseModel dict nested within
     *val*, driven by *annotation*'s container shape.
@@ -140,11 +165,11 @@ def _descend_null_defaults(val: Any, annotation: Any) -> None:
                     _descend_null_defaults(item, args[1])
         return
 
-    if isinstance(val, list) and get_origin(annotation) is list:
-        args = get_args(annotation)
-        if args:
+    if isinstance(val, list):
+        item_annotation = _sequence_item_annotation(annotation)
+        if item_annotation is not None:
             for item in val:
-                _descend_null_defaults(item, args[0])
+                _descend_null_defaults(item, item_annotation)
 
 
 def _apply_null_defaults(data: dict, model: type[BaseModel]) -> None:

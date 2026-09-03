@@ -309,6 +309,13 @@ class TestLlmResponsibilityDiscipline:
                 # models/lists, dict-of-models, and list-of-optional-models so
                 # _apply_null_defaults no longer hand-enumerates container shapes.
                 "_unwrap_optional",
+                # neograph-sjwny: the descent's shape dispatcher covered
+                # BaseModel/list/dict and declared tuples out of scope on a
+                # reason that only holds for HETEROGENEOUS tuples.
+                # _sequence_item_annotation is the single homogeneous-sequence
+                # classifier -- list/set/frozenset/tuple[X, ...]/tuple[X, X] in,
+                # tuple[A, B] still out.
+                "_sequence_item_annotation",
                 "_descend_null_defaults",
                 "_apply_null_defaults",
                 # neograph-5s8f6: the structured path's entry into that SAME
@@ -422,7 +429,11 @@ class TestLlmResponsibilityDiscipline:
         # Ratcheted down to the new actual so the space cannot be silently re-filled.
         "_llm_retry.py": 550,  # 548 actual
         # neograph-5s8f6: the extracted cluster plus recover_null_defaults.
-        "_null_defaults.py": 250,  # 246 actual
+        # neograph-sjwny (same release, before the module first shipped): plus
+        # _sequence_item_annotation, which widened the descent from list-only to
+        # every HOMOGENEOUS sequence. Not a ratchet raise on shipped code -- the
+        # module is new in 0.7.11 and this is its first recorded size.
+        "_null_defaults.py": 275,  # 271 actual
         # neograph-v569: 310 -> 445. The public standalone compile_prompt landed
         # here (its change axis) with a thorough public docstring, a shared
         # render-then-compile core (_render_and_compile, which render_prompt now
