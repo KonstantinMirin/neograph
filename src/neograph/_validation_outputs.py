@@ -139,7 +139,7 @@ def _check_model_markers(
                     location=None,
                 )
 
-        strip, carried = output_markers(field_info)
+        strip, carried = output_markers(field_info, field_label=f"{model.__name__}.{field_name}")
         if not strip:
             continue
 

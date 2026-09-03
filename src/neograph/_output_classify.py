@@ -98,11 +98,36 @@ class Carried:
         return f"Carried({self.path!r})"
 
 
-def _is_carried(field_info: FieldInfo) -> Carried | None:
-    for m in field_info.metadata:
-        if isinstance(m, Carried):
-            return m
-    return None
+def _is_carried(field_info: FieldInfo, *, field_label: str = "a field") -> Carried | None:
+    """The one ``Carried`` marker on a field, or ``None``.
+
+    REFUSES two markers instead of taking the first. This returned
+    ``metadata[0]`` and discarded the rest, so an author who wrote two ``Carried``
+    paths on one field got the one that happened to be listed first and no
+    indication a choice had been made -- the same fail-soft shape as the type scan
+    this epic removes: an answer arriving by POSITION rather than by contract.
+
+    A foreign bag is the one place neograph cannot close by construction. User code
+    populates ``FieldInfo.metadata`` before neograph ever sees it, so the set cannot
+    be made unrepresentable the way ``Source`` is. Every ambiguity there is
+    AUTHORED, which is exactly the kind design section 5 says to refuse -- so the
+    bag crosses the boundary once, through a parser that refuses rather than
+    guesses. neograph-22jvj.
+    """
+    markers = [m for m in field_info.metadata if isinstance(m, Carried)]
+    if len(markers) > 1:
+        paths = [getattr(m, "path", None) or repr(m) for m in markers]
+        raise ConstructError.build(
+            f"{field_label} carries {len(markers)} Carried markers",
+            expected="at most one Carried marker per field",
+            found=f"paths: {paths}",
+            hint=(
+                "Two markers on one field is authored ambiguity: only one value can be "
+                "spliced in, and taking the first silently is how the wrong one shipped. "
+                "Remove the marker you do not mean."
+            ),
+        )
+    return markers[0] if markers else None
 
 
 def _is_output_excluded(field_info: FieldInfo) -> bool:
@@ -110,14 +135,14 @@ def _is_output_excluded(field_info: FieldInfo) -> bool:
     return any(m is ExcludeFromOutput or isinstance(m, ExcludeFromOutput) for m in field_info.metadata)
 
 
-def output_markers(field_info: FieldInfo) -> tuple[bool, Carried | None]:
+def output_markers(field_info: FieldInfo, *, field_label: str = "a field") -> tuple[bool, Carried | None]:
     """Single predicate BOTH the text renderer (``describe_type``) and the
     schema projector (``project_output_model``) consume: ``(strip_from_output,
     carried_marker_or_None)`` for one field. ``strip_from_output`` is True for
     either ``ExcludeFromOutput`` or ``Carried`` -- both are fields the LLM
     must not be asked to produce.
     """
-    carried = _is_carried(field_info)
+    carried = _is_carried(field_info, field_label=field_label)
     excluded = _is_output_excluded(field_info)
     return (excluded or carried is not None), carried
 
