@@ -28,7 +28,7 @@ from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
-__all__ = ["declared_output_fields", "fan_out_candidates", "port_source_field", "single_type_candidates"]
+__all__ = ["declared_output_fields", "fan_out_candidates", "loop_carry_dest_key", "port_source_field", "single_type_candidates"]
 
 
 def declared_output_fields(item: ConstructItem) -> set[str]:
@@ -143,3 +143,66 @@ def single_type_candidates(
     return [
         field for field, prod_type, _producer in preceding if prod_type is not None and compatible(prod_type, input_type)
     ]
+
+
+def _subclass_either_way(produced: object, declared: object) -> bool:
+    """Bidirectional subclass test -- the default carry-compatibility predicate.
+
+    Lives here so no caller has to reach across a layer for one. The runtime
+    (``_input_shape``) must not import the validation cluster, and the Agent Spec
+    lowering must not be imported by the runtime, so a shared default is the only
+    arrangement in which all three read ONE derivation.
+
+    Validation passes its richer ``_types_compatible`` instead, which understands
+    generics and unions; the two agree on the plain-class case that a loop carry is.
+    """
+    return (
+        isinstance(declared, type)
+        and isinstance(produced, type)
+        and (issubclass(produced, declared) or issubclass(declared, produced))
+    )
+
+
+def loop_carry_dest_key(
+    node: Node,
+    compatible: Callable[[object, object], bool] = _subclass_either_way,
+) -> str | None:
+    """Which dict-form input key receives a Loop's own fed-back output.
+
+    ONE derivation of the loop carry's DESTINATION. Three sites answered this
+    differently and each believed one of the others owned it:
+
+    * the validator proved SOME slot was type-compatible and discarded which,
+      under a comment saying "the compiler wires the specific slot";
+    * the compiler does not -- the runtime picks at execution time by probing
+      which siblings are present and falling back to ``next(iter(by_name))``,
+      a POSITIONAL guess;
+    * the Agent Spec lowering took the first ``issubclass`` match with a ``break``,
+      under a comment claiming it mirrored the upstream-resolution scan.
+
+    Three answers to one question, so validation could pass on one slot while the
+    run bound another and the export drew a third.
+
+    The rule, which is the one the exporter and the runtime already shared before
+    diverging: the node's OWN field name if it appears among the input keys --
+    a self-reference is named, not guessed -- otherwise the first key whose
+    declared type can hold the fed-back output. ``None`` when the inputs are not
+    dict-form, where there is no key to choose and the single value IS the carry.
+    """
+    ni = normalize_inputs(node.inputs)
+    if not ni.is_dict_form:
+        return None
+    self_field = field_name_for(node.name)
+    if self_field in ni.by_name:
+        return self_field
+    no = normalize_outputs(node.outputs)
+    if no.is_none:
+        return None
+    # ``primary`` for dict-form outputs too: a Loop feeds back the PRIMARY output,
+    # which is the value the carry list holds (primary_output_field states the same
+    # rule for the field name). Treating dict-form outputs as having no destination
+    # was over-strict -- it refused three working dict-form-output loops.
+    for key, declared in ni.by_name.items():
+        if compatible(no.primary, declared):
+            return key
+    return None

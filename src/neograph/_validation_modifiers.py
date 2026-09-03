@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, get_args, get_origin
 
 from neograph._hints import resolve_hints
+from neograph._ir_fields import loop_carry_dest_key
 from neograph._normalize import normalize_outputs
 from neograph._validation_types import _fmt_type, _source_location, _types_compatible
 from neograph.errors import ConstructError
@@ -50,11 +51,21 @@ def validate_loop_self_edge(node: Node) -> None:
 
     # Dict-form inputs: the back-edge feeds the node's output back as one
     # of its own inputs.  Check if the output is compatible with ANY input
-    # value type — the compiler wires the specific slot.
+    # value type.
+    #
+    # The claim that stood here -- "the compiler wires the specific slot" -- was
+    # FALSE and is deleted rather than reworded. The compiler wires no slot: the
+    # runtime picked at execution time by probing which siblings were present and
+    # falling back to a POSITIONAL next(iter(...)), and the Agent Spec lowering took
+    # a first-type-match of its own. Three answers, so validation could pass on one
+    # slot while the run bound another and the export drew a third -- neograph-af8ro.
+    #
+    # This now asks the ONE derivation which key is the carry destination, and
+    # refuses when there is none. Proving SOME slot is compatible and discarding
+    # which is the shape this epic exists to remove.
     if isinstance(input_type, dict):
-        for _key, expected in input_type.items():
-            if _types_compatible(output_type, expected):
-                return
+        if loop_carry_dest_key(node, _types_compatible) is not None:
+            return
         # No compatible input slot found.
         type_list = ", ".join(f"{k}={_fmt_type(v)}" for k, v in input_type.items())
         raise ConstructError.build(

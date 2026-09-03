@@ -5,6 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, assert_never
 
+from neograph._ir_fields import loop_carry_dest_key
 from neograph._normalize import normalize_inputs, primary_output_field
 from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
@@ -67,24 +68,28 @@ def _extract_loop_reentry(state: StateBus, node: Node) -> Any:
         first_key = next(iter(by_name))
         return {first_key: latest}
 
-    # Multi-key dict: self-reference key gets latest, others read from state.
+    # Multi-key dict: the CARRY DESTINATION is resolved by the one shared derivation,
+    # not guessed. This used to place `latest` into whichever key failed a presence
+    # probe and, if none did, fall back to next(iter(by_name)) -- a POSITIONAL guess
+    # that could put the carry in the wrong slot while validation had passed on a
+    # different one and the export had drawn a third. neograph-af8ro.
+    dest = loop_carry_dest_key(node)
     result = {}
-    node_own_field = field_name_for(node.name)
-    placed_latest = False
     for key, expected_type in by_name.items():
-        state_key = field_name_for(key)
-        # StateBus.get optional (via read_upstream required=False): loop-bootstrap —
-        # sibling keys may not have been re-produced this iteration; documented
-        # sentinel for "use latest".
-        upstream_val = read_upstream(state, key, expected_type, required=False, node_label=node.name)
-        if upstream_val is not None and state_key != node_own_field:
-            result[key] = upstream_val
-        else:
+        if key == dest:
             result[key] = latest
-            placed_latest = True
-    if not placed_latest:
-        first_key = next(iter(by_name))
-        result[first_key] = latest
+            continue
+        # StateBus.get optional (via read_upstream required=False): loop-bootstrap —
+        # sibling keys may not have been re-produced this iteration; the carry's
+        # latest is the documented sentinel for an absent sibling.
+        upstream_val = read_upstream(state, key, expected_type, required=False, node_label=node.name)
+        result[key] = upstream_val if upstream_val is not None else latest
+    if dest is None:
+        # No resolvable destination: keep the historical behaviour rather than
+        # dropping the carry, and say so instead of letting a positional pick look
+        # deliberate. Validation refuses a dict-form loop with no compatible slot, so
+        # this is reachable only for shapes it does not cover.
+        result[next(iter(by_name))] = latest
     return result
 
 

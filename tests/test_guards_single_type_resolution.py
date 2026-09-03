@@ -46,14 +46,14 @@ _ALLOWED: dict[str, str] = {
     # The sub-construct PORT twin, still open as neograph-5suot unknown #5. It is
     # listed rather than fixed because it is a different boundary with its own
     # ticket -- not because a whole-state scan is acceptable there.
-    # neograph-af8ro (open, P1): the Loop self-feedback destination key is picked
-    # by first type match over the node's declared inputs. Same disease, its own
-    # ticket and its own repro (a Loop with two same-typed input keys), so it is
-    # DEFERRED here rather than fixed inside an unrelated bug's blast radius.
-    "_agent_spec_modifier_lowering.py": (
-        "neograph-af8ro: Loop self-feedback dest_key resolved by first type match "
-        "over declared inputs. Deferred with a filed ticket, not accepted."
-    ),
+    # neograph-af8ro ROW DELETED by neograph-9axw6.6, not relaxed. The Loop
+    # self-feedback destination is no longer picked by first type match: the three
+    # sites that each answered it -- this lowering, the validator, and the runtime's
+    # positional next(iter(...)) fallback -- now read one derivation
+    # (_ir_fields.loop_carry_dest_key). The guard itself demanded this deletion
+    # ("the exemption outlived its reason; delete the row"), which is the allowlist
+    # shrinking because the architecture got right rather than because a rule was
+    # relaxed.
     "_subconstruct.py": (
         "_scan_subgraph_input (neograph-5suot #5, open) and _scan_subgraph_output, "
         "whose eligible=None arm is the sanctioned Portal mode-(b) fallback: the "

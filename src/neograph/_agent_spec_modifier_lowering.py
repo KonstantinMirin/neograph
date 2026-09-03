@@ -55,11 +55,11 @@ from neograph._agent_spec_placeholders import (
     property_title_to_prompt_path,
 )
 from neograph._ir_branch import _BranchNode
+from neograph._ir_fields import loop_carry_dest_key
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
 from neograph.modifiers import Each, Loop, Operator, Oracle
-from neograph.naming import field_name_for
 from neograph.node import Node
 
 if TYPE_CHECKING:
@@ -403,16 +403,10 @@ def _lower_loop(
     # matches the fed-back output).
     ni = normalize_inputs(_item_inputs(node))
     no_self = normalize_outputs(_item_outputs(node))
-    dest_key: str | None = None
-    if ni.is_dict_form and not no_self.is_dict_form:
-        self_field = field_name_for(node.name)
-        if self_field in ni.by_name:
-            dest_key = self_field
-        else:
-            for key, typ in ni.by_name.items():
-                if isinstance(typ, type) and (issubclass(no_self.primary, typ) or issubclass(typ, no_self.primary)):
-                    dest_key = key
-                    break
+    # One derivation, shared with the validator and the runtime. This was a
+    # first-issubclass-match-with-a-break under a comment claiming it mirrored the
+    # upstream-resolution scan; it did not, and the runtime picked differently.
+    dest_key = loop_carry_dest_key(node) if isinstance(node, Node) else None
 
     # Option F consumer sweep neograph-cbpyx: when the loop body is a
     # placeholder-translated LLM node, its declared inputs are flat ${var}->{{ flat }}

@@ -87,7 +87,7 @@ ALLOWLIST: dict[str, int] = {
     # close_sub_flow -- the ticket ADDED behaviour here and the file still shrank,
     # because the boundary now belongs to the module that already owned the
     # outermost one.
-    "_agent_spec_modifier_lowering.py": 648,
+    "_agent_spec_modifier_lowering.py": 642,
     "_oracle.py": 517,
     "_tool_loop.py": 548,
     "_wiring.py": 773,
