@@ -202,6 +202,75 @@ class TestTwoItemProducersResolveByDeclarationOrder:
         assert result.get("branch") == Case(label="SETTLED", readings=5)
 
 
+class TestTheNamedPortMustProduceTheBoundaryType:
+    """neograph-x8i3s: ``output_from`` is stored on the IR and then not honoured
+    by the boundary check.
+
+    ``check_output_from`` verifies the NAME resolves to exactly one item and stops
+    there; the boundary-satisfaction check downstream scans EVERY internal
+    producer with no idea a port was named. So when the named member's output type
+    does not match ``output=`` and a DIFFERENT member happens to match, assembly
+    accepts and the run silently falls back to the type scan -- the disambiguator
+    is ignored in exactly the situation it exists for.
+
+    The two-producer shape is load-bearing. With a single producer the construct
+    IS refused, but for the wrong reason ('no internal node produces a compatible
+    type'), so a one-producer test passes without the fix.
+    """
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "neograph-x8i3s, closed by neograph-9axw6.2 (Step 1 of the port-addressed "
+            "data flow epic): the boundary-satisfaction check does not read output_from, "
+            "so a named port whose type mismatches is accepted when a peer happens to "
+            "match. Remove this marker when Step 1 lands -- strict=True turns this RED "
+            "the moment it does."
+        ),
+    )
+    def test_a_named_member_whose_type_mismatches_is_refused_despite_a_matching_peer(self) -> None:
+        _register_bodies()
+        register_scripted("mo_seed_out", lambda _i, _c: Seed(tag="s"))
+
+        with pytest.raises(ConstructError) as exc:
+            Construct(
+                "branch",
+                input=Seed,
+                output=Case,
+                output_from="settle",
+                nodes=[
+                    Node.scripted("other", fn="mo_settle", inputs=Seed, outputs=Case),
+                    Node.scripted("settle", fn="mo_seed_out", inputs=Case, outputs=Seed),
+                ],
+            )
+
+        msg = str(exc.value)
+        assert "settle" in msg, f"the message must name the member that was NAMED. Got: {msg}"
+        assert "Seed" in msg, f"the message must state the named member's type. Got: {msg}"
+        assert "Case" in msg, f"the message must state the declared boundary type. Got: {msg}"
+        assert "no internal node produces" not in msg, (
+            "neograph-x8i3s: refusing with the type-scan's message describes the wrong defect. "
+            f"The defect is that the member you NAMED produces something else. Got: {msg}"
+        )
+
+    def test_a_named_member_whose_type_matches_is_still_accepted(self) -> None:
+        """The guard against fixing this by refusing every ``output_from``."""
+        _register_bodies()
+        register_scripted("mo_second", lambda _i, _c: Case(label="SECOND", readings=1))
+        sub = Construct(
+            "branch",
+            input=Seed,
+            output=Case,
+            output_from="settle",
+            nodes=[
+                _settle_node(with_context=False),
+                Node.scripted("also_case", fn="mo_second", inputs=Case, outputs=Case),
+            ],
+        )
+
+        assert sub.output_from == "settle"
+
+
 class TestContextStaysForwardedAndMerelyBecomesIneligible:
     """review T1: every boundary assertion above can pass for the WRONG reason.
 
