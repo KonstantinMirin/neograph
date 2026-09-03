@@ -41,7 +41,8 @@ from neograph._construct_validation import (
 )
 from neograph._ir_branch import _BranchNode, iter_item_slots
 from neograph._ir_fields import declared_output_fields, fan_out_candidates
-from neograph._ir_protocols import ConstructItem
+from neograph._ir_protocols import ConstructItem, ConstructLike
+from neograph._ir_source import PortRef
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._sidecar import infer_oracle_gen_type
@@ -79,6 +80,56 @@ class IrNormalizer(Protocol):
     def apply(self, node: Node, peer_field_names: set[str]) -> dict[str, Any]:
         """Return the ``model_copy`` update dict for ``node`` (possibly empty)."""
         ...
+
+
+def resolve_output_from(construct: ConstructLike) -> PortRef | None:
+    """Resolve ``Construct.output_from`` to a PORT address, or ``None`` when unset.
+
+    The reader VALIDATION uses, and the seam step 2 stamps. Not yet the only one,
+    and saying otherwise here would be the false-parity citation this epic exists to
+    remove -- written by it.
+
+    Four sites hand-rolled ``getattr(construct, "output_from", None)`` and then made
+    their own member->field hop: validation, the runtime (``_subconstruct``), lint
+    (``_lint_consumers``) and the Agent Spec marker (``_agent_spec_markers``). That is
+    the form AGENTS.md bans for ``output`` ("do NOT hand-roll
+    ``getattr(item, 'output', None)`` -- call ``_declared_output(item)``").
+
+    STATE TODAY, precisely: validation reads THIS; lint's member->field hop was fixed
+    here to resolve the dotted form correctly, but still reads the attribute itself;
+    the runtime and the marker still hand-roll both halves. They convert in step 2
+    (neograph-9axw6.3), which is what stamps the address they would read -- converting
+    them now would mean two hops to the same answer rather than one.
+
+    Two spellings, one meaning:
+
+    - ``"settle"``        -> ``PortRef("settle", None)``  the sole output
+    - ``"settle.result"`` -> ``PortRef("settle", "result")``  a specific port
+
+    The dotted form is what design 6.2 documents and what every later refusal will
+    tell an author to write, so it has to PARSE here before those refusals ship --
+    which is why design 14 puts this step first. It did not parse before: the whole
+    string was compared against item names, so ``"settle.result"`` matched nothing
+    and was refused as an unknown member.
+
+    Resolution only. Every refusal -- an unknown member, a multi-output member named
+    without a port key, a named port whose type cannot satisfy ``output=`` -- is
+    raised by ``_validation_outputs.check_output_from``, which calls this. That split
+    is not cosmetic: ``Source``/``PortRef`` construction is banned outside this module
+    (``TestSourceConstructionMonopoly``), while a ``model_copy``-set ``output_from`` is
+    caught only by the PARENT's ``_validate_node_chain`` recursion, so the refusal has
+    to stay in the validation path. The two constraints are jointly satisfiable exactly
+    this way: address minting here, refusing there.
+    """
+    # construct.output_from read directly, not via getattr: this is known to be a
+    # Construct, and TestDeclaredOutputSelectorMonopoly bans the hand-rolled getattr
+    # selector form in this module. check_output_from reads construct.output the same
+    # way, for the same reason.
+    port = construct.output_from
+    if port is None:
+        return None
+    member, _, output_key = port.partition(".")
+    return PortRef(member, output_key or None)
 
 
 def resolve_single_type_source(

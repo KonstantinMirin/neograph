@@ -2800,7 +2800,15 @@ class TestSourceConstructionMonopoly:
 
     # POSIX RELATIVE paths, never basenames: under rglob a basename allowlist
     # silently permits <anysubpackage>/_ir_normalize.py.
-    SRC_CONSTRUCTION_ALLOWED = frozenset({"_ir_normalize.py"})
+    # _ir_source.py appears in BOTH lists, and that is now STATED rather than
+    # inherited. Step 0 skipped a file in the construction scan when it was in
+    # SRC_SEALING_ALLOWED, so the SUBCLASSING allowlist silently granted
+    # CONSTRUCTION permission too -- exactly the unstated headroom
+    # test_every_allowlist_entry_names_a_file_that_exists exists to prevent, in the
+    # guard that wrote that control. The defining module legitimately constructs its
+    # own types (a parse/classmethod form), so the permission is real; it just has to
+    # be declared, not acquired by accident.
+    SRC_CONSTRUCTION_ALLOWED = frozenset({"_ir_normalize.py", "_ir_source.py"})
     SRC_SEALING_ALLOWED = frozenset({"_ir_source.py"})
     TESTS_CONSTRUCTION_ALLOWED = frozenset({"test_ir_source.py"})
 
@@ -2819,7 +2827,7 @@ class TestSourceConstructionMonopoly:
         violations: list[str] = []
         for py_file in iter_py_files(root):
             rel = rel_posix(py_file, root)
-            if rel in self.SRC_CONSTRUCTION_ALLOWED or rel in self.SRC_SEALING_ALLOWED:
+            if rel in self.SRC_CONSTRUCTION_ALLOWED:
                 continue
             for lineno in construction_call_lines(py_file, self.SOURCE_TYPES):
                 violations.append(f"  {rel}:{lineno}: constructs a Source/PortRef outside the normalizer")
@@ -2886,11 +2894,7 @@ class TestSourceConstructionMonopoly:
         from tests.guard_ast import construction_call_lines
 
         bad = tmp_path / "stray.py"
-        bad.write_text(
-            "from neograph._ir_source import Peer, PortRef\n"
-            "ref = PortRef('a')\n"
-            "x = Peer(ref=ref)\n"
-        )
+        bad.write_text("from neograph._ir_source import Peer, PortRef\nref = PortRef('a')\nx = Peer(ref=ref)\n")
         # BOTH constructions are hits, on their own lines. (Written on one line
         # first, which returned [2, 2] -- the detector counting each Call
         # separately is correct, and the one-line form hid that from the reader.)
@@ -2911,9 +2915,7 @@ class TestSourceConstructionMonopoly:
 
         bad = tmp_path / "spoof.py"
         bad.write_text(
-            "from neograph._ir_source import Peer\n"
-            "class Sneaky(Peer):\n"
-            '    __module__ = "neograph._ir_source"\n'
+            'from neograph._ir_source import Peer\nclass Sneaky(Peer):\n    __module__ = "neograph._ir_source"\n'
         )
         assert subclass_site_lines(bad, self.SEALING_NAMES) == [2]
 

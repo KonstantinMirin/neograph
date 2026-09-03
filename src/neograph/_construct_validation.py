@@ -44,7 +44,7 @@ from neograph._validation_modifiers import (
     validate_loop_construct,
     validate_loop_self_edge,
 )
-from neograph._validation_outputs import _check_carried_paths, check_output_from
+from neograph._validation_outputs import PortResolver, _check_carried_paths, check_output_from
 from neograph._validation_portal import _check_portal_dispatch_error_handler, _check_portal_mesh
 from neograph._validation_types import (
     _MISSING,
@@ -114,6 +114,7 @@ def _validate_node_chain(
     construct: ConstructLike,
     *,
     ambient_producers: ProducerMap | None = None,
+    resolve_port: PortResolver,
 ) -> None:
     """Walk the node list, verifying each input has a compatible producer.
 
@@ -203,10 +204,7 @@ def _validate_node_chain(
         if _is_construct_like(item) and context_checkable:
             ambient_for_recursion: ProducerMap = OrderedDict(ambient_producers or {})
             ambient_for_recursion.update(visible_producers)
-            _validate_node_chain(
-                item,
-                ambient_producers=ambient_for_recursion,
-            )
+            _validate_node_chain(item, ambient_producers=ambient_for_recursion, resolve_port=resolve_port)
 
         output_type = _declared_output(item)
         name = getattr(item, "name", None)
@@ -255,7 +253,8 @@ def _validate_node_chain(
             # type-checks — mirrors the dict-form per-key producer registration.
             if isinstance(item, Node):
                 portal = item.modifier_set.portal
-                if portal_member_class(item) is PortalMemberClass.DISPATCH and portal is not None and portal.output is not None:
+                is_dispatch = portal_member_class(item) is PortalMemberClass.DISPATCH
+                if is_dispatch and portal is not None and portal.output is not None:
                     resolved = portal.output
                     if isinstance(resolved, str):
                         resolved = lookup_type(resolved)
@@ -368,7 +367,7 @@ def _validate_node_chain(
 
     # Declared-output assembly rules; each function's docstring carries the detail.
     _check_carried_paths(construct)
-    check_output_from(construct)
+    check_output_from(construct, resolve_port)
 
     # Sub-construct output boundary contract: if construct.output is declared,
     # at least one internal node must produce a compatible type — either

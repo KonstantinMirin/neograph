@@ -24,6 +24,7 @@ import pytest
 from pydantic import BaseModel
 
 from neograph import Construct, ConstructError, Node, compile, construct_from_functions, node, run, to_agent_spec
+from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
 from neograph._subconstruct import item_field_names
 from neograph.loader import from_agent_spec
 from neograph.state import compile_state_model
@@ -89,7 +90,6 @@ class TestContextMustNotShadowTheOutputBoundary:
             "bug: the reverse type-scan matched the context Case because state.py appends context fields "
             "after node output fields, so reverse iteration reaches them first."
         )
-
 
     def test_declaring_context_does_not_change_what_crosses_the_boundary(self) -> None:
         """Action at a distance, stated as an equality.
@@ -206,28 +206,27 @@ class TestTheNamedPortMustProduceTheBoundaryType:
     """neograph-x8i3s: ``output_from`` is stored on the IR and then not honoured
     by the boundary check.
 
-    ``check_output_from`` verifies the NAME resolves to exactly one item and stops
-    there; the boundary-satisfaction check downstream scans EVERY internal
-    producer with no idea a port was named. So when the named member's output type
-    does not match ``output=`` and a DIFFERENT member happens to match, assembly
-    accepts and the run silently falls back to the type scan -- the disambiguator
-    is ignored in exactly the situation it exists for.
+    ``check_output_from`` verified the NAME resolves to exactly one item and stopped
+    there; the boundary-satisfaction check downstream asks whether ANY internal
+    producer matches ``output=`` and discards WHICH, with no idea a port was named.
+    So when the named member's type does not match and a DIFFERENT member happens
+    to match, assembly ACCEPTED -- the disambiguator ignored in exactly the
+    situation it exists for.
+
+    MEASURED CORRECTION to the original wording here, which said "the run silently
+    falls back to the type scan". It does not. ``_subconstruct`` sets
+    ``eligible=[the named field]`` with NO fallback, so the run reached
+    ``ExecutionError("No internal node produced a compatible output value")`` -- a
+    late failure describing the WRONG cause, since the member you named does
+    produce something, just not this type. The defect was accept-at-assembly then
+    die-at-runtime-with-a-misleading-message, not a silent wrong answer. Which is
+    why the assertion below pins that the message is NOT the type-scan's.
 
     The two-producer shape is load-bearing. With a single producer the construct
     IS refused, but for the wrong reason ('no internal node produces a compatible
     type'), so a one-producer test passes without the fix.
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "neograph-x8i3s, closed by neograph-9axw6.2 (Step 1 of the port-addressed "
-            "data flow epic): the boundary-satisfaction check does not read output_from, "
-            "so a named port whose type mismatches is accepted when a peer happens to "
-            "match. Remove this marker when Step 1 lands -- strict=True turns this RED "
-            "the moment it does."
-        ),
-    )
     def test_a_named_member_whose_type_mismatches_is_refused_despite_a_matching_peer(self) -> None:
         _register_bodies()
         register_scripted("mo_seed_out", lambda _i, _c: Seed(tag="s"))
@@ -381,3 +380,77 @@ class TestTheDeclaredPortSurvivesAgentSpecRoundTrip:
             "GH #17: the declared boundary port was dropped by the Agent Spec round trip, so the "
             f"reimported construct is back on the positional rule. Got {subs[0].output_from!r}."
         )
+
+
+class TestArmNamedPortIsNarrowedDeliberately:
+    """M3: naming a port inside a branch ARM is a REAL, intended narrowing.
+
+    A multi-arm construct's boundary is normally satisfied per-arm
+    (``_validation_arms.output_reachable_on_every_arm``): a DIFFERENT node can
+    satisfy ``output=`` on each arm, which one name cannot express, so the type scan
+    survives there deliberately.
+
+    Measured before this step, all three ACCEPTED:
+      (a) top-level named port, type matches;
+      (b) ARM-named port, type matches;
+      (c) ARM-named port whose type MISMATCHES, rescued by
+          ``output_reachable_on_every_arm`` via other nodes.
+
+    Step 1 refuses (c) and leaves (a) and (b) alone. That is a NARROWING, and it is
+    written down here because the plan originally claimed the step "leaves the arm
+    case unchanged" -- it does not. The refusal is right: naming a port and then
+    having the arm scan quietly rescue a DIFFERENT producer is the same defect one
+    layer down, which is what this step exists to end.
+
+    Whether a port may address INTO an arm at all is a separate, open question --
+    neograph-7siep. These tests pin today's answer, not that question's.
+    """
+
+    @staticmethod
+    def _arm_parent(arm_node: Node, *, output_from: str | None, output: type) -> Construct:
+        _register_bodies()
+        register_scripted("arm_case_ok", lambda _i, _c: Case(label="OK", readings=1))
+        seed = Node.scripted("armseed", fn="mo_settle", inputs=Seed, outputs=Case)
+        cond = _ConditionSpec(
+            source_node=seed,
+            attr_chain=["label"],
+            op_fn=lambda value, _t: bool(value),
+            op_str="route",
+            threshold=None,
+        )
+        meta = _BranchMeta(condition_spec=cond, true_arm_nodes=[arm_node], false_arm_nodes=[])
+        return Construct(
+            "armed",
+            input=Seed,
+            output=output,
+            output_from=output_from,
+            nodes=[seed, _BranchNode(meta, 0)],
+        )
+
+    def test_an_arm_named_port_whose_type_matches_is_still_accepted(self) -> None:
+        """Case (b): the narrowing must not sweep up a CORRECT arm-named port."""
+        register_scripted("arm_ok", lambda _i, _c: Case(label="ARM", readings=2))
+        arm = Node.scripted("armnode", fn="arm_ok", inputs=Case, outputs=Case)
+        sub = self._arm_parent(arm, output_from="armnode", output=Case)
+        assert sub.output_from == "armnode"
+
+    def test_an_arm_named_port_whose_type_mismatches_is_now_refused(self) -> None:
+        """Case (c): the narrowing itself. Refused even though the seed satisfies
+        ``output=Case`` on every arm, because the author NAMED a different port."""
+        register_scripted("arm_seedout", lambda _i, _c: Seed(tag="t"))
+        arm = Node.scripted("armnode", fn="arm_seedout", inputs=Case, outputs=Seed)
+        with pytest.raises(ConstructError) as exc:
+            self._arm_parent(arm, output_from="armnode", output=Case)
+        msg = str(exc.value)
+        assert "armnode" in msg
+        assert "cannot satisfy output=" in msg, (
+            f"the refusal must be about the NAMED port's type, not the arm scan. Got: {msg}"
+        )
+
+    def test_an_unnamed_multi_arm_boundary_is_untouched(self) -> None:
+        """The arm type scan survives when NO port is named -- the case one name
+        cannot express. If this ever fails, the narrowing has over-reached."""
+        register_scripted("arm_ok2", lambda _i, _c: Case(label="ARM", readings=2))
+        arm = Node.scripted("armnode", fn="arm_ok2", inputs=Case, outputs=Case)
+        sub = self._arm_parent(arm, output_from=None, output=Case)
+        assert sub.output_from is None

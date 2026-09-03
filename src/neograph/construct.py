@@ -27,7 +27,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from neograph._construct_validation import ConstructError, _validate_node_chain
 from neograph._ir_branch import _BranchNode, iter_item_slots
-from neograph._ir_normalize import normalize_ir
+from neograph._ir_normalize import normalize_ir, resolve_output_from
 from neograph._ir_protocols import ConstructItem
 from neograph._llm_config import LlmConfig
 from neograph.modifiers import Modifiable, ModifierSet
@@ -211,6 +211,6 @@ class Construct(Modifiable, BaseModel):
         # Validate after pydantic finishes so ConstructError escapes cleanly
         # rather than being wrapped in a pydantic ValidationError. Nested
         # constructs self-validate during their own __init__.
-        _validate_node_chain(self)
+        _validate_node_chain(self, resolve_port=resolve_output_from)
 
     # has_modifier, get_modifier, __or__, map inherited from Modifiable

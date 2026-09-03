@@ -263,7 +263,15 @@ def make_subgraph_fn(
 
         # Runtime defense: if no internal node produced a compatible output,
         # fail loud instead of writing None silently.
-        if output_val is None and sub.output is not None:  # pragma: no cover — defensive
+        #
+        # This carried `# pragma: no cover -- defensive` until neograph-9axw6.2, which
+        # was false: with a NAMED port whose type mismatched, `eligible` is that one
+        # field and nothing else, so this branch was the ordinary outcome rather than
+        # an unreachable guard -- reached, and with a message naming the wrong cause.
+        # Step 1 refuses that construct at ASSEMBLY, which is what finally makes this
+        # branch the genuine defense the pragma claimed it already was. The pragma is
+        # removed rather than re-worded: it asserted a property it did not have.
+        if output_val is None and sub.output is not None:
             raise ExecutionError.build(
                 "No internal node produced a compatible output value",
                 expected=sub.output.__name__,

@@ -49,6 +49,13 @@ class ConstructLike(Protocol):
     name: str
     input: Any
     output: Any
+    # The DECLARED boundary port: which member's output IS `output`. Declared here
+    # rather than reached via getattr because four sites used to hand-roll
+    # `getattr(construct, "output_from", None)` for want of it -- the form AGENTS.md
+    # bans for `output` itself. `_ir_normalize.resolve_output_from` is now the single
+    # reader, and it needs the attribute on the protocol to read it directly
+    # (neograph-9axw6.2).
+    output_from: Any
 
     # Read-only property (not a plain attribute) so the element type is
     # covariant: a concrete ``Construct`` whose ``nodes`` is a

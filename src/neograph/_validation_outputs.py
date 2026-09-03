@@ -31,18 +31,34 @@ silent pass-through to a runtime surprise):
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from neograph._ir_branch import iter_with_arms
-from neograph._normalize import _declared_output
+from neograph._ir_source import PortRef
+
+# The port resolver, INJECTED rather than imported. ``_ir_normalize`` owns minting a
+# PortRef (Source construction is banned elsewhere), but it imports
+# ``_construct_validation``, which imports this module -- so importing it back here is a
+# cycle. ``construct.py`` holds both and passes the function down, which is AGENTS.md's
+# sanctioned "inject as a parameter" rung and the ``resolve_condition`` precedent.
+PortResolver = Callable[["ConstructLike"], "PortRef | None"]
+from neograph._normalize import _declared_output, normalize_outputs
 from neograph._output_classify import output_markers
-from neograph._validation_types import _source_location, effective_producer_type
+from neograph._validation_types import (
+    Producer,
+    _fmt_type,
+    _loop_aware_compatible,
+    _source_location,
+    effective_producer_type,
+    effective_producer_type_for,
+)
 from neograph.errors import ConstructError
 from neograph.naming import field_name_for
 from neograph.node import Node
 
 if TYPE_CHECKING:
-    from neograph._ir_protocols import ConstructLike
+    from neograph._ir_protocols import ConstructItem, ConstructLike
 
 
 def _output_model_of(item: Any) -> type[Any] | None:
@@ -159,8 +175,7 @@ def _check_model_markers(
         root = carried.segments[0]
         if root not in declared_input_names and root not in di_names:
             raise ConstructError.build(
-                f"node {item.name!r}: Carried({carried.path!r}) root {root!r} is not a name this "
-                "node declares",
+                f"node {item.name!r}: Carried({carried.path!r}) root {root!r} is not a name this node declares",
                 expected="a node.inputs key or a FromInput/FromConfig DI param name",
                 found=f"declared inputs: {sorted(declared_input_names)}; DI params: {sorted(di_names)}",
                 hint="Carried may only root at a name the node itself declares -- referencing "
@@ -178,8 +193,7 @@ def _check_model_markers(
                 raise ConstructError.build(
                     f"node {item.name!r}: Carried({carried.path!r}) roots at {root!r}, whose "
                     "producer is Each/Loop-modified",
-                    found=f"producer {root!r} effective type: "
-                    f"{effective_producer_type(producer)!r}",
+                    found=f"producer {root!r} effective type: {effective_producer_type(producer)!r}",
                     hint="an Each producer's value is dict[str, X]; a Loop producer's is an "
                     "append-list -- neither is what a flat Carried splice expects",
                     node=item.name,
@@ -188,7 +202,7 @@ def _check_model_markers(
                 )
 
 
-def check_output_from(construct: ConstructLike) -> None:
+def check_output_from(construct: ConstructLike, resolve_port: PortResolver) -> None:
     """Validate ``Construct.output_from`` names exactly one declared item.
 
     GH #17. ``output_from`` says WHICH item's output is the boundary; ``output=``
@@ -200,9 +214,10 @@ def check_output_from(construct: ConstructLike) -> None:
     return silently, so accepting it would re-spell the original bug through the
     very field added to prevent it.
     """
-    port = getattr(construct, "output_from", None)
-    if port is None:
+    ref = resolve_port(construct)
+    if ref is None:
         return
+    port = construct.output_from
     # Direct attribute read, not _declared_output: the selector exists to abstract
     # the Node(.outputs)-vs-Construct(.output) split, and this is known to be a
     # Construct. The orchestrator reads construct.output the same way.
@@ -215,9 +230,11 @@ def check_output_from(construct: ConstructLike) -> None:
             construct=construct.name,
             location=_source_location(),
         )
-    names = [item.name for item in iter_with_arms(construct) if getattr(item, "name", None)]
-    matches = [n for n in names if n == port]
+    items = [item for item in iter_with_arms(construct) if getattr(item, "name", None)]
+    names = [item.name for item in items]
+    matches = [item for item in items if item.name == ref.member]
     if len(matches) == 1:
+        _check_named_port_satisfies_boundary(construct, ref, matches[0])
         return
     problem = "matches no item" if not matches else f"is ambiguous -- {len(matches)} items share it"
     raise ConstructError.build(
@@ -228,6 +245,99 @@ def check_output_from(construct: ConstructLike) -> None:
             "output_from must name an item THIS construct declares. A forwarded context= field or a "
             "framework key is not an item -- it is a value the construct was handed, and letting such a "
             "value be the boundary is the bug output_from exists to prevent."
+        ),
+        construct=construct.name,
+        location=_source_location(),
+    )
+
+
+def _modifier_set_is_loop(item: ConstructItem) -> bool:
+    """Loop-modified? Derived exactly as ``_construct_validation`` derives it at
+    producer registration (``is_loop=item.modifier_set.loop is not None``), so the
+    two cannot answer differently."""
+    ms = getattr(item, "modifier_set", None)
+    return ms is not None and getattr(ms, "loop", None) is not None
+
+
+def _check_named_port_satisfies_boundary(construct: ConstructLike, ref: PortRef, item: ConstructItem) -> None:
+    """The two refusals that make a NAMED port trustworthy (design 6.1, rows 3-4).
+
+    ``check_output_from`` proves the name resolves to one declared item and used to
+    STOP there. Everything downstream then ignored the name: the boundary-satisfaction
+    check at ``_construct_validation`` asks whether ANY internal producer matches
+    ``output=`` and discards WHICH, so a named member of the wrong type was accepted
+    whenever some peer happened to match. The author's explicit answer lost to a guess,
+    and the run died later at ``_subconstruct``'s ``eligible=[the named field]`` with
+    "no internal node produces a compatible output value" -- a message describing the
+    wrong cause, since the node you NAMED produces something, just not this.
+
+    1. A member with SEVERAL outputs, named without a port key, is not an address
+       neograph-kgndo. ``settle`` writes ``settle_result`` and ``settle_tool_log``;
+       the name says which MEMBER, never which VALUE.
+    2. A named port whose type cannot satisfy ``output=`` refuses HERE
+       neograph-x8i3s, naming the port, its type and the expected type.
+
+    The type compared is the EFFECTIVE producer type, not the declared one, and the
+    reason is the runtime rather than convenience: ``effective_producer_type_for`` is
+    what the state FIELD HOLDS, and the boundary scan isinstance-checks that value. An
+    ``Each``-modified member declaring ``Case`` holds ``dict[str, Case]``, so naming it
+    for ``output=Case`` is refused -- correctly, because the run would fail the
+    isinstance check. Reaching for the raw declared type here to make such a case pass
+    would restore accept-at-assembly-then-die-at-runtime, which is the defect.
+
+    ``_loop_aware_compatible`` rather than bare ``_types_compatible``: a Loop-modified
+    producer's effective type stays the bare element type while the field holds an
+    append-list, so ``output=list[Case]`` against a Loop-named port is legitimate and
+    the bare predicate would refuse it. AGENTS.md records that this widening belongs at
+    the CALL SITE, never inlined into ``_types_compatible``; this is such a call site.
+
+    NARROWING, intended and recorded: when the named member lives inside a branch arm
+    and its type mismatches, this refuses even though ``output_reachable_on_every_arm``
+    could satisfy the boundary through OTHER nodes. Naming a port and having the arm
+    scan quietly rescue a different producer is the same defect one layer down. A
+    correctly-typed arm-named port is unaffected. Whether a port may address INTO an arm
+    at all is a separate, open question: neograph-7siep.
+    """
+    declared = _declared_output(item)
+    no = normalize_outputs(getattr(item, "outputs", None))
+    if ref.output is None and isinstance(item, Node) and no.is_dict_form and len(no.all_keys) > 1:
+        raise ConstructError.build(
+            f"declares output_from={construct.output_from!r}, which names a member with several outputs",
+            expected=f"a port address naming one output, e.g. {ref.member}.{sorted(no.all_keys)[0]!r}",
+            found=f"member {ref.member!r} declares outputs: {sorted(no.all_keys)}",
+            hint=(
+                "A member name says WHICH MEMBER, never WHICH VALUE: a dict-form outputs= "
+                "writes one state field per key. Name the port you mean."
+            ),
+            construct=construct.name,
+            location=_source_location(),
+        )
+    if ref.output is not None:
+        if not (isinstance(item, Node) and no.is_dict_form and ref.output in no.all_keys):
+            available = sorted(no.all_keys) if (isinstance(item, Node) and no.is_dict_form) else []
+            raise ConstructError.build(
+                f"declares output_from={construct.output_from!r}, whose port {ref.output!r} is not an output of {ref.member!r}",
+                expected=f"one of {available}" if available else f"member {ref.member!r} to declare dict-form outputs",
+                found=f"member {ref.member!r} declares: {_fmt_type(declared)}",
+                hint="A dotted address names an output KEY of a dict-form outputs= declaration.",
+                construct=construct.name,
+                location=_source_location(),
+            )
+        declared = no.all_keys[ref.output]
+    effective = effective_producer_type_for(declared, getattr(item, "modifier_set", None))
+    if effective is None or construct.output is None:
+        return
+    producer = Producer(field_name="", label=ref.member, effective_type=effective, is_loop=_modifier_set_is_loop(item))
+    if _loop_aware_compatible(producer, construct.output):
+        return
+    raise ConstructError.build(
+        f"declares output_from={construct.output_from!r}, whose type cannot satisfy output=",
+        expected=_fmt_type(construct.output),
+        found=f"port {construct.output_from!r} produces {_fmt_type(effective)}",
+        hint=(
+            "You NAMED this port, so it is not a candidate among several -- it is the answer. "
+            "A named port whose type does not match is a mistake to fix, not a reason to fall "
+            "back to scanning the other producers."
         ),
         construct=construct.name,
         location=_source_location(),

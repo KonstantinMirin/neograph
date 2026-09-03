@@ -140,9 +140,16 @@ def _framework_field_reads(construct: Construct) -> tuple[set[tuple[str, str]], 
     # boundary, so this reads that member instead of every type-compatible one.
     # Without this the author's declared port would draw a false
     # `output_field_unconsumed` WARN -- the field is read, by the boundary itself.
+    # The dotted address must be resolved to the REAL state field, not spelled
+    # straight into one: field_name_for("settle.result") returns "settle.result",
+    # which no node writes -- the field is "settle_result". Step 1 made the dotted
+    # form legal, so spelling it here would make lint emit a false
+    # output_field_unconsumed WARN on the very port the author declared.
     port = getattr(construct, "output_from", None)
     if port:
-        whole_roots.add(field_name_for(port))
+        member, _, output_key = port.partition(".")
+        base = field_name_for(member)
+        whole_roots.add(output_field_name(base, output_key) if output_key else base)
     elif isinstance(construct.output, type):
         for inner in iter_with_arms(construct):
             declared = normalize_outputs(getattr(inner, "outputs", None)).primary
@@ -246,11 +253,7 @@ def _check_unconsumed_outputs(
     # matches any upstream value whose type is the declared `input=`. It is not a
     # Node, so filtering to Node alone makes it invisible as a consumer and every
     # producer feeding it looks dead.
-    port_types = {
-        m.input
-        for m in members
-        if isinstance(m, Construct) and isinstance(m.input, type)
-    }
+    port_types = {m.input for m in members if isinstance(m, Construct) and isinstance(m.input, type)}
 
     # Axis 4: the FRAMEWORK itself. A field named by a modifier, a branch
     # condition, or a sub-construct boundary has a reader that is not a
