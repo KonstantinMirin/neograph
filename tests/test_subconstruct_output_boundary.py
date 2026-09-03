@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from neograph import Construct, ConstructError, Node, compile, construct_from_functions, node, run, to_agent_spec
 from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
-from neograph._subconstruct import item_field_names
+from neograph._ir_fields import item_field_names
 from neograph.loader import from_agent_spec
 from neograph.state import compile_state_model
 from tests.fakes import build_test_compile_kwargs, register_scripted

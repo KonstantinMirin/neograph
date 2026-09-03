@@ -22,13 +22,15 @@ importable at module level from both sides of the old cycle.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
+from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
-from neograph._normalize import normalize_inputs, normalize_outputs
+from neograph._normalize import _declared_output, normalize_inputs, normalize_outputs
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
-__all__ = ["declared_output_fields", "fan_out_candidates", "loop_carry_dest_key", "port_source_field", "single_type_candidates"]
+__all__ = ["declared_output_fields", "fan_out_candidates", "item_field_names", "loop_carry_dest_key", "port_source_field", "single_type_candidates"]
 
 
 def declared_output_fields(item: ConstructItem) -> set[str]:
@@ -206,3 +208,48 @@ def loop_carry_dest_key(
         if compatible(no.primary, declared):
             return key
     return None
+
+
+def item_field_names(construct: Any) -> list[str]:
+    """State-field names the construct's OWN DECLARED ITEMS write, in declaration order.
+
+    The eligibility half of the shared boundary rule, per GH #17. A
+    sub-construct's final state holds more than what the sub-construct COMPUTED:
+    forwarded ``context=`` fields, ``neo_subgraph_input``, framework keys. Those
+    are values the child was HANDED, and letting them compete to BE its output is
+    the whole of GH #17 -- a branch that declared ``context=['read']`` had its
+    ``output=Case`` silently re-pointed at the injected case, five readings and
+    zero claims, with a green run.
+
+    ``_scan_subgraph_input`` (neograph-5suot unknown #5) can adopt this same
+    eligibility set.
+
+    The claim that followed -- that this "agrees with
+    ``_agent_spec_boundary.resolve_end_node_sources`` ... One rule, not a fifth
+    answer" -- was FALSE when written and is deleted rather than reworded (design
+    7.5). They disagreed on two axes: that function read ``construct.nodes[-1]``
+    positionally and never looked at ``output_from`` at all, while this side honoured
+    it; and this side type-filters in declaration order, so it can select an item
+    that is NOT the last. The consequence was measured: an exported Flow wired one
+    member to the EndNode while the run returned another's output.
+    ``neograph-9axw6.3`` pointed that function at the declared port, so the two now
+    agree on the NAMED case by both calling ``resolve_output_from``. The unnamed case
+    is still two derivations -- positional there, type-filtered here -- so this notes
+    what is true instead of asserting a parity that is not.
+    """
+    fields: list[str] = []
+    for item in iter_with_arms(construct):
+        name = getattr(item, "name", None)
+        if not name:
+            continue
+        base = field_name_for(name)
+        declared = _declared_output(item)
+        if isinstance(declared, dict):
+            # Dict-form outputs write ONE state field per key ({node}_{key}), and the
+            # bare {node} field does not exist. Missing these made every dict-form
+            # sub-construct boundary unresolvable -- caught by
+            # TestGatherProduceSubConstruct, not by the boundary tests.
+            fields.extend(output_field_name(base, key) for key in declared)
+        else:
+            fields.append(base)
+    return fields

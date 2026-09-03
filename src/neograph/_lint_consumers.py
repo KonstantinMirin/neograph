@@ -20,6 +20,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from neograph._ir_branch import _BranchNode, iter_with_arms
+from neograph._ir_fields import item_field_names
 from neograph._ir_normalize import resolve_output_from
 from neograph._lint_kind_registry import LintIssue
 from neograph._lint_predict import _extract_format_placeholders
@@ -148,10 +149,19 @@ def _framework_field_reads(construct: Construct) -> tuple[set[tuple[str, str]], 
     if ref is not None:
         whole_roots.add(ref.field)
     elif isinstance(construct.output, type):
+        # The shared ELIGIBILITY SET, not a re-derivation. This used to add
+        # field_name_for(inner.name) -- the BARE base -- which is wrong for a
+        # dict-form-output member, whose boundary field is {base}_{key} and never the
+        # bare base. So lint marked a field that does not exist as consumed, left the
+        # real one unmarked, and reported the author's actual boundary as dead
+        # neograph-lmjn5. item_field_names is the same set the runtime scopes the
+        # boundary to, so the two cannot disagree about which fields exist.
+        eligible = set(item_field_names(construct))
         for inner in iter_with_arms(construct):
             declared = normalize_outputs(getattr(inner, "outputs", None)).primary
             if isinstance(declared, type) and issubclass(declared, construct.output):
-                whole_roots.add(field_name_for(inner.name))
+                base = field_name_for(inner.name)
+                whole_roots.update(f for f in eligible if f == base or f.startswith(f"{base}_"))
 
     # RAW `.nodes`, deliberately: `iter_with_arms` drops the `_BranchNode`
     # sentinel, and the sentinel is what carries the condition's attr_chain --

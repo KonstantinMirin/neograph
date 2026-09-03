@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import cast, get_args, get_origin
 
-from neograph._ir_fields import fan_out_candidates
+from neograph._ir_fields import fan_out_candidates, single_type_candidates
 from neograph._ir_protocols import ConstructItem, ConstructLike
 from neograph._state_keys import StateKeys
 from neograph._validation_arms import _build_cross_arm_error
@@ -307,8 +307,8 @@ def _build_no_producer_error(
     all_producers: ProducerMap | None = None,
 ) -> NeographError:
     if all_producers is not None:
-        unreachable = [p for name, p in all_producers.items() if name not in producers]
-        if unreachable and any(_types_compatible(p.effective_type, input_type) for p in unreachable):
+        unreachable = [(n, p.effective_type, p) for n, p in all_producers.items() if n not in producers]
+        if single_type_candidates(unreachable, input_type, _types_compatible):
             return ConstructError.build(
                 f"declares "
                 f"{'inputs' if isinstance(item, Node) else 'input'}="
