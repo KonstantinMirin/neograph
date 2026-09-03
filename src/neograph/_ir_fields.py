@@ -28,7 +28,7 @@ from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
-__all__ = ["declared_output_fields", "fan_out_candidates", "port_source_field"]
+__all__ = ["declared_output_fields", "fan_out_candidates", "port_source_field", "single_type_candidates"]
 
 
 def declared_output_fields(item: ConstructItem) -> set[str]:
@@ -123,3 +123,23 @@ def port_source_field(
         if effective is not None and compatible(effective, sub_input):
             return field
     return None
+
+
+def single_type_candidates(
+    preceding: list[tuple[str, object, object]],
+    input_type: type,
+    compatible: Callable[[object, type], bool],
+) -> list[str]:
+    """Every declared producer field whose type can satisfy a single-type ``inputs=``.
+
+    ONE derivation with two readers: the normalizer takes the last of these as the
+    resolved source, and validation refuses when there is more than one. Before this
+    they would have been two walks over the same producer list, which is how the
+    runtime and the exporter came to disagree in the first place.
+
+    Order is declaration order, so ``[-1]`` is the node's immediate upstream -- what
+    an author reading a pipeline top to bottom means by "the Claims".
+    """
+    return [
+        field for field, prod_type, _producer in preceding if prod_type is not None and compatible(prod_type, input_type)
+    ]

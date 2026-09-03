@@ -164,6 +164,18 @@ class Node(Modifiable, BaseModel):
     # back to a type scan; that would leave every resolved site a silent bypass.
     input_source_field: str | None = None
 
+    #: The port this node's single-type ``inputs=`` reads, spelled ``"member"`` or
+    #: ``"member.output"``. USER-DECLARED, the input-side twin of
+    #: ``Construct.output_from``.
+    #:
+    #: Naming is the disambiguator, not the default: declare as you do today and
+    #: reach for this when neograph tells you two producers are eligible. It exists
+    #: because the two directions were asymmetric -- disambiguating an output meant
+    #: adding a name, while disambiguating an input meant REWRITING the declaration
+    #: from ``inputs=Claims`` to ``inputs={"settle": Claims}``. Those are different
+    #: asks, and an author reading an error does the cheaper one.
+    input_from: str | None = None
+
     # Pluggable prompt-input renderer. When set, the factory layer renders
     # input data through this renderer before prompt insertion. Dispatch
     # hierarchy: model.render_for_prompt() > node.renderer > global > None.

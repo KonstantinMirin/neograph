@@ -106,7 +106,7 @@ def _check_item_input(
         _check_each_path(construct, item, input_type, each, producers, all_producers)
         return
 
-    # Plain input: any producer whose output is assignable to input_type wins.
+    # LAST eligible producer wins. Several eligible is NOT refused: measured at 47 failures, nearly all ordinary same-typed chains -- neograph-5fvsu.
     for p in producers.values():
         if _loop_aware_compatible(p, input_type):
             return

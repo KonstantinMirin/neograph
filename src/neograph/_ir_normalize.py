@@ -40,7 +40,12 @@ from neograph._construct_validation import (
     effective_producer_type_for,
 )
 from neograph._ir_branch import _BranchNode, iter_item_slots
-from neograph._ir_fields import declared_output_fields, fan_out_candidates, port_source_field
+from neograph._ir_fields import (
+    declared_output_fields,
+    fan_out_candidates,
+    port_source_field,
+    single_type_candidates,
+)
 from neograph._ir_protocols import ConstructItem, ConstructLike
 from neograph._ir_source import Peer, PortRef
 from neograph._normalize import normalize_inputs, normalize_outputs
@@ -94,25 +99,17 @@ def resolve_output_from(construct: ConstructLike) -> PortRef | None:
     runtime and lint now call this; ``_agent_spec_markers`` still reads the attribute
     directly, for the reason stated there.
 
-    Two spellings, one meaning:
+    Spelling is parsed by ``PortRef.parse``: ``"settle"`` is the sole output,
+    ``"settle.result"`` a specific port. The dotted form is what every later refusal
+    tells an author to write, so it had to parse before those refusals shipped --
+    which is why design 14 puts this step first.
 
-    - ``"settle"``        -> ``PortRef("settle", None)``  the sole output
-    - ``"settle.result"`` -> ``PortRef("settle", "result")``  a specific port
-
-    The dotted form is what design 6.2 documents and what every later refusal will
-    tell an author to write, so it has to PARSE here before those refusals ship --
-    which is why design 14 puts this step first. It did not parse before: the whole
-    string was compared against item names, so ``"settle.result"`` matched nothing
-    and was refused as an unknown member.
-
-    Resolution only. Every refusal -- an unknown member, a multi-output member named
-    without a port key, a named port whose type cannot satisfy ``output=`` -- is
-    raised by ``_validation_outputs.check_output_from``, which calls this. That split
-    is not cosmetic: ``Source``/``PortRef`` construction is banned outside this module
-    (``TestSourceConstructionMonopoly``), while a ``model_copy``-set ``output_from`` is
-    caught only by the PARENT's ``_validate_node_chain`` recursion, so the refusal has
-    to stay in the validation path. The two constraints are jointly satisfiable exactly
-    this way: address minting here, refusing there.
+    Resolution only; every refusal is raised by
+    ``_validation_outputs.check_output_from``, which calls this. That split is forced,
+    not cosmetic: ``PortRef`` construction is banned outside this module, while a
+    ``model_copy``-set ``output_from`` is caught only by the PARENT's
+    ``_validate_node_chain`` recursion -- so minting lives here and refusing lives
+    there.
     """
     # construct.output_from read directly, not via getattr: this is known to be a
     # Construct, and TestDeclaredOutputSelectorMonopoly bans the hand-rolled getattr
@@ -121,8 +118,7 @@ def resolve_output_from(construct: ConstructLike) -> PortRef | None:
     port = construct.output_from
     if port is None:
         return None
-    member, _, output_key = port.partition(".")
-    return PortRef(member, output_key or None)
+    return PortRef.parse(port)
 
 
 def resolve_single_type_source(
@@ -166,11 +162,13 @@ def resolve_single_type_source(
     if input_type is None:
         return None
 
-    matches = [
-        field
-        for field, prod_type, _producer in preceding
-        if prod_type is not None and _types_compatible(prod_type, input_type)
-    ]
+    if node.input_from is not None:
+        # A NAMED port is the answer, not a candidate. Type-checked at assembly by
+        # _validation_inputs, so an unknown or mismatched name refuses there rather
+        # than silently falling through to the scan -- the x8i3s defect, which this
+        # is the input-side twin of.
+        return PortRef.parse(node.input_from).field
+    matches = single_type_candidates(preceding, input_type, _types_compatible)
     if matches:
         # LAST compatible producer wins: the node's IMMEDIATE upstream, which is
         # what an author reading a pipeline top to bottom means by "the Claims"

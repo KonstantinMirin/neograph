@@ -102,6 +102,17 @@ class PortRef:
     member: str
     output: str | None = None
 
+    @classmethod
+    def parse(cls, spelling: str) -> PortRef:
+        """``"member.output"`` -> a port address; ``"member"`` -> its sole output.
+
+        ONE splitter for both directions, so ``input_from`` and ``output_from``
+        cannot disagree about what a dotted address means. The spelling is the
+        surface both refusals tell an author to write, so it parses in one place.
+        """
+        member, _, output_key = spelling.partition(".")
+        return cls(member, output_key or None)
+
     @property
     def field(self) -> str:
         """The STATE FIELD this address names.
