@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import cast, get_args, get_origin
 
+from neograph._ir_fields import fan_out_candidates
 from neograph._ir_protocols import ConstructItem, ConstructLike
 from neograph._state_keys import StateKeys
 from neograph._validation_arms import _build_cross_arm_error
@@ -158,7 +159,6 @@ def _check_fan_in_inputs(
     # the candidate identity is not re-derived here. Imported function-locally
     # to break the _validation_inputs -> _ir_normalize -> _sidecar ->
     # _di_classify -> _construct_validation import cycle.
-    from neograph._ir_normalize import fan_out_candidates
 
     # item has dict-form inputs here (the fan-in path), so it is a Node.
     _fan_out_candidates = set(fan_out_candidates(cast(Node, item), set(producers)))

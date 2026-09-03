@@ -1,0 +1,86 @@
+"""State-field-name derivation: what an item CONTRIBUTES, and what it could CONSUME.
+
+Two field-name rules that several layers need and none should re-derive:
+``declared_output_fields`` (which state fields an item writes as a producer) and
+``fan_out_candidates`` (which dict-form input keys could be an Each fan-out
+receiver). Both are field-name only and type-independent.
+
+Why they live in a LEAF rather than in ``_ir_normalize`` (neograph-9axw6.2).
+``_ir_normalize`` imports ``_construct_validation``, so a validation-cluster module
+wanting either rule could not import it at module level: ``_validation_inputs``
+reached ``fan_out_candidates`` through a FUNCTION-LOCAL import carrying an
+allowlist row in ``tests/test_guards_sidecar_imports.py``, whose own comment said
+it "retires when" the cycle goes. Moving the rules to a leaf retires it -- the
+allowlist SHRANK by one row rather than being re-keyed, because the architecture
+stopped needing the exemption.
+
+This module imports only leaves and near-leaves (``naming``, ``_normalize``,
+``_ir_protocols``, ``node``), none of which reach the validation cluster, so it is
+importable at module level from both sides of the old cycle.
+"""
+
+from __future__ import annotations
+
+from neograph._ir_protocols import ConstructItem
+from neograph._normalize import normalize_inputs, normalize_outputs
+from neograph.naming import field_name_for, output_field_name
+from neograph.node import Node
+
+__all__ = ["declared_output_fields", "fan_out_candidates"]
+
+
+def declared_output_fields(item: ConstructItem) -> set[str]:
+    """The state-field names a node/sub-construct contributes as a producer.
+
+    Mirrors the validator's producer registration (``_construct_validation``):
+    - dict-form ``Node.outputs`` → one ``{base}_{key}`` field per output key
+      (NO bare base — matching the validator, which registers per-key only)
+    - single-type ``Node.outputs`` → the bare ``base`` field
+    - ``Node.outputs is None`` → no producer (empty set)
+    - sub-construct (non-Node) → the bare ``base`` field
+
+    Used by :func:`normalize_ir` to build the peer-field set so it is IDENTICAL
+    to the validator's producer field-name set. See neograph-bcct. Field-name
+    only (type-independent), so Each-wrapping of producer types does not affect
+    it.
+    """
+    name = getattr(item, "name", None)
+    if name is None:
+        return set()
+    base = field_name_for(name)
+    if isinstance(item, Node):
+        no = normalize_outputs(item.outputs)
+        if no.is_none:
+            return set()
+        if no.is_dict_form:
+            return {output_field_name(base, key) for key in no.all_keys}
+        return {base}
+    return {base}
+
+
+def fan_out_candidates(node: Node, known_field_names: set[str]) -> list[str]:
+    """The dict-form input keys of ``node`` that could be an Each fan-out
+    receiver: those whose field name is neither a known producer/peer field
+    nor the node's own field.
+
+    Single definition of "fan-out candidate", shared by the two consumers that
+    each supply their own ``known_field_names`` (they run at different pipeline
+    stages with different information):
+
+    - :class:`_FanOutParamNormalizer` (writer) — runs in ``Construct.__init__``
+      before producers exist, so it passes the *peer node* field set.
+    - ``_construct_validation._check_fan_in_inputs`` (tolerator) — runs after,
+      so it passes the full *producer* field set (incl. per-output-key names).
+
+    Returns ``[]`` for non-dict-form inputs. Order follows the inputs dict
+    (insertion order). The policy on the result — write when exactly one
+    (normalizer), tolerate one + error on extras (validator) — stays with each
+    caller; only the candidate computation is shared.
+    """
+    ni = normalize_inputs(node.inputs)
+    if not ni.is_dict_form:
+        return []
+    self_field = field_name_for(node.name)
+    return [
+        key for key in ni.by_name if field_name_for(key) not in known_field_names and field_name_for(key) != self_field
+    ]

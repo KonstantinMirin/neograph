@@ -56,11 +56,23 @@ step 0, whose entire point is "changes no behaviour". Never ``skip``:
 ``scripts/check_skips.py`` fails on ANY skip and has no allowlist; ``xfail`` is
 reported distinctly and is not a skip.
 
-Both xfails are SELF-REMOVING: step 2 (neograph-9axw6.2, "honour output_from in
-validation") makes the edge set follow the declared port, at which point
-``(output_from, to_agent_spec)`` XPASSes -> strict=True fails -> the exemption
-must be deleted. That is the ratchet, and it is why the cell is written as a
-live red rather than omitted.
+Both xfails are SELF-REMOVING, but NOT at the step first written here. The
+original text credited "step 2 (neograph-9axw6.2)", conflating the ticket's child
+suffix with the step number: ``neograph-9axw6.2`` is STEP 1, and step 1 only adds
+an assembly-time REFUSAL -- a type mismatch on a named port, or a multi-output
+member named without a port key. It does not touch either exporter's edge
+derivation.
+
+It also cannot refuse THIS pair, which is why the pair still measures red after
+step 1 lands: both members produce ``Claims``, so both are type-eligible and
+``output_from`` is the only thing naming which is meant. Step 1 has nothing to
+object to.
+
+The remover is STEP 2 = ``neograph-9axw6.3`` ("stamp the boundary address and read
+it from both exporters"). When the exporters read the stamped address, the edge
+set follows the declared port, ``(output_from, to_agent_spec)`` XPASSes,
+strict=True fails, and the exemption must be deleted. That is the ratchet, and it
+is why the cell is written as a live red rather than omitted.
 
 ## The leg this harness deliberately does NOT have yet
 

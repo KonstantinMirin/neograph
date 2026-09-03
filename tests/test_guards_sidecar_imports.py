@@ -122,16 +122,6 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # _validation_inputs.py — cycle: fan-in validation shares the fan-out
     # candidate rule with the normalizer, but _ir_normalize -> _sidecar ->
     # _di_classify -> _construct_validation forms a cycle. Function-local import
-    # keeps the shared rule single-sourced without the cycle (neograph-k7bg).
-    # RELOCATED from _construct_validation.py when _check_fan_in_inputs (the sole
-    # caller) moved into _validation_inputs.py (neograph-gig0). Entry RELOCATED,
-    # not added — the allowlist did not grow. Retires when _di_classify no longer
-    # imports ConstructError from the validation cluster.
-    (
-        "_validation_inputs.py",
-        "neograph._ir_normalize",
-        frozenset({"fan_out_candidates"}),
-    ),
     # _llm_runtime.py — cycle: collect_llm_nodes walks the construct for
     # LLM-mode nodes via iter_nodes, but construct.py imports from _llm_runtime
     # (transitively, via factory.py through compiler.py). Function-local imports

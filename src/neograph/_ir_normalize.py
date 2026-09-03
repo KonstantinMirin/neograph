@@ -40,6 +40,7 @@ from neograph._construct_validation import (
     effective_producer_type_for,
 )
 from neograph._ir_branch import _BranchNode, iter_item_slots
+from neograph._ir_fields import declared_output_fields, fan_out_candidates
 from neograph._ir_protocols import ConstructItem
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._portal_member import PortalMemberClass, portal_member_class
@@ -78,63 +79,6 @@ class IrNormalizer(Protocol):
     def apply(self, node: Node, peer_field_names: set[str]) -> dict[str, Any]:
         """Return the ``model_copy`` update dict for ``node`` (possibly empty)."""
         ...
-
-
-def declared_output_fields(item: ConstructItem) -> set[str]:
-    """The state-field names a node/sub-construct contributes as a producer.
-
-    Mirrors the validator's producer registration (``_construct_validation``):
-    - dict-form ``Node.outputs`` → one ``{base}_{key}`` field per output key
-      (NO bare base — matching the validator, which registers per-key only)
-    - single-type ``Node.outputs`` → the bare ``base`` field
-    - ``Node.outputs is None`` → no producer (empty set)
-    - sub-construct (non-Node) → the bare ``base`` field
-
-    Used by :func:`normalize_ir` to build the peer-field set so it is IDENTICAL
-    to the validator's producer field-name set. See neograph-bcct. Field-name
-    only (type-independent), so Each-wrapping of producer types does not affect
-    it.
-    """
-    name = getattr(item, "name", None)
-    if name is None:
-        return set()
-    base = field_name_for(name)
-    if isinstance(item, Node):
-        no = normalize_outputs(item.outputs)
-        if no.is_none:
-            return set()
-        if no.is_dict_form:
-            return {output_field_name(base, key) for key in no.all_keys}
-        return {base}
-    return {base}
-
-
-def fan_out_candidates(node: Node, known_field_names: set[str]) -> list[str]:
-    """The dict-form input keys of ``node`` that could be an Each fan-out
-    receiver: those whose field name is neither a known producer/peer field
-    nor the node's own field.
-
-    Single definition of "fan-out candidate", shared by the two consumers that
-    each supply their own ``known_field_names`` (they run at different pipeline
-    stages with different information):
-
-    - :class:`_FanOutParamNormalizer` (writer) — runs in ``Construct.__init__``
-      before producers exist, so it passes the *peer node* field set.
-    - ``_construct_validation._check_fan_in_inputs`` (tolerator) — runs after,
-      so it passes the full *producer* field set (incl. per-output-key names).
-
-    Returns ``[]`` for non-dict-form inputs. Order follows the inputs dict
-    (insertion order). The policy on the result — write when exactly one
-    (normalizer), tolerate one + error on extras (validator) — stays with each
-    caller; only the candidate computation is shared.
-    """
-    ni = normalize_inputs(node.inputs)
-    if not ni.is_dict_form:
-        return []
-    self_field = field_name_for(node.name)
-    return [
-        key for key in ni.by_name if field_name_for(key) not in known_field_names and field_name_for(key) != self_field
-    ]
 
 
 def resolve_single_type_source(
