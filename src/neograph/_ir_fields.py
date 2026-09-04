@@ -292,3 +292,8 @@ def boundary_member_name(
         if compatible(primary, declared):
             return getattr(item, "name", None)
     return None
+
+
+def _deliberate_type_error_for_ci_proof(x: int) -> str:
+    """Temporary: proves the CI gate fails on a red typecheck. Reverted immediately."""
+    return x
