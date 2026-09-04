@@ -20,7 +20,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from neograph._construct_validation import ConstructError
+from neograph._construct_validation import ConstructError, _types_compatible, effective_producer_type
+from neograph._ir_fields import single_type_candidates
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._sidecar import _get_node_source, _get_param_res, _get_sidecar
 from neograph.naming import field_name_for, split_output_field
@@ -63,8 +64,6 @@ def _resolve_loop_self_param(
     type. Returns None if no match. Raises ConstructError if ambiguous (multiple
     matches).
     """
-    from neograph._construct_validation import _types_compatible, effective_producer_type
-
     ni = normalize_inputs(node.inputs)
     if not ni.is_dict_form:
         return None
@@ -72,15 +71,18 @@ def _resolve_loop_self_param(
     if param_type is None:
         return None
 
+    # The SHARED candidate derivation. This ran its own type-match loop and reached
+    # UP through a function-local import of the validation cluster -- a DX-layer
+    # module borrowing a validation predicate purely to select among upstreams. It
+    # was the last type-match SELECTION outside the normalizer's own module family,
+    # which is the epic's first acceptance criterion.
     field_name = field_name_for(node.name)
-    candidates: list[str] = []
-    all_upstreams = {**decorated, **sub_by_field}
-    for up_field, upstream in all_upstreams.items():
-        if up_field == field_name:
-            continue  # skip self
-        up_type = effective_producer_type(upstream)
-        if up_type is not None and _types_compatible(up_type, param_type):
-            candidates.append(up_field)
+    preceding = [
+        (up_field, effective_producer_type(upstream), upstream)
+        for up_field, upstream in {**decorated, **sub_by_field}.items()
+        if up_field != field_name  # skip self
+    ]
+    candidates = single_type_candidates(preceding, param_type, _types_compatible)
 
     if len(candidates) == 1:
         return candidates[0]

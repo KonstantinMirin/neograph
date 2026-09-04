@@ -98,16 +98,19 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # modifiers.py.
     ("modifiers.py", "neograph.construct", frozenset({"Construct"})),
     ("modifiers.py", "neograph.node", frozenset({"Node"})),
-    # _construct_graph.py — cycle: the graph builder imports validation helpers
-    # which themselves transitively touch decorator metadata. Break tracked by
-    # the §4 epic (neograph-pgso). Relocated here from _construct_builder.py when
-    # _resolve_loop_self_param (the sole user) moved into _construct_graph.py
-    # (neograph-3zai). Entry RELOCATED, not added — the allowlist did not grow.
-    (
-        "_construct_graph.py",
-        "neograph._construct_validation",
-        frozenset({"_types_compatible", "effective_producer_type"}),
-    ),
+    # _construct_graph.py ROW DELETED by neograph-9axw6.10, not relocated. The
+    # function-local import existed so _resolve_loop_self_param could borrow a
+    # validation predicate to type-match among upstreams -- the last type-match
+    # SELECTION outside the normalizer's module family. It now reads the shared
+    # candidate derivation from the _ir_fields leaf and imports the validation
+    # PUBLIC SURFACE (neograph._construct_validation) at module level.
+    #
+    # That import does not cycle -- verified by importing neograph with it in place.
+    # So the exemption was STALE, not load-bearing: the row cited a cycle "tracked by
+    # the section 4 epic", and whatever once caused it no longer does. Worth saying
+    # plainly, because a stale allowlist row is indistinguishable from a live one
+    # until someone tries to delete it, and this one had been carried through at
+    # least one relocation on the strength of its own comment.
     # _construct_validation.py — REAL cycle: get_merge_fn_metadata lives in the
     # leaf module _sidecar, but a module-level import here cycles via
     # _sidecar -> _di_classify -> _construct_validation (_di_classify imports
