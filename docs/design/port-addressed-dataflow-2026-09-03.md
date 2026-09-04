@@ -203,6 +203,21 @@ The fix is to separate three cases.
 The earlier attempt treated emergent ambiguity as authored, and demanded a name
 nobody can supply.
 
+**Amended 2026-09-04, after step 4 measured it.** The Authored row above is not
+implementable as written. Refusing every single-type input with two eligible
+producers cost 47 suite failures, and nearly all of them are ordinary
+`n0 -> n1 -> n2` chains of one type -- the most common shape a pipeline has. A
+chain's second producer is not an authorial choice between candidates; it is
+what a sequence looks like. The taxonomy therefore needs a fourth case, or the
+Authored row needs a discriminator separating "the author chose between two
+candidates" from "the author wrote a chain", and this design supplies neither.
+
+Note the shape of the miss: section 5 was written FROM the earlier attempt's 33
+failures, so it already knew refusal was too broad, and it still shipped a rule
+whose own measurement was one step away. Naming (`input_from`) landed and is
+sound. The refusal is withheld, and `neograph-5fvsu` records three candidate
+discriminators.
+
 ---
 
 ## 6. Naming, layered on top
@@ -354,7 +369,16 @@ catches `ConstructError`. Every refusal added here needs a dispatch-mode test.
 **Runtime, literally.** Deleting `StateBus.keys()` makes the bag
 non-enumerable through the interface. A scan stops being a bad pattern and
 becomes code that does not compile against the bus. One caller remains
-(`_subconstruct.py:39`), and it converts in step 2.
+(`_subconstruct.py:39`), and it converts in step 3.
+
+**Amended 2026-09-04.** That caller list was incomplete, and the sentence above
+it was therefore false as written: `_execute.py:86` walked
+`type(state).model_fields` directly, bypassing the bus entirely, so deleting
+`keys()` would have left the bag enumerable while this section claimed
+otherwise. It is closed now -- both `keys()` and the `model_fields` reach raise
+`AttributeError` -- but it was found by sweeping the tree, not by reading this
+document, and section 15's success claim is a sweep over an inventory. An
+inventory assembled by reading is worth less than the claim resting on it.
 
 Two enumeration paths survive `keys()` deletion and get their own steps:
 `_scan_subgraph_output` scans a raw invoke-result dict, and
@@ -429,11 +453,24 @@ removed.
 | Branch-decision edge | Derived separately | The same stream |
 | Port and `context=` edges | Missing | The same stream |
 | `output_from` | Ignored by both exporters | Read from the stored address |
-| Port fidelity on import | `source_output` discarded | Preserved as a `PortRef` |
+| Port fidelity on import | `source_output` discarded | Unresolved -- see the note below |
 | Adding a resolution rule | Edit both exporters | No exporter edit |
 
 Adopting Agent Spec's port model also removes an expressiveness gap: neograph
 stops being coarser than the format it serialises to.
+
+**Amended 2026-09-04, after step 6 measured it.** The import row is withdrawn.
+Section 8 assumes `source_output` maps onto a `PortRef`, and it does not:
+Agent Spec's `source_output` names a property of the OUTPUT MODEL, while a
+`PortRef` names one of a member's declared output KEYS. They are different
+things at different levels. The importer also collapses a node's outputs to a
+single type, so there is frequently no key to map onto. Both plausible
+spellings cost 55 suite failures each.
+
+Dict-form output reconstruction has to come first, and `neograph-a1x7n` carries
+it. What step 6 did land is the refusal of duplicate edges, which is worth
+having on its own. The claim that neograph "stops being coarser than the format
+it serialises to" holds on the export side and does not yet hold on import.
 
 ---
 
@@ -494,3 +531,58 @@ exporter behaviour changes anyway, proven by the harness.
 **Failure.** A sixth convergent fix appears outside the normalizer, or a
 closed-set ban grows, or a feature needs per-consumer edits. Any of those means
 answers still arrive as storage rather than as a contract.
+
+---
+
+## 16. Addendum: what execution measured, 2026-09-04
+
+The epic walked all ten steps. The thesis survived. Three particulars did not,
+and they are amended in place above rather than quietly left standing, because
+a design that outlives its evidence is the same defect section 7.5 describes --
+a claim that reads as authority while the code says something else.
+
+### What holds
+
+The runtime bag is non-enumerable: `keys()` and the `model_fields` reach both
+raise. The four legacy IR fields are gone from `Node.model_fields` and survive
+only as read-only properties over one address table, with no setter to drift
+through. The closed `Source` sum earned its keep in a way a comment could not:
+mypy refused `.ref` on the bare union because six of seven variants lack it, so
+adding a port-feeding variant stops type-checking rather than failing at run
+time. The differential-export harness exists and runs.
+
+### What did not
+
+Sections 5, 9 and 12 each asserted something execution measured false, and each
+amendment sits at the claim it corrects. Two symptom tickets stayed open on
+that evidence rather than being narrowed until the suite went green --
+`5fvsu` and `a1x7n`. Narrowing a rule to fit the suite, with no principle for
+the narrowing, is how five rules came to disagree in the first place.
+
+### The inventory is the weakest part of this document
+
+Section 2 enumerates the disease. A disease scan run during the epic found
+roughly 60 instances, of which roughly 30 appear on no list here -- including a
+fifth answer to the boundary question, and a validator/normalizer divergence
+that validates green and then resolves to `None` at run time
+(`neograph-yz69e`). Four false-parity citations survived the epic, one of them
+written by the fix meant to end them.
+
+This matters more than any single miss. Section 15's success test is a sweep,
+and a sweep is only as good as the inventory it sweeps for. Treat section 2 as
+a sample, not a census. The follow-ups are `neograph-99q24`, `neograph-r4bda`,
+`neograph-mqzrd`, `neograph-7277f`, `neograph-yz69e` and `neograph-7siep`.
+
+### A note on how these were found
+
+None of the three amendments came from re-reading this document. Section 9's
+false claim came from sweeping the tree; sections 5 and 12 came from
+implementing the rule and counting what broke. The two defects the epic
+introduced and caught were found the same way -- one by running a pipeline
+rather than asserting on assembly, one by an independent late reading.
+
+Separately, `make quality` was reported green while mypy had been red since
+step 3, for seven commits, because nothing but memory ever ran it. That is now
+`neograph-7c1r7`, a workflow. It belongs in this addendum because it is the
+same failure this design is about: an answer that arrives as an assertion
+instead of as a mechanism.
