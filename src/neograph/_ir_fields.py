@@ -21,12 +21,13 @@ importable at module level from both sides of the old cycle.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
 from neograph._normalize import _declared_output, normalize_inputs, normalize_outputs
+from neograph._type_spec import TypeSpecStatic
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
@@ -91,9 +92,9 @@ def fan_out_candidates(node: Node, known_field_names: set[str]) -> list[str]:
 
 
 def port_source_field(
-    candidates: list[tuple[str, object, object]],
+    candidates: Sequence[tuple[str, TypeSpecStatic, object]],
     sub_input: type | None,
-    compatible: Callable[[object, type], bool],
+    compatible: Callable[[TypeSpecStatic, TypeSpecStatic], bool],
 ) -> str | None:
     """Which PARENT field feeds a sub-construct's input port.
 
@@ -128,9 +129,9 @@ def port_source_field(
 
 
 def single_type_candidates(
-    preceding: list[tuple[str, object, object]],
-    input_type: type,
-    compatible: Callable[[object, type], bool],
+    preceding: Sequence[tuple[str, TypeSpecStatic, object]],
+    input_type: TypeSpecStatic,
+    compatible: Callable[[TypeSpecStatic, TypeSpecStatic], bool],
 ) -> list[str]:
     """Every declared producer field whose type can satisfy a single-type ``inputs=``.
 
@@ -167,7 +168,7 @@ def _subclass_either_way(produced: object, declared: object) -> bool:
 
 def loop_carry_dest_key(
     node: Node,
-    compatible: Callable[[object, object], bool] = _subclass_either_way,
+    compatible: Callable[[TypeSpecStatic, TypeSpecStatic], bool] = _subclass_either_way,
 ) -> str | None:
     """Which dict-form input key receives a Loop's own fed-back output.
 
