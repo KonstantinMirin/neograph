@@ -220,7 +220,10 @@ class TestNormalizeIrOwnsFanOutParam:
 
         # Clear it to simulate the pre-normalization IR a non-@node surface
         # produces, then prove normalize_ir restores it.
-        pipeline.nodes[idx] = pipeline.nodes[idx].model_copy(update={"fan_out_param": None})
+        # Clear the ADDRESS TABLE: fan_out_param is a derived read-only view over it
+        # since neograph-9axw6.10, so there is no field left to clear on its own --
+        # which is the point of the collapse.
+        pipeline.nodes[idx] = pipeline.nodes[idx].model_copy(update={"input_sources": None})
         assert pipeline.nodes[idx].fan_out_param is None
 
         normalize_ir(pipeline)
@@ -336,15 +339,18 @@ class TestNormalizeIrOwnsFanOutParam:
         node_ir = _node_by_name(construct, "summarize")
         builder_value = node_ir.fan_out_param
         assert builder_value == "item", "sanity: @node builder resolves the fan-out receiver"
+        # The normalizer's update is now an ADDRESS TABLE, so agreement is compared
+        # through the derived view rather than against a bare string.
 
         # Independent re-derivation by the normalizer, given the same peers.
         peers = {field_name_for(n.name) for n in construct.nodes if getattr(n, "name", None) is not None}
-        cleared = node_ir.model_copy(update={"fan_out_param": None})
+        cleared = node_ir.model_copy(update={"input_sources": None})
         normalizer_update = _FanOutParamNormalizer().apply(cleared, peers)
+        derived = cleared.model_copy(update=normalizer_update).fan_out_param
 
-        assert normalizer_update == {"fan_out_param": builder_value}, (
+        assert derived == builder_value, (
             f"@node builder set fan_out_param={builder_value!r} but the "
-            f"normalizer independently derived {normalizer_update!r} — the two "
+            f"normalizer independently derived {derived!r} — the two "
             f"derivations must agree for every valid @node Each"
         )
 

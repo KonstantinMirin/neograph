@@ -1020,9 +1020,22 @@ class TestExtractInputEdgeCases:
         # UNWRAP, not the resolution -- before neograph-t1nbp the node found
         # 'producer' by scanning the state bag for a type match, which is the
         # mechanism that ticket removed.
-        n = Node("consumer", inputs=Draft, outputs=RawText).model_copy(
-            update={"input_source_field": "producer"}
+        # The address table is stamped by the NORMALIZER, which is the only sanctioned
+        # minter of a Source (TestSourceConstructionMonopoly). Hand-building one here
+        # would need that guard's allowlist to grow, so the stamp comes from a real
+        # two-node assembly instead -- which also makes the setup exercise the path
+        # that produces it, rather than a fabrication of it.
+        register_scripted("cg_loop_producer", lambda i, c: Draft(content="v", score=0.5))
+        register_scripted("cg_loop_consumer", lambda i, c: RawText(text="t"))
+        _pipeline = Construct(
+            "cg-loop-unwrap",
+            nodes=[
+                Node.scripted("producer", fn="cg_loop_producer", outputs=Draft),
+                Node.scripted("consumer", fn="cg_loop_consumer", inputs=Draft, outputs=RawText),
+            ],
         )
+        n = next(x for x in _pipeline.nodes if getattr(x, "name", None) == "consumer")
+        assert n.input_source_field == "producer", "sanity: assembly resolved the single-type source"
 
         StateModel = create_model(
             "FakeState",

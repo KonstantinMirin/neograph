@@ -1109,9 +1109,17 @@ class TestNormalizeIrIsSoleIrFieldWriter:
     # written in decorators.py / _construct_builder.py — only inferred by the
     # normalizer, identically for all three surfaces (@node, declarative,
     # programmatic pipe).
-    IR_FIELDS = frozenset(
-        {"fan_out_param", "oracle_gen_type", "handoff_param", "handoff_channel", "input_source_field"}
-    )
+    # neograph-9axw6.10 COLLAPSED four of the five into ONE address table. The four
+    # -- fan_out_param, handoff_param, handoff_channel, input_source_field -- each
+    # STORED one answer to "which value is meant", and four independent stores of one
+    # answer can drift from it and from each other. They survive as read-only
+    # properties derived from input_sources, so Node.model_fields no longer contains
+    # any of them and there is nothing left to write inconsistently.
+    #
+    # The guard's subject NARROWS accordingly: it now pins the single writer of the
+    # table plus the one field that was never part of the collapse. That is a
+    # TIGHTENING -- one writable IR field where there were five.
+    IR_FIELDS = frozenset({"input_sources", "oracle_gen_type"})
 
     # Sanctioned (file, field) pre-population writes outside _ir_normalize.
     # After neograph-k7bg, _construct_builder no longer writes fan_out_param —
@@ -1248,15 +1256,16 @@ class TestNormalizeIrIsSoleIrFieldWriter:
         which no single assembly path has."""
         from neograph.node import Node
 
-        assert self.IR_FIELDS == frozenset(
-            {
-                "fan_out_param",
-                "oracle_gen_type",
-                "handoff_param",
-                "handoff_channel",
-                "input_source_field",
-            }
-        )
+        assert self.IR_FIELDS == frozenset({"input_sources", "oracle_gen_type"})
+        # The four collapsed names must NOT be model fields any more -- that is the
+        # epic's acceptance criterion, checked here rather than asserted in prose.
+        for gone in ("fan_out_param", "handoff_param", "handoff_channel", "input_source_field"):
+            assert gone not in Node.model_fields, (
+                f"{gone!r} is a Node model field again. It was collapsed into the "
+                "input_sources address table by neograph-9axw6.10; re-adding it as "
+                "storage re-creates the drift the collapse removed."
+            )
+            assert hasattr(Node, gone), f"{gone!r} must survive as a derived read-only view"
         for field in self.IR_FIELDS:
             assert field in Node.model_fields, f"IR field {field!r} must exist on the Node model"
         # The trigger sub-mode is a Portal field; the tool-trigger sentinel is a
@@ -1312,22 +1321,22 @@ class TestNormalizeIrIsSoleIrFieldWriter:
         field; if any line stops being detected, the real guard would silently
         pass a regression that writes an IR field via that form."""
         forms = {
-            "attribute": 'node.fan_out_param = "x"',
-            "subscript": 'd["fan_out_param"] = "x"',
-            "aug-assign-attr": 'node.fan_out_param += "x"',
-            "aug-assign-subscript": 'd["fan_out_param"] += "x"',
-            "ann-assign-attr": 'node.fan_out_param: str = "x"',
-            "ann-assign-subscript": 'd["fan_out_param"]: str = "x"',
-            "tuple-unpack": "node.fan_out_param, y = a, b",
-            "list-unpack": "[node.fan_out_param, y] = a, b",
-            "dict-literal": 'node.model_copy(update={"fan_out_param": "y"})',
-            "dict-kwarg": 'node.model_copy(update=dict(fan_out_param="y"))',
-            "setattr": 'setattr(node, "fan_out_param", "x")',
-            "object-setattr": 'object.__setattr__(node, "fan_out_param", T)',
+            "attribute": 'node.input_sources = "x"',
+            "subscript": 'd["input_sources"] = "x"',
+            "aug-assign-attr": 'node.input_sources += "x"',
+            "aug-assign-subscript": 'd["input_sources"] += "x"',
+            "ann-assign-attr": 'node.input_sources: str = "x"',
+            "ann-assign-subscript": 'd["input_sources"]: str = "x"',
+            "tuple-unpack": "node.input_sources, y = a, b",
+            "list-unpack": "[node.input_sources, y] = a, b",
+            "dict-literal": 'node.model_copy(update={"input_sources": "y"})',
+            "dict-kwarg": 'node.model_copy(update=dict(input_sources="y"))',
+            "setattr": 'setattr(node, "input_sources", "x")',
+            "object-setattr": 'object.__setattr__(node, "input_sources", T)',
         }
         for label, src in forms.items():
             written = self._scan_ir_field_writes(ast.parse(src))
-            assert "fan_out_param" in written, (
+            assert "input_sources" in written, (
                 f"scanner missed write form {label!r} ({src!r}); detected "
                 f"{sorted(written)}. The guard's docstring claims this form is "
                 f"covered — a regression using it would slip past silently."
@@ -1340,7 +1349,7 @@ class TestNormalizeIrIsSoleIrFieldWriter:
         Node field definitions and _ir_normalize's _NORMALIZERS constant."""
         synthetic = (
             "class Node:\n"
-            "    fan_out_param: str | None = None\n"
+            "    input_sources: dict | None = None\n"
             "    oracle_gen_type: object = None\n"
             "_NORMALIZERS: list = []\n"
         )
@@ -2810,7 +2819,23 @@ class TestSourceConstructionMonopoly:
     # be declared, not acquired by accident.
     SRC_CONSTRUCTION_ALLOWED = frozenset({"_ir_normalize.py", "_ir_source.py"})
     SRC_SEALING_ALLOWED = frozenset({"_ir_source.py"})
-    TESTS_CONSTRUCTION_ALLOWED = frozenset({"test_ir_source.py"})
+    # GROWN by neograph-9axw6.10, and worth stating rather than slipping in: this is
+    # the first addition to this allowlist since it was created, against three rows
+    # retired elsewhere in the epic. The reason is that these two FABRICATE an IR
+    # shape in order to pin its REJECTION or a validation edge case -- which is a
+    # different activity from production code minting a resolution, the thing the
+    # monopoly exists to prevent. A third entry should be argued, not assumed.
+    TESTS_CONSTRUCTION_ALLOWED = frozenset(
+        {
+            "test_ir_source.py",
+            # pins that the exporter REFUSES a Portal mesh member; needs the member
+            # shape to exist in order to be refused.
+            "test_agent_spec_export.py",
+            # pins the Each fan-in double-fire edge case, which requires a table
+            # state the normalizer will not produce (that is the defect it probes).
+            "test_obligation_r1r2.py",
+        }
+    )
 
     @staticmethod
     def _src_root() -> pathlib.Path:

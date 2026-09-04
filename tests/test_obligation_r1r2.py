@@ -17,6 +17,7 @@ from neograph import (
     compile,
     run,
 )
+from neograph._ir_source import EachItem
 from neograph.modifiers import Loop, Operator
 from tests.fakes import build_test_compile_kwargs, register_condition, register_scripted
 
@@ -310,7 +311,11 @@ class TestEachFanInValidationEdgeCases:
             outputs=Gamma,
         )
         n = n | Each(over="claims", key="value")
-        object.__setattr__(n, "fan_out_param", "item")
+        # fan_out_param is a derived read-only view since neograph-9axw6.10, so the
+        # thing to set is the ADDRESS TABLE it reads. That the old __setattr__ no
+        # longer works is the collapse doing its job: there is no second place to
+        # write this answer.
+        object.__setattr__(n, "input_sources", {"item": EachItem()})
 
         producer = Node.scripted("claims", fn="f", outputs=Alpha)
 

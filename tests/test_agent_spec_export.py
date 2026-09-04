@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import pytest
 
+from neograph._ir_source import HandoffChannel
+
 pytest.importorskip("pyagentspec")
 
 from neograph import Construct  # noqa: E402
@@ -293,7 +295,10 @@ class TestToAgentSpecRejectsUnrepresentableFields:
         from neograph.errors import ConfigurationError
 
         node = _producer("seed", RawText)
-        node = node.model_copy(update={"handoff_param": "handoff", "handoff_channel": "neo_handoff_seed"})
+        # One address, not two fields: the KEY and the CHANNEL now live in the same
+        # HandoffChannel source, so they cannot name different things. Before
+        # neograph-9axw6.10 this set handoff_param and handoff_channel separately.
+        node = node.model_copy(update={"input_sources": {"handoff": HandoffChannel("neo_handoff_seed")}})
         pipeline = Construct("handoff-pipeline", nodes=[node])
 
         with pytest.raises(ConfigurationError, match="handoff"):

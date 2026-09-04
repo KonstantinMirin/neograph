@@ -30,7 +30,7 @@ from neograph._normalize import _declared_output, normalize_inputs, normalize_ou
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
-__all__ = ["declared_output_fields", "fan_out_candidates", "item_field_names", "loop_carry_dest_key", "port_source_field", "single_type_candidates"]
+__all__ = ["declared_output_fields", "fan_out_candidates", "item_field_names", "with_source", "loop_carry_dest_key", "port_source_field", "single_type_candidates"]
 
 
 def declared_output_fields(item: ConstructItem) -> set[str]:
@@ -253,3 +253,13 @@ def item_field_names(construct: Any) -> list[str]:
         else:
             fields.append(base)
     return fields
+
+
+def with_source(node: Any, key: str, source: Any) -> dict[str, Any]:
+    """``node``'s address table with ``key`` bound to ``source``.
+
+    Copy-not-mutate, so a normalizer pass that runs twice is idempotent and a Node
+    shared between two constructs cannot have its table edited underneath it -- the
+    same discipline the four collapsed fields each carried, now written once.
+    """
+    return {**(getattr(node, "input_sources", None) or {}), key: source}

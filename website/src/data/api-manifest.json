@@ -609,6 +609,12 @@
           "required": false
         },
         {
+          "annotation": "dict[str, neograph._ir_source.Peer | neograph._ir_source.Port | neograph._ir_source.EachItem | neograph._ir_source.LoopCarry | neograph._ir_source.HandoffChannel | neograph._ir_source.LastPresent | neograph._ir_source.Accumulated] | None",
+          "default": "None",
+          "name": "input_sources",
+          "required": false
+        },
+        {
           "annotation": "Literal['think', 'agent', 'act', 'scripted']",
           "default": "'think'",
           "name": "mode",
@@ -665,30 +671,6 @@
         {
           "annotation": "str | None",
           "default": "None",
-          "name": "fan_out_param",
-          "required": false
-        },
-        {
-          "annotation": "str | None",
-          "default": "None",
-          "name": "handoff_param",
-          "required": false
-        },
-        {
-          "annotation": "str | None",
-          "default": "None",
-          "name": "handoff_channel",
-          "required": false
-        },
-        {
-          "annotation": "str | None",
-          "default": "None",
-          "name": "input_source_field",
-          "required": false
-        },
-        {
-          "annotation": "str | None",
-          "default": "None",
           "name": "input_from",
           "required": false
         },
@@ -731,7 +713,7 @@
       ],
       "kind": "pydantic_model",
       "name": "Node",
-      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal['think', 'agent', 'act', 'scripted'] = 'think', inputs: Any = None, outputs: Any = None, model: str | None = None, prompt: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, tools: list[neograph.tool.Tool | langchain_core.tools.base.BaseTool] = [], scripted_fn: str | None = None, raw_fn: neograph._node_protocols.RawNodeFn | None = None, fan_out_param: str | None = None, handoff_param: str | None = None, handoff_channel: str | None = None, input_source_field: str | None = None, input_from: str | None = None, renderer: neograph.renderers.Renderer | None = None, context: list[str] | None = None, skip_when: neograph._node_protocols.SkipPredicate | None = None, skip_value: neograph._node_protocols.SkipValueFactory | None = None, gate_tools_when: collections.abc.Callable | str | None = None, oracle_gen_type: type[pydantic.main.BaseModel] | None = None)"
+      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, input_sources: dict[str, neograph._ir_source.Peer | neograph._ir_source.Port | neograph._ir_source.EachItem | neograph._ir_source.LoopCarry | neograph._ir_source.HandoffChannel | neograph._ir_source.LastPresent | neograph._ir_source.Accumulated] | None = None, mode: Literal['think', 'agent', 'act', 'scripted'] = 'think', inputs: Any = None, outputs: Any = None, model: str | None = None, prompt: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, tools: list[neograph.tool.Tool | langchain_core.tools.base.BaseTool] = [], scripted_fn: str | None = None, raw_fn: neograph._node_protocols.RawNodeFn | None = None, input_from: str | None = None, renderer: neograph.renderers.Renderer | None = None, context: list[str] | None = None, skip_when: neograph._node_protocols.SkipPredicate | None = None, skip_value: neograph._node_protocols.SkipValueFactory | None = None, gate_tools_when: collections.abc.Callable | str | None = None, oracle_gen_type: type[pydantic.main.BaseModel] | None = None)"
     },
     {
       "anchor": "tool-model",

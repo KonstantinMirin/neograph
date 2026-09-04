@@ -54,6 +54,20 @@ _ALLOWED: dict[str, str] = {
     # ("the exemption outlived its reason; delete the row"), which is the allowlist
     # shrinking because the architecture got right rather than because a rule was
     # relaxed.
+    # ADDED by neograph-9axw6.10, and it is a genuine over-match rather than an
+    # exemption. _key_for walks the ADDRESS TABLE the resolver already stamped and
+    # returns the key holding a given Source VARIANT -- it projects a resolved answer
+    # into one of the four derived views that replaced the four collapsed fields. It
+    # matches this guard's AST shape (isinstance test in a loop, return on first hit)
+    # while doing the opposite of what the guard is for: no user type is tested, no
+    # candidate is chosen, and at most one key can hold each variant by construction.
+    #
+    # The alternative was to restructure the loop until the pattern stopped matching,
+    # which would be gaming the guard rather than answering it.
+    "_node_addresses.py": (
+        "projects the stamped address table into a derived view; the isinstance test is "
+        "over Source VARIANTS, not user types, and selects nothing"
+    ),
     "_subconstruct.py": (
         "_scan_subgraph_input (neograph-5suot #5, open) and _scan_subgraph_output, "
         "whose eligible=None arm is the sanctioned Portal mode-(b) fallback: the "

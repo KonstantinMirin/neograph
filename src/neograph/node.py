@@ -52,8 +52,10 @@ from pydantic import (
 )
 from typing_extensions import TypeVar  # noqa: E402,F401
 
+from neograph._ir_source import Source
 from neograph._llm_config import LlmConfig
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
+from neograph._node_addresses import AddressViews
 from neograph._node_protocols import (  # noqa: E402,F401
     HasName,
     RawNodeFn,
@@ -76,7 +78,7 @@ from neograph.renderers import Renderer
 from neograph.tool import Tool
 
 
-class Node(Modifiable, BaseModel):
+class Node(AddressViews, Modifiable, BaseModel):
     """A typed processing block. The unit of graph specification.
 
     mode= determines execution mechanics:
@@ -128,41 +130,25 @@ class Node(Modifiable, BaseModel):
     # of reading from the named upstream state field. Set by @node decoration
     # when map_over= is used. Used by factory._extract_input and by the
     # validator to skip upstream-name validation for this key.
-    fan_out_param: str | None = None
-
-    # Which inputs key reads the Portal mesh channel (neo_handoff_<entry>)
-    # instead of a named upstream state field — the reserved "handoff" key
-    # (design §3.3). Written ONLY by the IR normalizer (_ir_normalize.py),
-    # keyed off the presence of the reserved "handoff" inputs key on a
-    # Portal-modified node — the exact fan_out_param single-writer ownership
-    # rule (neograph-k7bg, review H2). No assembly path may write it.
-    handoff_param: str | None = None
-
-    # The resolved entry-keyed mesh-channel field name (neo_handoff_<entry_field>)
-    # a Portal member reads its `handoff` payload from — the fan_out_param
-    # precedent applied to the READ side (decision D10): a node-self-contained IR
-    # field so _extract_input resolves the channel WITHOUT threading a key through
-    # _execute_node. The channel key is entry-keyed (one mesh per level), so only
-    # the construct-level normalizer knows it — hence, like handoff_param, this is
-    # written ONLY by _ir_normalize.py (single-writer, review H2 / neograph-k7bg).
-    handoff_channel: str | None = None
-
-    # Which state field satisfies this node's SINGLE-TYPE ``inputs=X`` binding
-    #. Resolved once at assembly from the declared producers,
-    # so the runtime reads a NAME instead of scanning the state bag for a type
-    # match, and the Agent Spec export reads the SAME name instead of running a
-    # second scan in the opposite direction.
-    #
-    # Written ONLY by the IR normalizer (_ir_normalize.py) -- the same
-    # single-writer ownership as fan_out_param / handoff_param / handoff_channel
-    # (neograph-k7bg, review H2). No assembly path may write it.
-    #
-    # ``None`` means "no single-type source to resolve" -- dict-form inputs, no
-    # inputs at all, or no compatible producer and no compatible port. It NEVER
-    # means "ambiguous": two eligible producers raise ConstructError at
-    # assembly, so ambiguity cannot reach the runtime. A None here must not fall
-    # back to a type scan; that would leave every resolved site a silent bypass.
-    input_source_field: str | None = None
+    #: THE ADDRESS TABLE: input key -> where that input's value comes from.
+    #:
+    #: Collapses four fields that each stored one answer to the same question --
+    #: ``fan_out_param``, ``handoff_param``, ``handoff_channel`` and
+    #: ``input_source_field``. Each existed because "which value is meant" was
+    #: STORED rather than resolved, and four independent stores of one answer can
+    #: drift from it and from each other. They survive as read-only properties
+    #: below, derived from this table, so a reader keeps working while the
+    #: driftable storage is gone -- ``Node.model_fields`` no longer contains any of
+    #: the four.
+    #:
+    #: The key is an ``inputs`` key; ``_SINGLE`` is the sentinel for a single-type
+    #: ``inputs=X`` binding, which has no key of its own.
+    #:
+    #: Written ONLY by ``_ir_normalize``, the same single-writer ownership the four
+    #: fields carried, pinned by guard G3. A new arrival mechanism extends the
+    #: closed ``Source`` set rather than adding a fifth field -- which is why this
+    #: step lands before the accumulator channel rather than after it.
+    input_sources: dict[str, Source] | None = None
 
     #: The port this node's single-type ``inputs=`` reads, spelled ``"member"`` or
     #: ``"member.output"``. USER-DECLARED, the input-side twin of

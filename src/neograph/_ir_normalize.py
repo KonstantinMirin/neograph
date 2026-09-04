@@ -45,9 +45,10 @@ from neograph._ir_fields import (
     fan_out_candidates,
     port_source_field,
     single_type_candidates,
+    with_source,
 )
 from neograph._ir_protocols import ConstructItem, ConstructLike
-from neograph._ir_source import Peer, PortRef
+from neograph._ir_source import EachItem, HandoffChannel, Peer, Port, PortRef, Source
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._sidecar import infer_oracle_gen_type
@@ -99,17 +100,11 @@ def resolve_output_from(construct: ConstructLike) -> PortRef | None:
     runtime and lint now call this; ``_agent_spec_markers`` still reads the attribute
     directly, for the reason stated there.
 
-    Spelling is parsed by ``PortRef.parse``: ``"settle"`` is the sole output,
-    ``"settle.result"`` a specific port. The dotted form is what every later refusal
-    tells an author to write, so it had to parse before those refusals shipped --
-    which is why design 14 puts this step first.
-
-    Resolution only; every refusal is raised by
-    ``_validation_outputs.check_output_from``, which calls this. That split is forced,
-    not cosmetic: ``PortRef`` construction is banned outside this module, while a
-    ``model_copy``-set ``output_from`` is caught only by the PARENT's
-    ``_validate_node_chain`` recursion -- so minting lives here and refusing lives
-    there.
+    Spelling is parsed by ``PortRef.parse``. Resolution only; every refusal is raised
+    by ``_validation_outputs.check_output_from``, which calls this. The split is
+    forced: ``PortRef`` construction is banned outside this module, while a
+    ``model_copy``-set ``output_from`` is caught only by the parent's
+    ``_validate_node_chain`` recursion.
     """
     # construct.output_from read directly, not via getattr: this is known to be a
     # Construct, and TestDeclaredOutputSelectorMonopoly bans the hand-rolled getattr
@@ -209,7 +204,7 @@ class _FanOutParamNormalizer:
     def apply(self, node: Node, peer_field_names: set[str]) -> dict[str, Any]:
         candidates = fan_out_candidates(node, peer_field_names)
         if len(candidates) == 1:
-            return {"fan_out_param": candidates[0]}
+            return {"input_sources": with_source(node, candidates[0], EachItem())}
         return {}
 
 
@@ -235,7 +230,9 @@ class _HandoffParamNormalizer:
         return ni.is_dict_form and "handoff" in ni.by_name
 
     def apply(self, node: Node, peer_field_names: set[str]) -> dict[str, Any]:
-        return {"handoff_param": "handoff"}
+        # The KEY is known here; normalize_ir fills the channel once the mesh entry
+        # is known. Both live in ONE address, so they cannot name different things.
+        return {"input_sources": with_source(node, "handoff", HandoffChannel(""))}
 
 
 def oracle_gen_type_for(node: Node) -> type[BaseModel] | None:
@@ -355,7 +352,10 @@ def _stamp_single_type_sources(construct: Construct) -> None:
         if not isinstance(item, Node) or item.input_source_field is not None:
             return item
         source = resolve_single_type_source(item, visible, construct_input)
-        return item if source is None else item.model_copy(update={"input_source_field": source})
+        if source is None:
+            return item
+        addr: Source = Port() if source == StateKeys.SUBGRAPH_INPUT else Peer(PortRef.parse(source))
+        return item.model_copy(update={"input_sources": with_source(item, StateKeys.SINGLE_INPUT, addr)})
 
     visible: list[tuple[str, TypeSpecStatic, ConstructItem]] = []
     for i, item in enumerate(construct.nodes):
@@ -468,7 +468,8 @@ def normalize_ir(construct: Construct) -> None:
         ):
             group_channel = handoff_channels.get(member_portal.name)
             if group_channel is not None:
-                updates["handoff_channel"] = group_channel
+                key = item.handoff_param or "handoff"
+                updates["input_sources"] = with_source(item, key, HandoffChannel(group_channel))
         if updates:
             container[idx] = item.model_copy(update=updates)
 

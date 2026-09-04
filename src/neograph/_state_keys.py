@@ -29,6 +29,11 @@ class StateKeys:
     literals.
     """
 
+    #: Address-table key for a single-type ``inputs=X`` binding, which has no
+    #: inputs key of its own. A reserved key rather than None keeps
+    #: ``Node.input_sources`` a plain dict (neograph-9axw6.10).
+    SINGLE_INPUT = "neo_single_input"
+
     # Framework prefix — distinguishes framework plumbing keys from user
     # node outputs on the state dict.
     FRAMEWORK_PREFIX = "neo_"

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_fields import item_field_names
 from neograph._ir_normalize import resolve_output_from
+from neograph._ir_source import Peer
 from neograph._oracle import _inject_oracle_config
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
@@ -173,7 +174,13 @@ def make_subgraph_fn(
         # winner. The precedence is unchanged -- last declared compatible producer
         # -- but it is now computed from DECLARATIONS once, and the runtime asks
         # only whether the named field is present.
-        if input_data is None and sub.input is not None and sub.port_source is not None:
+        # isinstance narrow, not a cast: the normalizer stamps a Peer here today, and
+        # mypy correctly refused `.ref` on the bare union because six of the seven
+        # variants do not have one. That refusal is the closed Source set earning its
+        # keep -- when the accumulator channel adds a variant that can feed a port,
+        # this line stops type-checking until it is taught, instead of reading an
+        # attribute that is not there at run time.
+        if input_data is None and sub.input is not None and isinstance(sub.port_source, Peer):
             # StateBus.get optional: the resolved field may be unbound on this
             # superstep (a Loop's iteration-0 read, an unreached branch arm).
             # _unwrap_loop_value because a Loop-modified producer's field holds an
