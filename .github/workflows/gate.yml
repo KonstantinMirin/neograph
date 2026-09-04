@@ -1,0 +1,91 @@
+# The quality gate, run by a machine instead of by memory.
+#
+# AGENTS.md documents the release gate as mandatory and records two releases
+# tagged through a green signal that was compatible with the thing you care
+# about not running: 0.7.4 (live tests silently skipped for want of keys) and
+# 0.7.7 (74 mcp tests skipped, examples never run, website never built). A
+# third instance followed on 2026-09-04 -- mypy went red at cd8bf15 and stayed
+# red for seven commits while the test suite passed, because nothing but a
+# person's memory ever ran `make typecheck`.
+#
+# WHAT RUNS HERE, AND WHY THAT SPLIT
+#
+#   quality    every push -- test + lint + typecheck, the floor.
+#   skipcheck  every push -- runs the suite with BOTH mcp extras and fails on
+#              any skip. check_skips.py bakes in `--extra mcp --extra
+#              mcp-examples`, so this SUBSUMES the `mcp` target; running both
+#              would run the same suite twice.
+#   examples   every push -- a broken example is a regression, and they are
+#              keyless.
+#   website    every push -- the api-manifest guard couples page content to the
+#              public API, so a signature change can break the build.
+#   live       NOT here. It needs real Langfuse credentials and polls a remote
+#              ingest for ~25s+. Adding repository secrets is the maintainer's
+#              call, not a workflow author's, so `make release-gate` before a
+#              tag remains the only place all six targets run together.
+#
+# This workflow is therefore necessary but NOT sufficient to tag a release.
+name: gate
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+# A superseded push has nothing to tell anyone.
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: quality (test, lint, typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # .python-version pins 3.14. The api-manifest guard is interpreter-coupled
+      # (neograph-b7m8s), so the manifest and the interpreter that reads it must
+      # agree; do not float this to "latest".
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install
+      - run: make quality
+
+  skipcheck:
+    name: skipcheck (suite with mcp extras, zero skips)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install
+      - run: make skipcheck
+
+  examples:
+    name: examples (keyless, end to end)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install
+      - run: make examples
+
+  website:
+    name: website (plugin tests + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      # The remark plugin's own regression suite, which the Astro build does not
+      # run. AGENTS.md requires it before pushing website/ plugin changes.
+      - run: npm ci --silent && npm test
+        working-directory: website
+      - run: make website
