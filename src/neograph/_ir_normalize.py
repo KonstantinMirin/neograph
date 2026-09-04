@@ -382,10 +382,8 @@ def normalize_ir(construct: Construct) -> None:
     and writes them via a single ``model_copy`` per node. Idempotent:
     normalizers whose field is already set return ``{}`` and are no-ops.
     """
-    # Peer-field set IDENTICAL to the validator's producer field-name set:
-    # multi-output nodes contribute per-output-key fields ({base}_{key}), not
-    # the bare base. Built from the shared declared_output_fields helper so the
-    # two views cannot drift. See neograph-bcct.
+    # Built from the shared declared_output_fields helper, so multi-output nodes
+    # contribute {base}_{key} fields rather than the bare base neograph-bcct.
     #
     # Peer set stays TOP-LEVEL only (construct.nodes), not arm-inclusive: a
     # branch-arm Each node that reads an arm-SIBLING producer would misinfer its

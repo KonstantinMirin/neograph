@@ -492,3 +492,66 @@ class TestADottedPortRunsAndNotJustAssembles:
     # construction monopoly allows to build a PortRef. Asserting it here as well
     # would have needed that allowlist to GROW, which is the wrong trade for a
     # duplicate assertion -- the guard caught this, correctly.
+
+
+class TestTheExporterDoesNotCrashOnAnUndeclaredBoundary:
+    """The positional ``nodes[-1]`` rule did not merely wire a WRONG edge.
+
+    When a sub-construct's last member is not the boundary producer and no
+    ``output_from`` is declared, the exporter built a ``DataFlowEdge`` between
+    mismatched properties and ``to_agent_spec`` raised a pydantic
+    ``ValidationError`` -- on a construct that RUNS FINE.
+
+    Step 2 of neograph-9axw6 fixed the named case and left this one, because the
+    measurement that drove it was about a wrong edge rather than a crash. Found
+    afterwards by an independent reading of the same code, which is the argument for
+    the extra pass: the wrong-edge symptom was reproducible and the crash was not on
+    anyone's list.
+
+    The exporter now asks the same declaration-level derivation the runtime's rule
+    follows -- last declared eligible member -- so export and run agree in the
+    unnamed case too.
+    """
+
+    def test_a_sub_construct_whose_last_member_is_not_the_producer_exports(self) -> None:
+        _register_bodies()
+        register_scripted("und_case", lambda _i, _c: Case(label="C", readings=1))
+        register_scripted("und_seed", lambda _i, _c: Seed(tag="t"))
+        sub = Construct(
+            "branch",
+            input=Seed,
+            output=Case,
+            nodes=[
+                Node.scripted("makes_case", fn="und_case", inputs=Seed, outputs=Case),
+                Node.scripted("tail", fn="und_seed", inputs=Case, outputs=Seed),
+            ],
+        )
+        flow = to_agent_spec(_parent_with(sub))
+        # Not merely "did not raise": the boundary edge must come from the member that
+        # PRODUCES the declared type, not from the positional last member.
+        edges = flow.to_dict().get("data_flow_connections") or []
+        terminal_inputs = {e.get("destination_input") for e in edges if "__end" in (e.get("name") or "")}
+        # Case's fields, not Seed's. If the positional rule had won, the boundary would
+        # carry 'tag' (Seed, the last member's output) instead of Case's fields -- which
+        # is both the wrong edge and, when the properties mismatch, the crash.
+        assert terminal_inputs == {"label", "readings"}, (
+            "the boundary must carry output=Case's fields, from the member that produces "
+            f"it -- not the positional last member's Seed. Got: {sorted(terminal_inputs)}"
+        )
+
+    def test_the_run_still_returns_the_eligible_member(self) -> None:
+        """The guard against fixing the export by changing what the RUN returns."""
+        _register_bodies()
+        register_scripted("und2_case", lambda _i, _c: Case(label="RUNS", readings=2))
+        register_scripted("und2_seed", lambda _i, _c: Seed(tag="t"))
+        sub = Construct(
+            "branch",
+            input=Seed,
+            output=Case,
+            nodes=[
+                Node.scripted("makes_case", fn="und2_case", inputs=Seed, outputs=Case),
+                Node.scripted("tail", fn="und2_seed", inputs=Case, outputs=Seed),
+            ],
+        )
+        result = run(compile(_parent_with(sub), **build_test_compile_kwargs()), input={"node_id": "x"})
+        assert result.get("branch") == Case(label="RUNS", readings=2)

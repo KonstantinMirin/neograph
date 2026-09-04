@@ -30,7 +30,7 @@ from neograph._normalize import _declared_output, normalize_inputs, normalize_ou
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
-__all__ = ["declared_output_fields", "fan_out_candidates", "item_field_names", "with_source", "loop_carry_dest_key", "port_source_field", "single_type_candidates"]
+__all__ = ["declared_output_fields", "fan_out_candidates", "boundary_member_name", "item_field_names", "with_source", "loop_carry_dest_key", "port_source_field", "single_type_candidates"]
 
 
 def declared_output_fields(item: ConstructItem) -> set[str]:
@@ -263,3 +263,31 @@ def with_source(node: Any, key: str, source: Any) -> dict[str, Any]:
     same discipline the four collapsed fields each carried, now written once.
     """
     return {**(getattr(node, "input_sources", None) or {}), key: source}
+
+
+def boundary_member_name(
+    construct: Any, compatible: Callable[[object, object], bool] = _subclass_either_way
+) -> str | None:
+    """The member whose declared output satisfies ``construct.output``, last first.
+
+    The DECLARATION-level twin of the runtime's boundary pick. The runtime scans
+    ``item_field_names`` last-declared-first and type-checks VALUES; an exporter has
+    no values, so it asks the same question of the declarations and gets the same
+    answer for the same reason -- last declared eligible member wins.
+
+    Lives here, beside ``port_source_field`` and ``item_field_names``, because the
+    alternative was a fresh reversed type-match loop inside the exporter, which is
+    the shape this epic removes and which a guard duly objected to when it was
+    written there.
+
+    Only for the UNNAMED case: ``output_from`` is resolved by the normalizer and
+    read directly, and a named port never consults this.
+    """
+    declared = _declared_output(construct)
+    if not isinstance(declared, type):
+        return None
+    for item in reversed(list(iter_with_arms(construct))):
+        primary = normalize_outputs(getattr(item, "outputs", None)).primary
+        if compatible(primary, declared):
+            return getattr(item, "name", None)
+    return None

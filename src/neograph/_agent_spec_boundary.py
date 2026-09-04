@@ -55,6 +55,7 @@ from typing import Any, cast
 
 from neograph._agent_spec_placeholders import _item_outputs, _properties_for
 from neograph._ir_branch import _BranchNode, iter_with_arms
+from neograph._ir_fields import boundary_member_name
 from neograph._ir_normalize import resolve_output_from
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
@@ -231,10 +232,24 @@ def _declared_terminal(construct: Any) -> Any | None:
     never by asserting.
     """
     ref = resolve_output_from(construct)
-    if ref is None:
+    if ref is not None:
+        for item in iter_with_arms(construct):
+            if getattr(item, "name", None) == ref.member:
+                return item
+        return None
+
+    # UNDECLARED boundary: ask the SHARED declaration-level derivation, which gives
+    # the same answer the runtime does (last declared eligible member). Reading
+    # construct.nodes[-1] blindly is not merely a wrong edge -- when the last member
+    # is not the boundary producer it builds a DataFlowEdge between mismatched
+    # properties and to_agent_spec CRASHES with a pydantic ValidationError on a
+    # construct that runs fine. The positional rule was never a defensible default;
+    # it held only while the last member happened to also be the producer.
+    name = boundary_member_name(construct)
+    if name is None:
         return None
     for item in iter_with_arms(construct):
-        if getattr(item, "name", None) == ref.member:
+        if getattr(item, "name", None) == name:
             return item
     return None
 
