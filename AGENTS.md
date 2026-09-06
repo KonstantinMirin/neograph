@@ -564,11 +564,17 @@ git tag -a vX.Y.Z -m "..." && git push origin main && git push origin vX.Y.Z
 
 **Tag the commit you gated.** Not a later one, and not the branch tip if it moved.
 
-This exists because the same failure happened twice, in the same shape: a success signal compatible with the thing you care about not running.
+This exists because the same failure kept happening, in one shape: a success signal compatible with the thing you care about not running.
 
 0.7.4 was tagged after a green `make quality` on merged `main` that had silently skipped the two live tests for want of exported keys; one of them was flaky and the tag went out with it. The build was caught at the manual-approval gate and the tag was moved before anything reached PyPI, but only by luck of the reviewer gate.
 
 0.7.7 was then tagged through a green `quality + live` gate while 74 `mcp` tests skipped for a missing extra, the examples were never run, and the website was never built. Measured afterwards: with every extra installed the suite is 3338 passed and 0 skipped, where that gate saw 3224 passed and 86 skipped. 114 tests contributed nothing. The rule is now mechanical, not remembered, and `skipcheck` is what makes it so.
+
+It happened a third time on 2026-09-04. `mypy` went red at `cd8bf15`, step 3 of the port-addressed migration, and stayed red through six further commits while the test suite passed the whole way, so seven commits shipped a failing typecheck reported as gated. Nothing but a person's memory had ever run `make typecheck`.
+
+**CI now runs the gate, so it is no longer a thing you can forget.** `.github/workflows/gate.yml` runs `quality`, `skipcheck`, `examples` and `website` on every push to `develop` and `main` and on every pull request. `skipcheck` subsumes `mcp`: `check_skips.py` already runs the suite with both mcp extras, so running the `mcp` target too would run the same suite twice.
+
+**CI is necessary and NOT sufficient to tag.** `live` deliberately stays out of it -- it needs real Langfuse credentials and polls a remote ingest -- so `make release-gate` on merged `main` remains the only place all six targets run together, and it is still mandatory before a tag. A green CI badge is not that gate.
 
 **Never publish directly.** The GitHub Actions workflow is the only publish path. This gives us a pypi.org Trusted Publisher gate + an optional manual-approval environment reviewer.
 
