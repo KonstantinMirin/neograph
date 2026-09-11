@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import cast, get_args, get_origin
 
-from neograph._ir_fields import fan_out_candidates, single_type_candidates
+from neograph._ir_consume import fan_out_candidates, single_type_candidates
 from neograph._ir_protocols import ConstructItem, ConstructLike
 from neograph._state_keys import StateKeys
 from neograph._validation_arms import _build_cross_arm_error

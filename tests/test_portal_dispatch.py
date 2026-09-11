@@ -48,7 +48,7 @@ from neograph import (
     run,
 )
 from neograph._state_keys import StateKeys
-from neograph.errors import ConfigurationError, ConstructError, ExecutionError
+from neograph.errors import ConfigurationError, ConstructError, ExecutionError, NeographError
 from neograph.naming import field_name_for
 from neograph.runner import arun
 from neograph.spec_types import register_type
@@ -724,3 +724,194 @@ class TestDispatchAcceptsAgentSpecFlavoredSpec:
 
         assert isinstance(result["planner_dispatch"], Summary)
         assert result["planner_dispatch"].text == "dispatched"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# neograph-yz69e — the SINGLE-TYPE consumer of a dispatch producer
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _single_type_consumer_construct() -> Construct:
+    """The happy dispatcher, but the consumer declares the DOCUMENTED single-type
+    shorthand ``inputs=Summary`` instead of the dict form ``{"planner_dispatch": ...}``.
+
+    Every other test in this file uses the dict form, which is why the divergence
+    survived: the validator registers ``planner_dispatch`` as a producer
+    (``_construct_validation``), so the dict form names a field that exists AND the
+    single-type form type-checks green against the same registration -- while
+    ``declared_output_fields`` / ``_producer_pairs`` (``_ir_fields``/``_ir_normalize``)
+    never emit that field, so single-type RESOLUTION cannot see it.
+    """
+    _dispatch_scripted("planner_single_type", DispatchDecision(spec=_happy_spec(), dispatch_input={}))
+
+    def _consume(input_data, config):
+        # ``input_data`` is the resolved single-type value. It is the dispatched
+        # flow's Summary when resolution works, and None when it silently does not.
+        return Final(echo="MISSING" if input_data is None else input_data.text)
+
+    register_scripted("consume_single_type", _consume)
+
+    km = Portal(
+        route="decide",
+        spec_field="spec",
+        input_field="dispatch_input",
+        output=Summary,
+        max_depth=5,
+        scripted={"_make_summary": _make_summary},
+    )
+    planner = Node.scripted("planner", fn="planner_single_type", outputs=DispatchDecision) | km
+    consumer = Node.scripted("consumer", fn="consume_single_type", inputs=Summary, outputs=Final)
+    return Construct("dispatch-single-type", nodes=[planner, consumer])
+
+
+class TestSingleTypeConsumerOfADispatchProducer:
+    """neograph-yz69e: validation and resolution must agree about the dispatch field.
+
+    Two outcomes are acceptable, and the acceptance criteria name both: RESOLVE the
+    single-type binding to the dispatch producer, or REFUSE at assembly because it
+    is not a candidate. The third thing -- validate green, stamp no source, and hand
+    the consumer ``None`` at runtime while a typed ``Summary`` sits on the bus -- is
+    the silent-wrong-answer shape this test exists to make impossible.
+    """
+
+    def test_a_single_type_consumer_of_a_dispatch_producer_resolves_or_refuses(self) -> None:
+        try:
+            c = _single_type_consumer_construct()
+            graph = compile(c, **build_test_compile_kwargs())
+            result = run(graph, input={})
+        except NeographError as exc:
+            # Refusal is sanctioned -- but only a refusal that names the binding it
+            # could not satisfy. A vague error is not a pass.
+            assert "consumer" in str(exc), f"refused without naming the unsatisfiable consumer: {exc}"
+            return
+
+        assert result["consumer"].echo == "dispatched", (
+            "neograph-yz69e: the run went green and handed 'consumer' None. The validator registered "
+            "'planner_dispatch' as a producer (so inputs=Summary type-checked), but the normalizer's "
+            "candidate set omits the dispatch field, so resolve_single_type_source stamped no source and "
+            "_extract_single_type returned None at runtime -- while the dispatched Summary sat on the bus "
+            "unread. Validation and resolution disagreed about the candidate set, and neither reported it."
+        )
+
+    def test_the_dispatch_field_is_in_the_normalizer_candidate_set(self) -> None:
+        """The same divergence at its source, so a fix that only patches the runtime
+        leaves this red.
+
+        ``declared_output_fields`` is what ``normalize_ir`` builds the peer-field set
+        from; a dispatch node contributes ``{field}_dispatch`` to the state bus, so a
+        derivation that claims to mirror the validator must emit it.
+        """
+        from neograph._ir_fields import declared_output_fields
+
+        planner = _single_type_consumer_construct().nodes[0]
+
+        assert "planner_dispatch" in declared_output_fields(planner), (
+            "neograph-yz69e: declared_output_fields omits the Portal dispatch field the validator "
+            f"registers, so the two candidate sets are not the same set: {declared_output_fields(planner)}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# neograph-yz69e manifestations 2 and 3 — the SAME omission at two more
+# consumers of the write-set derivation, neither named in the original ticket.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class Seed(BaseModel, frozen=True):
+    """A plain value to feed the sub-construct's input port, so the boundary
+    test exercises the OUTPUT side only."""
+
+    topic: str
+
+
+def _sub_output_boundary_construct() -> Construct:
+    """A sub-construct whose declared ``output=Summary`` can ONLY be satisfied by
+    its inner dispatch member's dispatched result.
+
+    Exercises ``item_field_names`` (the boundary ELIGIBILITY set, `_subconstruct.py`),
+    a THIRD derivation the ticket does not name. Assembly is green because the
+    validator registered the dispatch producer; the boundary pick cannot see it.
+    """
+    _dispatch_scripted("planner_sub_out", DispatchDecision(spec=_happy_spec(), dispatch_input={}))
+    register_scripted("sub_out_seed", lambda _i, _c: Seed(topic="t"))
+
+    km = Portal(
+        route="decide",
+        spec_field="spec",
+        input_field="dispatch_input",
+        output=Summary,
+        max_depth=5,
+        scripted={"_make_summary": _make_summary},
+    )
+    planner = Node.scripted("planner", fn="planner_sub_out", outputs=DispatchDecision) | km
+    return Construct(
+        "outer",
+        nodes=[
+            Node.scripted("seed", fn="sub_out_seed", outputs=Seed),
+            Construct("subflow", input=Seed, output=Summary, nodes=[planner]),
+        ],
+    )
+
+
+def _sub_input_port_construct() -> Construct:
+    """A sub-construct declaring ``input=Summary``, placed AFTER a dispatch node
+    whose dispatched result is the only Summary in scope.
+
+    Exercises ``port_source_field`` via the producer-pair derivation -- the
+    sub-construct's input PORT, a fourth consumer.
+    """
+    _dispatch_scripted("planner_sub_in", DispatchDecision(spec=_happy_spec(), dispatch_input={}))
+
+    def _echo(input_data, config):
+        return Final(echo="MISSING" if input_data is None else input_data.text)
+
+    register_scripted("echo_port", _echo)
+
+    km = Portal(
+        route="decide",
+        spec_field="spec",
+        input_field="dispatch_input",
+        output=Summary,
+        max_depth=5,
+        scripted={"_make_summary": _make_summary},
+    )
+    planner = Node.scripted("planner", fn="planner_sub_in", outputs=DispatchDecision) | km
+    inner = Node.scripted("inner", fn="echo_port", inputs=Summary, outputs=Final)
+    return Construct(
+        "outer-in", nodes=[planner, Construct("sub", input=Summary, output=Final, nodes=[inner])]
+    )
+
+
+class TestEveryConsumerOfTheWriteSetSeesTheDispatchField:
+    """neograph-yz69e: patching only the two derivations the ticket names leaves
+    the same defect live at two more.
+
+    Both of these were found by the codebase disease scan, not by the original
+    report -- which is the evidence that the defect is the DUPLICATED DERIVATION,
+    not the missing field. A fix that adds the field to two functions and stops
+    is a fifth copy of the problem.
+    """
+
+    def test_a_subconstruct_boundary_can_be_satisfied_by_a_dispatch_result(self) -> None:
+        graph = compile(_sub_output_boundary_construct(), **build_test_compile_kwargs())
+
+        result = run(graph, input={})
+
+        assert isinstance(result["subflow"], Summary), (
+            "neograph-yz69e manifestation 2: the sub-construct declares output=Summary and its inner "
+            "dispatch member produces exactly that on planner_dispatch, but item_field_names -- the "
+            "boundary eligibility set -- omits the dispatch field, so no member is eligible to satisfy "
+            f"the port. Got: {result.get('subflow')!r}"
+        )
+
+    def test_a_subconstruct_input_port_can_be_fed_by_a_dispatch_result(self) -> None:
+        graph = compile(_sub_input_port_construct(), **build_test_compile_kwargs())
+
+        result = run(graph, input={})
+
+        assert result["sub"].echo == "dispatched", (
+            "neograph-yz69e manifestation 3: the sub-construct declares input=Summary and the only "
+            "Summary in scope is the dispatched result on planner_dispatch, but the producer-pair "
+            "derivation omits it, so port_source_field resolved to nothing and the port was never fed. "
+            f"Got echo={result['sub'].echo!r} (MISSING means the inner node received None)."
+        )

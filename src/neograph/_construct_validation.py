@@ -33,9 +33,8 @@ import structlog
 
 from neograph._fan_agent import raise_if_unsupported_fan_over_agent
 from neograph._ir_branch import iter_with_arm_ids
+from neograph._ir_fields import contributed_fields
 from neograph._ir_protocols import ConstructLike
-from neograph._normalize import _declared_output
-from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._state_keys import StateKeys
 from neograph._validation_arms import ArmScopedProducers, _check_no_modifier_in_branch_arm
 from neograph._validation_inputs import _check_bound_args, _check_item_input
@@ -62,9 +61,8 @@ from neograph._validation_types import (
 )
 from neograph.di import DIKind as _DIKind
 from neograph.errors import ConstructError
-from neograph.naming import field_name_for, output_field_name
+from neograph.naming import field_name_for
 from neograph.node import Node
-from neograph.spec_types import lookup_type
 
 log = structlog.get_logger()
 
@@ -206,68 +204,16 @@ def _validate_node_chain(
             ambient_for_recursion.update(visible_producers)
             _validate_node_chain(item, ambient_producers=ambient_for_recursion, resolve_port=resolve_port)
 
-        output_type = _declared_output(item)
-        name = getattr(item, "name", None)
-        if output_type is not None and name is not None:
-            field_name = field_name_for(name)
-
-            # Dict-form outputs (neograph-1bp.4): register one producer per
-            # output key, with modifier wrapping applied independently per key.
-            if isinstance(item, Node) and isinstance(output_type, dict):
-                for output_key, key_type in output_type.items():
-                    key_field = output_field_name(field_name, output_key)
-                    key_label = f"node '{name}' output '{output_key}'"
-                    # Per-key modifier rule via the single source of truth —
-                    # the same helper the whole-node producer path uses.
-                    producer_type = effective_producer_type_for(key_type, item.modifier_set)
-                    arms.register(
-                        key_field,
-                        Producer(
-                            field_name=key_field,
-                            effective_type=producer_type,
-                            label=key_label,
-                            is_loop=item.modifier_set.loop is not None,
-                        ),
-                        arm_key,
-                    )
-            else:
-                label = f"node '{name}'" if isinstance(item, Node) else f"sub-construct '{name}'"
-                item_modifier_set = getattr(item, "modifier_set", None)
-                # Shared helper decides the modifier-adjusted state-bus type.
-                arms.register(
-                    field_name,
-                    Producer(
-                        field_name=field_name,
-                        effective_type=effective_producer_type(item),
-                        label=label,
-                        is_loop=item_modifier_set is not None and item_modifier_set.loop is not None,
-                    ),
-                    arm_key,
-                )
-
-            # Portal DISPATCH (route="decide", design §4.2): besides its own
-            # output (the emitted spec/input model, registered above), the node
-            # produces the dispatched flow's result on a SEPARATE field
-            # `{field}_dispatch` typed by the required Portal.output. Register it
-            # so a downstream `inputs={"<node>_dispatch": OutType}` consumer
-            # type-checks — mirrors the dict-form per-key producer registration.
-            if isinstance(item, Node):
-                portal = item.modifier_set.portal
-                is_dispatch = portal_member_class(item) is PortalMemberClass.DISPATCH
-                if is_dispatch and portal is not None and portal.output is not None:
-                    resolved = portal.output
-                    if isinstance(resolved, str):
-                        resolved = lookup_type(resolved)
-                    dispatch_field = output_field_name(field_name, "dispatch")
-                    arms.register(
-                        dispatch_field,
-                        Producer(
-                            field_name=dispatch_field,
-                            effective_type=resolved,
-                            label=f"node '{name}' dispatch result",
-                        ),
-                        arm_key,
-                    )
+        # Producer registration reads the SHARED write-set enumeration
+        # neograph-yz69e: this block used to hold the widest of six independent
+        # derivations -- per-output-key, plus the Portal DISPATCH field none of
+        # the other five emitted -- which is how validation and resolution came to
+        # disagree about which fields exist while each stayed internally
+        # consistent. Registering what `contributed_fields` returns makes "the
+        # validator's producer set" and "the resolver's candidate set" the same
+        # object rather than two things asserted to agree.
+        for producer in contributed_fields(item):
+            arms.register(producer.field_name, producer, arm_key)
 
         # Loop + skip_when without skip_value is surprising.
         # The counter still increments so the loop exits, but re-entry

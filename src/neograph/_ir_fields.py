@@ -1,9 +1,24 @@
-"""State-field-name derivation: what an item CONTRIBUTES, and what it could CONSUME.
+"""What an item CONTRIBUTES to the state bus, and what it could CONSUME from it.
 
-Two field-name rules that several layers need and none should re-derive:
-``declared_output_fields`` (which state fields an item writes as a producer) and
-``fan_out_candidates`` (which dict-form input keys could be an Each fan-out
-receiver). Both are field-name only and type-independent.
+``contributed_fields`` is THE enumeration of an item's write-set -- which state
+fields it writes, in declaration order, each with its declared and its
+modifier-adjusted type. ``declared_output_fields`` and ``item_field_names`` are
+projections of it; the validator registers what it returns; the schema
+fingerprint hashes it. Before neograph-yz69e six functions each answered this
+question for themselves and disagreed about the Portal ``{node}_dispatch`` field,
+silently, at every one of them.
+
+``Producer`` and ``effective_producer_type``/``effective_producer_type_for`` live
+here for the same reason: a producer RECORD is a fact about what an item
+contributes, not a fact about validation, so the module that enumerates the
+fields owns the record describing one and the rule giving it a type. They moved
+down from ``_validation_types``, which imports and re-exports them, so the
+validation cluster's public seam is unchanged for every caller.
+
+The CONSUME-side rules -- which upstream field or channel satisfies a given input --
+live in ``_ir_consume``. They never shared a helper with this side in either
+direction; the split in neograph-yz69e made an existing seam visible rather than
+creating one.
 
 Why they live in a LEAF rather than in ``_ir_normalize`` (neograph-9axw6.2).
 ``_ir_normalize`` imports ``_construct_validation``, so a validation-cluster module
@@ -21,131 +36,166 @@ importable at module level from both sides of the old cycle.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
-from neograph._normalize import _declared_output, normalize_inputs, normalize_outputs
+from neograph._normalize import _declared_output, normalize_outputs
+from neograph._portal_member import PortalMemberClass, portal_member_class
+from neograph._state_keys import StateKeys
 from neograph._type_spec import TypeSpecStatic
+from neograph.errors import NeographError
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
+from neograph.spec_types import lookup_type
 
-__all__ = ["declared_output_fields", "fan_out_candidates", "boundary_member_name", "item_field_names", "with_source", "loop_carry_dest_key", "port_source_field", "single_type_candidates"]
+__all__ = [
+    "Producer",
+    "boundary_member_name",
+    "contributed_fields",
+    "declared_output_fields",
+    "effective_producer_type",
+    "effective_producer_type_for",
+    "item_field_names",
+]
 
 
-def declared_output_fields(item: ConstructItem) -> set[str]:
-    """The state-field names a node/sub-construct contributes as a producer.
+def contributed_fields(item: ConstructItem) -> list[Producer]:
+    """Every state field ``item`` writes, in declaration order, with both its
+    declared and its modifier-adjusted type.
 
-    Mirrors the validator's producer registration (``_construct_validation``):
-    - dict-form ``Node.outputs`` → one ``{base}_{key}`` field per output key
-      (NO bare base — matching the validator, which registers per-key only)
-    - single-type ``Node.outputs`` → the bare ``base`` field
-    - ``Node.outputs is None`` → no producer (empty set)
-    - sub-construct (non-Node) → the bare ``base`` field
+    **The single enumeration of the item write-set**, per neograph-yz69e. neograph
+    already monopolised how to SPELL a field name (``output_field_name``) and how
+    to READ one back (``split_output_field``); this is the third monopoly, the one
+    that was missing while six functions each enumerated the set for themselves:
 
-    Used by :func:`normalize_ir` to build the peer-field set so it is IDENTICAL
-    to the validator's producer field-name set. See neograph-bcct. Field-name
-    only (type-independent), so Each-wrapping of producer types does not affect
-    it.
+    - dict-form ``Node.outputs`` -> one ``{base}_{key}`` per key (NO bare base)
+    - single-type ``Node.outputs`` -> the bare ``base``
+    - ``Node.outputs is None`` -> nothing
+    - sub-construct (non-Node) -> the bare ``base``
+    - **Portal ``route="decide"`` -> ADDITIONALLY ``{base}_dispatch``**, the field
+      the dispatched flow's typed result lands on
+
+    That last rule is the one every copy but the validator's was missing, and its
+    absence was silent at each: a single-type consumer validated green and got
+    ``None``; a sub-construct boundary the result should satisfy raised at run
+    time; and a changed ``Portal(output=)`` opened the resume gate with nothing to
+    attribute it to, so the run resumed from the tip with a stale result.
+
+    **Per-ITEM, and deliberately never walks a construct.** Three callers need
+    three different arm policies -- ``normalize_ir``'s peer set is top-level only,
+    ``_stamp_single_type_sources`` is arm-SCOPED (an arm must never see its
+    sibling arm's producers, which is the cross-arm read validation refuses), and
+    ``item_field_names`` is arm-inclusive and flat. A version that walked
+    internally could serve at most one of them and would silently destroy the arm
+    scoping. The walk, and the arm policy, stay with the caller.
+
+    **Order is load-bearing**, so this returns a list: ``item_field_names`` reads
+    it last-declared-first for boundary precedence, and dict-form keys are
+    contributed in key order. The name SET is the lossy projection, never the
+    reverse.
+
+    Types come from ``effective_producer_type``/``effective_producer_type_for``,
+    which stay the modifier-aware type authority -- this calls them, it does not
+    re-derive them.
     """
     name = getattr(item, "name", None)
     if name is None:
-        return set()
-    base = field_name_for(name)
-    if isinstance(item, Node):
-        no = normalize_outputs(item.outputs)
-        if no.is_none:
-            return set()
-        if no.is_dict_form:
-            return {output_field_name(base, key) for key in no.all_keys}
-        return {base}
-    return {base}
-
-
-def fan_out_candidates(node: Node, known_field_names: set[str]) -> list[str]:
-    """The dict-form input keys of ``node`` that could be an Each fan-out
-    receiver: those whose field name is neither a known producer/peer field
-    nor the node's own field.
-
-    Single definition of "fan-out candidate", shared by the two consumers that
-    each supply their own ``known_field_names`` (they run at different pipeline
-    stages with different information):
-
-    - :class:`_FanOutParamNormalizer` (writer) — runs in ``Construct.__init__``
-      before producers exist, so it passes the *peer node* field set.
-    - ``_construct_validation._check_fan_in_inputs`` (tolerator) — runs after,
-      so it passes the full *producer* field set (incl. per-output-key names).
-
-    Returns ``[]`` for non-dict-form inputs. Order follows the inputs dict
-    (insertion order). The policy on the result — write when exactly one
-    (normalizer), tolerate one + error on extras (validator) — stays with each
-    caller; only the candidate computation is shared.
-    """
-    ni = normalize_inputs(node.inputs)
-    if not ni.is_dict_form:
         return []
-    self_field = field_name_for(node.name)
-    return [
-        key for key in ni.by_name if field_name_for(key) not in known_field_names and field_name_for(key) != self_field
-    ]
+    base = field_name_for(name)
+
+    if not isinstance(item, Node):
+        return [
+            Producer(
+                field_name=base,
+                effective_type=effective_producer_type(item),
+                declared_type=_declared_output(item),
+                label=f"sub-construct '{name}'",
+            )
+        ]
+
+    label = f"node '{name}'"
+    is_loop = item.modifier_set is not None and item.modifier_set.loop is not None
+    no = normalize_outputs(item.outputs)
+
+    out: list[Producer] = []
+    if no.is_dict_form:
+        out.extend(
+            Producer(
+                field_name=output_field_name(base, key),
+                effective_type=effective_producer_type_for(key_type, item.modifier_set),
+                declared_type=key_type,
+                # Per-key label, rendered verbatim in validation errors.
+                label=f"node '{name}' output '{key}'",
+                is_loop=is_loop,
+            )
+            for key, key_type in no.all_keys.items()
+        )
+    elif not no.is_none:
+        out.append(
+            Producer(
+                field_name=base,
+                effective_type=effective_producer_type(item),
+                declared_type=no.primary,
+                label=label,
+                is_loop=is_loop,
+            )
+        )
+
+    dispatch = _dispatch_producer(item, base, name)
+    if dispatch is not None:
+        out.append(dispatch)
+    return out
 
 
-def port_source_field(
-    candidates: Sequence[tuple[str, TypeSpecStatic, object]],
-    sub_input: type | None,
-    compatible: Callable[[TypeSpecStatic, TypeSpecStatic], bool],
-) -> str | None:
-    """Which PARENT field feeds a sub-construct's input port.
+def _dispatch_producer(node: Node, base: str, name: str) -> Producer | None:
+    """The ``{base}_dispatch`` producer of a Portal ``route="decide"`` member.
 
-    The assembly-time answer to a question the runtime used to ask by scanning.
-    ``_scan_subgraph_input`` reverse-iterated the ENTIRE parent state bag and
-    returned the first value that passed ``isinstance`` against the declared
-    ``input=`` -- so framework bookkeeping, forwarded ``context=`` fields and every
-    unrelated producer all competed to be the port's value, and which one won
-    depended on dict ordering at run time.
-
-    Same PRECEDENCE, computed once from declarations instead of values: the LAST
-    declared producer whose effective type can satisfy the port. Reverse iteration
-    was the scan's own rule -- later pipeline nodes take precedence over earlier
-    ones, e.g. a loop's output over its seed -- so preserving it is what keeps this
-    a relocation of the answer rather than a change to it.
-
-    ``candidates`` are ``(field_name, effective_type, item)`` triples in declaration
-    order, and ``compatible`` is the caller's type predicate: this module is a leaf
-    and must not reach into the validation cluster for one.
-
-    Returns ``None`` when nothing can satisfy the port, which is not an error here
-    -- the runtime's remaining ladder rungs (loop carry, fanned item, mesh channel)
-    may still supply a value, and a genuinely unsatisfiable port is the validator's
-    to refuse.
+    ``Portal.output`` may be a type NAME, which ``lookup_type`` resolves. The
+    resolution is LENIENT here on purpose: this runs inside ``normalize_ir``,
+    which ``Construct.__init__`` calls BEFORE ``_validate_node_chain``, so raising
+    on an unregistered name would move that failure earlier and change which error
+    a user sees. An unresolvable name keeps its raw spec, matches no consumer, and
+    is reported by the layer that already reports it.
     """
-    if sub_input is None:
+    portal = node.modifier_set.portal if node.modifier_set is not None else None
+    if portal is None or portal.output is None:
         return None
-    for field, effective, _item in reversed(candidates):
-        if effective is not None and compatible(effective, sub_input):
-            return field
-    return None
+    if portal_member_class(node) is not PortalMemberClass.DISPATCH:
+        return None
+
+    resolved: Any = portal.output
+    if isinstance(resolved, str):
+        try:
+            resolved = lookup_type(resolved)
+        except NeographError:
+            pass
+    return Producer(
+        field_name=StateKeys.dispatch(base),
+        effective_type=resolved,
+        declared_type=resolved,
+        label=f"node '{name}' dispatch result",
+    )
 
 
-def single_type_candidates(
-    preceding: Sequence[tuple[str, TypeSpecStatic, object]],
-    input_type: TypeSpecStatic,
-    compatible: Callable[[TypeSpecStatic, TypeSpecStatic], bool],
-) -> list[str]:
-    """Every declared producer field whose type can satisfy a single-type ``inputs=``.
+def declared_output_fields(item: ConstructItem) -> set[str]:
+    """The state-field NAMES ``item`` contributes as a producer.
 
-    ONE derivation with two readers: the normalizer takes the last of these as the
-    resolved source, and validation refuses when there is more than one. Before this
-    they would have been two walks over the same producer list, which is how the
-    runtime and the exporter came to disagree in the first place.
-
-    Order is declaration order, so ``[-1]`` is the node's immediate upstream -- what
-    an author reading a pipeline top to bottom means by "the Claims".
+    The lossy projection of :func:`contributed_fields` -- order and types
+    discarded. It used to be an independent derivation asserting it was
+    "IDENTICAL to the validator's producer field-name set"; it was not, and the
+    citation was deleted rather than reworded (design 7.5: parity by CALLING,
+    never by asserting).
     """
-    return [
-        field for field, prod_type, _producer in preceding if prod_type is not None and compatible(prod_type, input_type)
-    ]
+    return {p.field_name for p in contributed_fields(item)}
+
+
+
+
+
+
 
 
 def _subclass_either_way(produced: object, declared: object) -> bool:
@@ -166,49 +216,6 @@ def _subclass_either_way(produced: object, declared: object) -> bool:
     )
 
 
-def loop_carry_dest_key(
-    node: Node,
-    compatible: Callable[[TypeSpecStatic, TypeSpecStatic], bool] = _subclass_either_way,
-) -> str | None:
-    """Which dict-form input key receives a Loop's own fed-back output.
-
-    ONE derivation of the loop carry's DESTINATION. Three sites answered this
-    differently and each believed one of the others owned it:
-
-    * the validator proved SOME slot was type-compatible and discarded which,
-      under a comment saying "the compiler wires the specific slot";
-    * the compiler does not -- the runtime picks at execution time by probing
-      which siblings are present and falling back to ``next(iter(by_name))``,
-      a POSITIONAL guess;
-    * the Agent Spec lowering took the first ``issubclass`` match with a ``break``,
-      under a comment claiming it mirrored the upstream-resolution scan.
-
-    Three answers to one question, so validation could pass on one slot while the
-    run bound another and the export drew a third.
-
-    The rule, which is the one the exporter and the runtime already shared before
-    diverging: the node's OWN field name if it appears among the input keys --
-    a self-reference is named, not guessed -- otherwise the first key whose
-    declared type can hold the fed-back output. ``None`` when the inputs are not
-    dict-form, where there is no key to choose and the single value IS the carry.
-    """
-    ni = normalize_inputs(node.inputs)
-    if not ni.is_dict_form:
-        return None
-    self_field = field_name_for(node.name)
-    if self_field in ni.by_name:
-        return self_field
-    no = normalize_outputs(node.outputs)
-    if no.is_none:
-        return None
-    # ``primary`` for dict-form outputs too: a Loop feeds back the PRIMARY output,
-    # which is the value the carry list holds (primary_output_field states the same
-    # rule for the field name). Treating dict-form outputs as having no destination
-    # was over-strict -- it refused three working dict-form-output loops.
-    for key, declared in ni.by_name.items():
-        if compatible(no.primary, declared):
-            return key
-    return None
 
 
 def item_field_names(construct: Any) -> list[str]:
@@ -238,32 +245,19 @@ def item_field_names(construct: Any) -> list[str]:
     is still two derivations -- positional there, type-filtered here -- so this notes
     what is true instead of asserting a parity that is not.
     """
-    fields: list[str] = []
-    for item in iter_with_arms(construct):
-        name = getattr(item, "name", None)
-        if not name:
-            continue
-        base = field_name_for(name)
-        declared = _declared_output(item)
-        if isinstance(declared, dict):
-            # Dict-form outputs write ONE state field per key ({node}_{key}), and the
-            # bare {node} field does not exist. Missing these made every dict-form
-            # sub-construct boundary unresolvable -- caught by
-            # TestGatherProduceSubConstruct, not by the boundary tests.
-            fields.extend(output_field_name(base, key) for key in declared)
-        else:
-            fields.append(base)
-    return fields
+    # The ARM-INCLUSIVE, FLAT projection of the shared write-set, neograph-yz69e.
+    # The walk and its arm policy stay HERE -- `contributed_fields` is per-item
+    # precisely so this caller, `normalize_ir` (top-level only) and
+    # `_stamp_single_type_sources` (arm-SCOPED) can each keep their own.
+    #
+    # Declaration order is preserved because the reader depends on it: the
+    # boundary picks the LAST eligible item. The dict-form per-key rule and the
+    # Portal dispatch field now arrive from the shared enumeration rather than
+    # being re-derived here -- omitting the latter is what made a sub-construct
+    # whose output is satisfied only by a dispatched result raise at run time.
+    return [p.field_name for item in iter_with_arms(construct) for p in contributed_fields(item)]
 
 
-def with_source(node: Any, key: str, source: Any) -> dict[str, Any]:
-    """``node``'s address table with ``key`` bound to ``source``.
-
-    Copy-not-mutate, so a normalizer pass that runs twice is idempotent and a Node
-    shared between two constructs cannot have its table edited underneath it -- the
-    same discipline the four collapsed fields each carried, now written once.
-    """
-    return {**(getattr(node, "input_sources", None) or {}), key: source}
 
 
 def boundary_member_name(
@@ -283,6 +277,17 @@ def boundary_member_name(
 
     Only for the UNNAMED case: ``output_from`` is resolved by the normalizer and
     read directly, and a named port never consults this.
+
+    This asks the single-field PRIMARY question, so it does NOT read
+    ``contributed_fields`` and is not covered by the write-set monopoly guard. The
+    asymmetry that creates is real and deliberately left: the runtime side
+    (``item_field_names``) now sees a dispatch member's ``{node}_dispatch``, while
+    this returns ``None`` for the same construct. It is unreachable rather than
+    latent -- dispatch-mode Portal export fails loud before boundary resolution
+    ("no Agent Spec lowering", a permanent scope boundary pinned by
+    ``TestDispatchModePortalFailsLoud``) -- so closing it would be writing code for
+    a path that raises. Measured, not assumed. If that fail-loud is ever lifted,
+    this is the site that has to move with it.
     """
     declared = _declared_output(construct)
     if not isinstance(declared, type):
@@ -292,3 +297,90 @@ def boundary_member_name(
         if compatible(primary, declared):
             return getattr(item, "name", None)
     return None
+
+
+@dataclass(frozen=True)
+class Producer:
+    """A producer registered during construct validation.
+
+    effective_type is user-declared and therefore opaque from neograph's
+    perspective — see docs/design/architecture-decisions.md §5 for the
+    boundary rationale. label is rendered verbatim in error messages.
+
+    is_loop marks a Loop-modified producer (see neograph-ftnxl.6): unlike
+    Each, Loop does NOT change the declared/effective type (state.py keeps
+    the append-list reducer opaque to the type system — the state field is
+    Annotated[list[output_type], _append_loop_result], but ``effective_type``
+    here intentionally stays the bare ``output_type`` because a plain-T
+    consumer sees the unwrapped latest value, not the list). A list[T]
+    consumer wants the FULL history instead (di.py's ``_unwrap_loop_value``
+    already passes it through unchanged at runtime) — a producer-shape fact
+    ``effective_type`` alone can't express since the SAME producer satisfies
+    two different consumer shapes. ``_loop_aware_compatible`` is the read
+    side of this flag.
+
+    declared_type carries the type as the author WROTE it, before any modifier
+    adjustment. Both are needed, and confusing them breaks live checkpoints:
+    validation type-checks against ``effective_type`` (an Each producer writes
+    ``dict[str, X]``), while ``_schema_fingerprint`` hashes the DECLARED type --
+    fingerprinting ``dict[str, X]`` instead of ``X`` would change every Each
+    node's fingerprint and invalidate every existing checkpoint on the release
+    that landed it. Each reader names which one it means. See neograph-yz69e.
+    """
+
+    field_name: str
+    effective_type: TypeSpecStatic
+    label: str
+    is_loop: bool = False
+    declared_type: TypeSpecStatic | None = None
+
+
+def effective_producer_type(item: ConstructItem) -> TypeSpecStatic:
+    """Return the type this producer writes to the state bus, accounting
+    for modifiers.
+
+    This is the **single source of truth** for the "producer side" of
+    type compatibility. The sole validator walker
+    (``_validate_node_chain``) consults it, so a new modifier that
+    reshapes state only needs to teach this one function about the new
+    rule — the walker picks up the change automatically.
+
+    Current rules:
+      - ``Each`` modifier → ``dict[str, raw_output]`` (aggregated fan-out
+        results land as a dict keyed by ``each.key``; see
+        ``state.py:_add_output_field`` for the state builder side of
+        this rule).
+      - Everything else → the item's declared output (Node ``.outputs``,
+        Construct ``.output``) unchanged.
+
+    Returns ``None`` when the item has no declared output.
+    """
+    output = _declared_output(item)
+    if output is None:
+        return None
+    return effective_producer_type_for(output, getattr(item, "modifier_set", None))
+
+
+def effective_producer_type_for(declared_type: TypeSpecStatic, modifier_set: object | None) -> TypeSpecStatic:
+    """Apply the modifier-to-bus rule to a SINGLE declared output type.
+
+    This is the per-key core extracted from :func:`effective_producer_type`.
+    Both producer-registration paths share it so the Each→dict[str, X] rule
+    has exactly one implementation:
+
+      - whole-node / single-type path → :func:`effective_producer_type`
+        delegates here with the node's sole declared output;
+      - dict-form multi-output path (``_construct_validation`` registers one
+        producer per output key) → delegates here per key, so each key's type
+        is wrapped independently.
+
+    ``modifier_set`` is duck-typed (``.each``) rather than imported, keeping
+    this validation-cluster leaf module free of a ``modifiers`` dependency.
+
+    Current rules:
+      - ``Each`` modifier → ``dict[str, declared_type]``
+      - Everything else → ``declared_type`` unchanged.
+    """
+    if modifier_set is not None and getattr(modifier_set, "each", None) is not None:
+        return dict[str, declared_type]  # type: ignore[valid-type]
+    return declared_type

@@ -18,9 +18,8 @@ from typing import Any, get_args, get_origin
 from pydantic import BaseModel
 
 from neograph._ir_branch import _BranchNode
-from neograph._normalize import _declared_output, normalize_outputs
+from neograph._ir_fields import contributed_fields
 from neograph._state_keys import StateKeys
-from neograph.naming import field_name_for, output_field_name
 
 
 def _type_signature(typ: Any) -> str:
@@ -78,22 +77,26 @@ def compute_node_fingerprints(construct: Any) -> dict[str, str]:
         preserve the top-level-only granularity: a sub-construct is
         fingerprinted by its declared output, not by its internal nodes.
         """
-        # _declared_output abstracts the Node.outputs (plural) / Construct.output
-        # (singular) split — Node dict-form is fingerprinted per key, a Construct's
-        # single declared output as one field. No hand-rolled hasattr discrimination.
-        declared = _declared_output(item)
-        if declared is None:
-            return
-        fname = field_name_for(item.name)
-        no = normalize_outputs(declared)
-        if no.is_dict_form:
-            # Dict-form outputs: fingerprint each key
-            for key, typ in no.all_keys.items():
-                full_name = output_field_name(fname, key)
-                result[full_name] = _fp(full_name, typ)
-        else:
-            typ = no.primary
-            result[fname] = _fp(fname, typ)
+        # One field per thing the item WRITES, read off the shared write-set
+        # enumeration (neograph-yz69e / neograph-p93qh). This used to re-derive
+        # the field names from _declared_output, which for a Portal route="decide"
+        # node is the emitted spec model -- so the dispatched result's own field
+        # was fingerprinted by NOBODY, while compute_schema_fingerprint (built
+        # from the compiled state model) DID see it. The two fingerprints are
+        # required to move in lockstep; they did not. Changing a Portal's output=
+        # opened the resume gate, _compute_invalidated_nodes could attribute the
+        # change to no node, and the empty set read as the documented genuine
+        # no-op -- so the run resumed from the tip with a STALE dispatched result.
+        #
+        # DECLARED, not effective: an Each producer's effective type is
+        # dict[str, X] while this must keep hashing X. Reading effective_type here
+        # would change every Each node's fingerprint and invalidate every existing
+        # checkpoint on the release that landed it.
+        for producer in contributed_fields(item):
+            typ = producer.declared_type
+            if typ is None:
+                continue
+            result[producer.field_name] = _fp(producer.field_name, typ)
 
     for item in construct.nodes:
         if isinstance(item, _BranchNode):

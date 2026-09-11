@@ -1851,8 +1851,17 @@ class TestValidationModuleBoundary:
             "def _resolve_field_annotation",
             "def _fmt_type",
             "def _source_location",
-            "def effective_producer_type",
             "def _is_construct_like",
+        },
+        # neograph-yz69e moved the producer RECORD and the modifier-aware producer
+        # TYPE rule down beside contributed_fields, the write-set enumeration that
+        # builds them: what an item contributes is an IR fact, not a validation
+        # one, and the validator now REGISTERS what that enumeration returns
+        # rather than deriving its own. _validation_types imports and re-exports
+        # all three, so the cluster's public seam is unchanged.
+        "_ir_fields.py": {
+            "def contributed_fields",
+            "def effective_producer_type",
             "class Producer",
         },
         "_validation_inputs.py": {

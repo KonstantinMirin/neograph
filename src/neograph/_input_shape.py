@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, assert_never
 
-from neograph._ir_fields import loop_carry_dest_key
+from neograph._ir_consume import loop_carry_dest_key
 from neograph._normalize import normalize_inputs, primary_output_field
 from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys

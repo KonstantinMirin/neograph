@@ -94,8 +94,11 @@ MIGRATED: frozenset[str] = frozenset(
         # Member collection (`_check_portal_mesh`) + the dispatch error-handler
         # walk. Its pair-LEGALITY arms are exempted below, not migrated.
         "_validation_portal.py",
-        # Dispatch-field producer registration.
-        "_construct_validation.py",
+        # The dispatch field in `contributed_fields` -- the shared write-set
+        # enumeration the validator now REGISTERS rather than deriving its own.
+        # Re-keyed here from _construct_validation.py by neograph-yz69e: the
+        # consumer MOVED, it did not multiply.
+        "_ir_fields.py",
         # Swarm export: sub-construct-as-Flow, tool-trigger -> HandoffMode, and
         # `_is_peer_mesh_member` (which collapses to one classifier call).
         "_agent_spec_portal.py",

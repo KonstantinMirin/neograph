@@ -31,7 +31,7 @@ from neograph._subconstruct import make_subgraph_fn
 from neograph._trace import named
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.modifiers import HANDOFF_END, Operator, Portal
-from neograph.naming import field_name_for, output_field_name
+from neograph.naming import field_name_for
 from neograph.node import Node
 
 if TYPE_CHECKING:
@@ -566,7 +566,7 @@ def make_portal_dispatch_fn(
     """
     field_name = field_name_for(node.name)
     payload_field = primary_output_field(field_name, node.outputs)
-    dispatch_field = output_field_name(field_name, "dispatch")
+    dispatch_field = StateKeys.dispatch(field_name)
 
     inner = make_node_fn(
         node,

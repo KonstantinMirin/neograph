@@ -207,3 +207,95 @@ class TestCounterPersistsAcrossResume:
             completed = await neograph.arun(graph, resume={"approved": True}, config=cfg)
             assert "__interrupt__" not in completed, "resume must complete the run"
             assert (await graph.aget_state(cfg)).values.get(_COUNTER_KEY) == 3
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# neograph-p93qh (absorbed into neograph-yz69e) — the DISPATCH result field
+# must participate in the per-node fingerprint, or a changed output contract
+# resumes stale.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class _DispatchDecision(BaseModel):
+    spec: dict
+    flow_input: dict
+
+
+class _Summary(BaseModel, frozen=True):
+    text: str
+
+
+class _OtherSummary(BaseModel, frozen=True):
+    text: str
+    confidence: float = 0.0
+
+
+def _dispatch_construct(output_type: type[BaseModel]) -> Construct:
+    """One planner carrying Portal(route='decide'), parameterised ONLY by the
+    declared ``output=`` contract of the flow it dispatches."""
+    register_scripted("p93_planner", lambda _i, _c: _DispatchDecision(spec={}, flow_input={}))
+    km = Portal(
+        route="decide",
+        spec_field="spec",
+        input_field="flow_input",
+        output=output_type,
+        max_depth=5,
+        scripted={"p93_mk": lambda _i, _c: output_type(text="x")},
+    )
+    planner = Node.scripted("planner", fn="p93_planner", outputs=_DispatchDecision) | km
+    return Construct("p93-dyn", nodes=[planner])
+
+
+class TestDispatchFieldParticipatesInTheRewindDecision:
+    """neograph-p93qh: changing a Portal's ``output=`` must be ATTRIBUTABLE to the
+    dispatch node on resume.
+
+    The two fingerprints are required to move in lockstep (AGENTS.md: "Both
+    fingerprints had to move in lockstep"). They do not here: the SCHEMA
+    fingerprint is built from the compiled state model, which ``state.py``
+    does add ``{node}_dispatch`` to, while the PER-NODE fingerprint is built
+    from ``_declared_output(item)``, which for a dispatch node is the emitted
+    spec model and never the dispatched result.
+
+    The consequence is not a missing diagnostic, it is a wrong ANSWER: the
+    schema gate opens, ``_compute_invalidated_nodes`` attributes the change to
+    nobody, ``if not changed: return set()`` reports the documented genuine
+    no-op, and the run resumes from the tip handing back a result computed
+    under the OLD output contract.
+    """
+
+    def test_changing_the_dispatch_output_contract_changes_the_node_fingerprint(self) -> None:
+        from neograph._schema_fingerprint import compute_node_fingerprints
+
+        before = compute_node_fingerprints(_dispatch_construct(_Summary))
+        after = compute_node_fingerprints(_dispatch_construct(_OtherSummary))
+
+        changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
+        assert changed, (
+            "neograph-p93qh: Portal(output=) changed from _Summary to _OtherSummary and EVERY per-node "
+            f"fingerprint stayed identical (before={before}, after={after}). The schema fingerprint DOES "
+            "change, so on resume the gate opens, _compute_invalidated_nodes finds nothing to attribute "
+            "it to, and the empty set is read as the documented genuine no-op -- so the run resumes from "
+            "the tip with a stale dispatched result. state.py:253-256 claims this field is fingerprinted "
+            "so the change 'correctly invalidates checkpoints'; it is not, and it does not."
+        )
+
+    def test_the_two_fingerprints_agree_about_whether_anything_changed(self) -> None:
+        """The lockstep invariant stated directly, so a fix that teaches only one
+        side leaves this red.
+        """
+        from neograph._schema_fingerprint import compute_node_fingerprints
+
+        g_before = compile(_dispatch_construct(_Summary), **build_test_compile_kwargs())
+        g_after = compile(_dispatch_construct(_OtherSummary), **build_test_compile_kwargs())
+
+        schema_moved = g_before.schema_fingerprint != g_after.schema_fingerprint
+        before, after = compute_node_fingerprints(_dispatch_construct(_Summary)), compute_node_fingerprints(
+            _dispatch_construct(_OtherSummary)
+        )
+        nodes_moved = bool({k for k in set(before) | set(after) if before.get(k) != after.get(k)})
+
+        assert schema_moved == nodes_moved, (
+            f"neograph-p93qh: schema fingerprint moved={schema_moved} but per-node moved={nodes_moved}. "
+            "A schema change no node owns is exactly the state _compute_invalidated_nodes cannot act on."
+        )

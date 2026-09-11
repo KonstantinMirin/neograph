@@ -265,7 +265,7 @@ def compile_state_model(
             assert km is not None  # DISPATCH classification guarantees it
             out_spec = km.output
             assert out_spec is not None  # dispatch-mode invariant (T1 validation)
-            dispatch_field = output_field_name(field_name_for(n.name), "dispatch")
+            dispatch_field = StateKeys.dispatch(field_name_for(n.name))
             resolved = lookup_type(out_spec) if isinstance(out_spec, str) else out_spec
             fields[dispatch_field] = (resolved | None, None)
             if km.on_invalid == "route_to_error":

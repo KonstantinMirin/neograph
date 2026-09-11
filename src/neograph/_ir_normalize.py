@@ -36,25 +36,18 @@ from pydantic import BaseModel
 
 from neograph._construct_validation import (
     _types_compatible,
-    effective_producer_type,
-    effective_producer_type_for,
 )
 from neograph._ir_branch import _BranchNode, iter_item_slots
-from neograph._ir_fields import (
-    declared_output_fields,
-    fan_out_candidates,
-    port_source_field,
-    single_type_candidates,
-    with_source,
-)
+from neograph._ir_consume import fan_out_candidates, port_source_field, single_type_candidates, with_source
+from neograph._ir_fields import contributed_fields, declared_output_fields
 from neograph._ir_protocols import ConstructItem, ConstructLike
 from neograph._ir_source import EachItem, HandoffChannel, Peer, Port, PortRef, Source
-from neograph._normalize import normalize_inputs, normalize_outputs
+from neograph._normalize import normalize_inputs
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._sidecar import infer_oracle_gen_type
 from neograph._state_keys import StateKeys
 from neograph.modifiers import _group_portal_members
-from neograph.naming import field_name_for, output_field_name
+from neograph.naming import field_name_for
 from neograph.node import Node, TypeSpecStatic
 
 if TYPE_CHECKING:
@@ -301,39 +294,20 @@ def _producer_pairs(item: ConstructItem) -> list[tuple[str, TypeSpecStatic, Cons
     """``(state_field, effective_type, producing_item)`` for everything ``item``
     produces.
 
-    Types come from ``effective_producer_type``, the single authority for the
-    modifier-aware producer type.
+    The tuple SHAPE is this module's, for the two resolvers that consume it
+    (``single_type_candidates`` and ``port_source_field``, which need the
+    producing item alongside the type). The CONTENT is now read off
+    ``contributed_fields`` -- the shared write-set enumeration -- rather than
+    re-derived here.
 
-    The FIELD NAMES are derived inline here, and this docstring used to claim they
-    "come from :func:`declared_output_fields` ... deliberately NOT a third
-    derivation". It never called that function -- verified, zero call sites -- so the
-    claim was false, and it was written by the change that was meant to end exactly
-    this pattern. Deleted rather than reworded, per design 7.5: parity by CALLING,
-    never by asserting.
-
-    The two derivations do currently agree, and the reason they are not yet one call
-    is that this returns ``(field, type, item)`` triples while
-    ``declared_output_fields`` returns a name set -- collapsing them is the
-    input-side candidate-set work tracked as neograph-yz69e, which also has to add
-    the Portal dispatch field neither of them emits today. Stating the divergence is
-    the point: a reader who needs the field-name rule should look at both, not trust
-    a comment that says they are the same.
+    This docstring previously described two derivations that "do currently agree"
+    and named the collapse as future work under neograph-yz69e. They did not agree:
+    both omitted the Portal ``{node}_dispatch`` field the validator registers, so
+    a single-type consumer of a dispatched result type-checked green and resolved
+    to nothing, and the runtime handed it ``None``. The collapse is done and the
+    note is deleted rather than reworded, per design 7.5.
     """
-    name = getattr(item, "name", None)
-    if name is None:
-        return []
-    base = field_name_for(name)
-    if not isinstance(item, Node):
-        return [(base, effective_producer_type(item), item)]
-    no = normalize_outputs(item.outputs)
-    if no.is_none:
-        return []
-    if no.is_dict_form:
-        return [
-            (output_field_name(base, key), effective_producer_type_for(key_type, item.modifier_set), item)
-            for key, key_type in no.all_keys.items()
-        ]
-    return [(base, effective_producer_type(item), item)]
+    return [(p.field_name, p.effective_type, item) for p in contributed_fields(item)]
 
 
 def _stamp_single_type_sources(construct: Construct) -> None:

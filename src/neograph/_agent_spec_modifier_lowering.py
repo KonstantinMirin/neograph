@@ -55,7 +55,7 @@ from neograph._agent_spec_placeholders import (
     property_title_to_prompt_path,
 )
 from neograph._ir_branch import _BranchNode
-from neograph._ir_fields import loop_carry_dest_key
+from neograph._ir_consume import loop_carry_dest_key
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError

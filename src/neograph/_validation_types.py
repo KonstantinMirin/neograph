@@ -1,5 +1,12 @@
 """Type-compatibility primitives and shared vocabulary for construct validation.
 
+``Producer`` and ``effective_producer_type``/``effective_producer_type_for`` now
+live in ``_ir_fields`` beside ``contributed_fields``, the write-set enumeration
+that BUILDS them, per neograph-yz69e -- a producer record is a fact about what an
+item contributes, not a fact about validation, and the leaf that enumerates the
+fields is the natural owner of the record describing one. They are imported and
+re-exported here so the cluster's public seam is unchanged for every caller.
+
 Leaf module of the validation cluster (see ``_construct_validation.py`` for the
 orchestrator + public seam). Holds the producer/consumer assignability rules
 (``_types_compatible``), the type-introspection helpers they lean on, the
@@ -17,7 +24,6 @@ import os
 import sys
 import types
 from collections import OrderedDict
-from dataclasses import dataclass
 from typing import (
     ForwardRef,
     TypeGuard,
@@ -28,38 +34,22 @@ from typing import (
 )
 
 from neograph._hints import resolve_hints
+from neograph._ir_fields import Producer, effective_producer_type, effective_producer_type_for
 from neograph._ir_protocols import ConstructItem, ConstructLike
-from neograph._normalize import _declared_output
 from neograph.describe_type import type_display_name
 from neograph.node import Node, TypeSpecStatic
 
-
-@dataclass(frozen=True)
-class Producer:
-    """A producer registered during construct validation.
-
-    effective_type is user-declared and therefore opaque from neograph's
-    perspective — see docs/design/architecture-decisions.md §5 for the
-    boundary rationale. label is rendered verbatim in error messages.
-
-    is_loop marks a Loop-modified producer (see neograph-ftnxl.6): unlike
-    Each, Loop does NOT change the declared/effective type (state.py keeps
-    the append-list reducer opaque to the type system — the state field is
-    Annotated[list[output_type], _append_loop_result], but ``effective_type``
-    here intentionally stays the bare ``output_type`` because a plain-T
-    consumer sees the unwrapped latest value, not the list). A list[T]
-    consumer wants the FULL history instead (di.py's ``_unwrap_loop_value``
-    already passes it through unchanged at runtime) — a producer-shape fact
-    ``effective_type`` alone can't express since the SAME producer satisfies
-    two different consumer shapes. ``_loop_aware_compatible`` is the read
-    side of this flag.
-    """
-
-    field_name: str
-    effective_type: TypeSpecStatic
-    label: str
-    is_loop: bool = False
-
+# Explicit re-export seam: these three live in ``_ir_fields`` (the write-set
+# enumeration owns the producer record and the producer-type rule), and the
+# validation cluster's public surface still exposes them from here. Named in
+# ``__all__`` so the re-export is a CONTRACT rather than an incidental import --
+# without it ruff strips the names as unused and every consumer of the seam
+# breaks at import time.
+__all__ = [
+    "Producer",
+    "effective_producer_type",
+    "effective_producer_type_for",
+]
 
 # Items that appear in Construct.nodes — Node, Construct, or the _BranchNode
 # sentinel. Aliased to the structural Protocol so this module's helpers share
@@ -86,57 +76,6 @@ def _is_construct_like(item: NodeItem) -> TypeGuard[ConstructLike]:
         and getattr(item, "input", None) is not None
         and getattr(item, "nodes", None) is not None
     )
-
-
-def effective_producer_type(item: NodeItem) -> TypeSpecStatic:
-    """Return the type this producer writes to the state bus, accounting
-    for modifiers.
-
-    This is the **single source of truth** for the "producer side" of
-    type compatibility. The sole validator walker
-    (``_validate_node_chain``) consults it, so a new modifier that
-    reshapes state only needs to teach this one function about the new
-    rule — the walker picks up the change automatically.
-
-    Current rules:
-      - ``Each`` modifier → ``dict[str, raw_output]`` (aggregated fan-out
-        results land as a dict keyed by ``each.key``; see
-        ``state.py:_add_output_field`` for the state builder side of
-        this rule).
-      - Everything else → the item's declared output (Node ``.outputs``,
-        Construct ``.output``) unchanged.
-
-    Returns ``None`` when the item has no declared output.
-    """
-    output = _declared_output(item)
-    if output is None:
-        return None
-    return effective_producer_type_for(output, getattr(item, "modifier_set", None))
-
-
-def effective_producer_type_for(declared_type: TypeSpecStatic, modifier_set: object | None) -> TypeSpecStatic:
-    """Apply the modifier-to-bus rule to a SINGLE declared output type.
-
-    This is the per-key core extracted from :func:`effective_producer_type`.
-    Both producer-registration paths share it so the Each→dict[str, X] rule
-    has exactly one implementation:
-
-      - whole-node / single-type path → :func:`effective_producer_type`
-        delegates here with the node's sole declared output;
-      - dict-form multi-output path (``_construct_validation`` registers one
-        producer per output key) → delegates here per key, so each key's type
-        is wrapped independently.
-
-    ``modifier_set`` is duck-typed (``.each``) rather than imported, keeping
-    this validation-cluster leaf module free of a ``modifiers`` dependency.
-
-    Current rules:
-      - ``Each`` modifier → ``dict[str, declared_type]``
-      - Everything else → ``declared_type`` unchanged.
-    """
-    if modifier_set is not None and getattr(modifier_set, "each", None) is not None:
-        return dict[str, declared_type]  # type: ignore[valid-type]
-    return declared_type
 
 
 # Sentinel distinguishing "field absent" from "field present but None-valued" —

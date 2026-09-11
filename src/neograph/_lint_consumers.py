@@ -20,14 +20,15 @@ from typing import Any
 from pydantic import BaseModel
 
 from neograph._ir_branch import _BranchNode, iter_with_arms
-from neograph._ir_fields import item_field_names
+from neograph._ir_fields import contributed_fields, item_field_names
 from neograph._ir_normalize import resolve_output_from
 from neograph._lint_kind_registry import LintIssue
 from neograph._lint_predict import _extract_format_placeholders
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._placeholders import DOLLAR_RE as _PLACEHOLDER_RE
+from neograph._state_keys import StateKeys
 from neograph.construct import Construct
-from neograph.naming import field_name_for, output_field_name
+from neograph.naming import field_name_for
 from neograph.node import Node
 
 
@@ -122,6 +123,10 @@ def _framework_field_reads(construct: Construct) -> tuple[set[tuple[str, str]], 
     - ``Construct.output`` -- the declared boundary type surfaces to the parent,
       so EVERY node producing it is a terminal producer. ``members[-1]`` can name
       only one, which is wrong the moment a branch gives each arm its own.
+    - ``Portal(route="decide")`` -- the ``{node}_dispatch`` result is surfaced to
+      the caller, and the node's success path leaves through a synthetic exit, so
+      a later-declared ``error_handler`` takes the positional terminal slot and
+      the dispatched result would otherwise read as dead.
 
     A ``Loop``/``Operator`` ``when=`` callable is deliberately absent: a lambda's
     field reads are not derivable, and the whole-model rule already covers the
@@ -210,6 +215,21 @@ def _framework_field_reads(construct: Construct) -> tuple[set[tuple[str, str]], 
                 value = getattr(portal, attr, None)
                 if isinstance(value, str) and value:
                     field_reads.add((own, value))
+
+            # A dispatch member's `{node}_dispatch` result is SURFACED, so it is a
+            # terminal producer wherever nothing else reads it. The positional
+            # terminal rule above cannot see this: a dispatch node's success path
+            # exits through a synthetic node via Command(goto=...), so a
+            # later-DECLARED sibling (an `error_handler`, which is reached only on
+            # the failure path) takes the `nodes[-1]` slot and the dispatched
+            # result looks dead while it is exactly what the run returns.
+            #
+            # Same shape as the `Construct.output` arm rule above, on the dispatch
+            # axis -- and the reason this lives HERE: the field is framework-named
+            # and framework-written, so deriving its reader anywhere else is the
+            # second-site mistake this function's docstring exists to prevent.
+            if portal.is_dispatch:
+                whole_roots.add(StateKeys.dispatch(own))
 
     return field_reads, whole_roots
 
@@ -310,17 +330,21 @@ def _check_unconsumed_outputs(
     for node in nodes:
         if node.name in terminals:
             continue
-        outputs = normalize_outputs(node.outputs)
-        for key, declared in (outputs.all_keys or {}).items() or (
-            {node.name: outputs.primary}.items() if outputs.primary is not None else ()
-        ):
+        # Read the fields this node writes off the shared write-set enumeration
+        # neograph-yz69e: this used to open-code the dict-form/single-type split
+        # with a `key == node.name` sentinel found nowhere else in the codebase,
+        # and it omitted the Portal `{node}_dispatch` field -- so a dispatched
+        # result nothing consumed was invisible to this check. Under-reporting is
+        # the failure mode this module's own docstring calls worse than silence.
+        for producer in contributed_fields(node):
+            declared = producer.declared_type
             if not (isinstance(declared, type) and issubclass(declared, BaseModel)):
                 continue
             # `@node` kebab-cases the function name, while a consumer's PARAM
             # keeps the underscore form. field_name_for owns that contract, so
             # both sides are compared in the same form.
             base = field_name_for(node.name)
-            root = base if key == node.name else output_field_name(base, key)
+            root = producer.field_name
             if root in consumed_whole or base in consumed_whole:
                 continue
             if any(declared is t or issubclass(declared, t) for t in port_types):

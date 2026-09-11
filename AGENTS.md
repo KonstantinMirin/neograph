@@ -99,9 +99,46 @@ This is the most important architectural fact. All three produce the same intern
 
 **One validator walker, not two.** `_validate_node_chain` in `_construct_validation.py` handles every surface. When `item.inputs` is a dict instance, `_check_fan_in_inputs` walks each `(upstream_name, expected_type)` pair and looks up the producer by `field_name`. Mismatches raise `ConstructError` with the specific key that failed and the type it saw vs expected.
 
-**The producer side is shared.** `effective_producer_type(item)` — defined in `_validation_types.py` and re-exported through `_construct_validation.py` (its `__all__`) — computes "what type does this node write to the state bus, accounting for modifiers". It's the single source of truth for modifier-aware type effects.
+**The producer side is shared.** `effective_producer_type(item)` — defined in `_ir_fields.py`, re-exported through `_validation_types.py` and in turn through `_construct_validation.py` (both `__all__`) — computes "what type does this node write to the state bus, accounting for modifiers". It's the single source of truth for modifier-aware type effects. It moved down from `_validation_types` with `Producer` and `effective_producer_type_for` in `neograph-yz69e`: they sit beside `contributed_fields`, the write-set enumeration that BUILDS them, because a producer record is a fact about what an item contributes rather than a fact about validation.
 
 **Rule for new modifiers that reshape state**: teach `effective_producer_type` about the new rule. The validator picks it up automatically. Do NOT re-inline modifier checks elsewhere — `effective_producer_type` is the single source of truth for modifier-aware type effects.
+
+### `contributed_fields`: the ONE enumeration of an item's write-set
+
+`_ir_fields.contributed_fields(item) -> list[Producer]` answers "which state fields does this
+item write, and of what type" — and it is the ONLY thing that may answer it. Six functions
+used to answer it independently and disagreed about the Portal `{node}_dispatch` field,
+silently, at every seam (`neograph-yz69e`). Everything else is a projection:
+
+| consumer | projection |
+|---|---|
+| `declared_output_fields(item)` | `{p.field_name for p in ...}` — the lossy name set |
+| `item_field_names(construct)` | arm-inclusive flat walk, ordered, for boundary eligibility |
+| `_ir_normalize._producer_pairs` | `(field, effective_type, item)` triples for the resolvers |
+| `_construct_validation` | `for p in contributed_fields(item): arms.register(p.field_name, p, arm_key)` |
+| `_schema_fingerprint._fingerprint_item` | `{p.field_name: fp(p.declared_type)}` |
+| `_lint_consumers` | the unconsumed-output walk |
+
+Three properties are load-bearing, and a change that breaks one is a regression even if the
+suite is green:
+
+- **Per-ITEM. It never walks a construct.** Three callers need three DIFFERENT arm policies —
+  `normalize_ir`'s peer set is top-level only, `_stamp_single_type_sources` is arm-SCOPED (an
+  arm must never see its sibling arm's producers), `item_field_names` is arm-inclusive and
+  flat. A walking primitive can serve at most one and silently destroys the arm scoping.
+  The walk, and the arm policy, stay at the caller.
+- **Ordered list primary; the name set is the lossy projection.** `item_field_names` reads it
+  last-declared-first for boundary precedence. Order cannot be recovered from a set.
+- **It carries BOTH `declared_type` and `effective_type`, and each caller names which it
+  means.** Validation type-checks `effective_type` (an Each producer writes `dict[str, X]`);
+  the fingerprint hashes `declared_type` (`X`). Reading `effective_type` in the fingerprint
+  projection changes every Each node's fingerprint and invalidates every live checkpoint.
+
+**Rule for a new modifier that writes a state field**: teach `contributed_fields`, and nothing
+else. `tests/test_guards_write_set_monopoly.py` bans `output_field_name(...)` outside a
+shrink-only allowlist whose rows each carry a structural reason. It does NOT cover the
+single-field PRIMARY question (`primary_output_field`) — a stated limit, not wider cover than
+it has.
 
 Current rules encoded in `effective_producer_type`:
 - `Each` modifier → `dict[str, output]` (see `state.py:_add_output_field` for the state builder side of the same rule)
@@ -139,7 +176,7 @@ def summarize(refine: list[Draft]) -> Summary:
     ...
 ```
 
-**Validator note**: unlike Each (whose producer type is `dict[str, X]` at the type-annotation level, so the existing shape-only `_types_compatible` dict→list rule covers it for free), a Loop-modified producer's declared/effective type stays the bare element type `T` — Loop doesn't change `Node.outputs`/`effective_producer_type` the way Each does. A `list[T]`-declaring consumer therefore needs a *modifier-aware* compatibility check, not a shape-only one: `Producer.is_loop` (`_validation_types.py`) plus `_loop_aware_compatible` (checked at the `_validation_inputs.py` call sites, not inlined into `_types_compatible`) accept `list[T]` against a Loop producer of `T` — element-type-checked, not a blanket bypass.
+**Validator note**: unlike Each (whose producer type is `dict[str, X]` at the type-annotation level, so the existing shape-only `_types_compatible` dict→list rule covers it for free), a Loop-modified producer's declared/effective type stays the bare element type `T` — Loop doesn't change `Node.outputs`/`effective_producer_type` the way Each does. A `list[T]`-declaring consumer therefore needs a *modifier-aware* compatibility check, not a shape-only one: `Producer.is_loop` (`_ir_fields.py`) plus `_loop_aware_compatible` (checked at the `_validation_inputs.py` call sites, not inlined into `_types_compatible`) accept `list[T]` against a Loop producer of `T` — element-type-checked, not a blanket bypass.
 
 **Scope**: covers only a single, non-nested Loop. Each indexing (`iteration_index`) and nested/cross-sub-construct scope addressing are separate, unresolved gaps — do not conflate them with this projection.
 

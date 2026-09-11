@@ -19,7 +19,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, get_args, get_origin
 
 from neograph._hints import resolve_hints
-from neograph._ir_fields import loop_carry_dest_key
+from neograph._ir_consume import loop_carry_dest_key
 from neograph._normalize import normalize_outputs
 from neograph._validation_types import _fmt_type, _source_location, _types_compatible
 from neograph.errors import ConstructError

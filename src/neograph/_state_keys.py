@@ -202,6 +202,26 @@ class StateKeys:
         return f"neo_portal_proposed_{field_name}"
 
     @staticmethod
+    def dispatch(field_name: str) -> str:
+        """Portal dispatch SUCCESS field name: where a ``route="decide"`` member
+        writes the dispatched flow's typed result.
+
+        Keyed off the dispatch node's own producer field, via the same
+        per-output-key naming convention as its sibling ``dispatch_error`` below
+        -- and NOT ``neo_``-prefixed, for the same reason: the field is
+        user-visible (a downstream node consumes it, and the top-level caller
+        reads it off the ``run()`` result), so it must survive the engine's
+        ``neo_*`` stripping.
+
+        This helper exists because its sibling did and it did not
+        neograph-yz69e. The literal ``output_field_name(field, "dispatch")``
+        was spelled inline at three sites -- the validator, the factory and the
+        state builder -- so nothing tied them together and the derivations that
+        should have agreed about this field silently did not.
+        """
+        return output_field_name(field_name, "dispatch")
+
+    @staticmethod
     def dispatch_error(field_name: str) -> str:
         """Portal dispatch on_invalid='route_to_error' payload field name. Keyed off the dispatch node's own producer field,
         via the SAME per-output-key naming convention as the sibling

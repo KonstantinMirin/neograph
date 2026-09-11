@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from neograph._construct_validation import ConstructError, _types_compatible, effective_producer_type
-from neograph._ir_fields import single_type_candidates
+from neograph._ir_consume import single_type_candidates
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._sidecar import _get_node_source, _get_param_res, _get_sidecar
 from neograph.naming import field_name_for, split_output_field
