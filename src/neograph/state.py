@@ -392,6 +392,15 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
 
     # Dict-form outputs: one state field per key (neograph-1bp.2).
     if no.is_dict_form:
+        # Accumulator channels first: the field is the KEY, unprefixed and
+        # shared, so it is created ONCE however many nodes declare it, and it
+        # is never a per-key `{node}_{key}` field below. The reducer is the
+        # existing concat operator every additive channel already uses.
+        for channel in no.accumulator_keys:
+            fields.setdefault(channel, (Annotated[no.all_keys[channel], _concat_reducer], []))
+        no = no.without_channels()
+        if not no.all_keys:
+            return
         combo, _ = classify_modifiers(node)
         match COMBO_DECOMPOSITION[combo].primary:
             case PrimaryShape.EACH if COMBO_DECOMPOSITION[combo].fused:

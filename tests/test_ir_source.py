@@ -211,22 +211,6 @@ class TestAccumulatedIsPreRegisteredNotDead:
     def test_accumulated_exists_and_names_its_own_channel(self) -> None:
         assert source_channel_kind(Accumulated(channel="neo_accum_x")) == "accumulator-channel"
 
-    def test_accumulated_is_not_yet_referenced_by_any_src_module(self) -> None:
-        """Pins the 'used by nothing YET' claim. When the accumulator channel lands
-        (neograph-iq4a3) this test must be DELETED, not weakened -- it is a
-        statement about step 0, and it is the thing that makes 'deliberate, not dead
-        code' checkable rather than asserted."""
-        import pathlib
-
-        root = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
-        referencing = [
-            p.name for p in sorted(root.rglob("*.py")) if p.name != "_ir_source.py" and "Accumulated" in p.read_text()
-        ]
-        assert referencing == [], (
-            f"Accumulated is now referenced by {referencing}. If the accumulator "
-            "channel has landed, delete this test; do not relax it."
-        )
-
 
 class TestTheMemberToFieldHopIsComputedHere:
     """``PortRef.field`` -- the member->field hop, in one place.

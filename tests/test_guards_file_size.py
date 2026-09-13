@@ -102,6 +102,14 @@ ALLOWLIST: dict[str, int] = {
     "modifiers.py": 806,
     "renderers.py": 575,
     "runner.py": 679,
+    # neograph-iq4a3: the state-model AUTHORITY -- every reducer-bearing field is
+    # created here and nowhere else (the write-set guard depends on that). The
+    # five-line overage is the accumulator channel field, which must sit beside
+    # the other reducer-bearing creations. The one movable cluster,
+    # _add_agent_channels, would become a 30-line module with a single caller:
+    # a design move, not a split (the _oracle.py precedent). Exact ceiling;
+    # shrink-only.
+    "state.py": 505,
     "testing/fakes.py": 729,
     "testing/scaffold.py": 663,
 }

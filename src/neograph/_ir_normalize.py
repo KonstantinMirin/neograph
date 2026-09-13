@@ -41,7 +41,7 @@ from neograph._ir_branch import _BranchNode, iter_item_slots
 from neograph._ir_consume import fan_out_candidates, port_source_field, single_type_candidates, with_source
 from neograph._ir_fields import contributed_fields, declared_output_fields
 from neograph._ir_protocols import ConstructItem, ConstructLike
-from neograph._ir_source import EachItem, HandoffChannel, Peer, Port, PortRef, Source
+from neograph._ir_source import Accumulated, EachItem, HandoffChannel, Peer, Port, PortRef, Source
 from neograph._normalize import normalize_inputs
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._sidecar import infer_oracle_gen_type
@@ -365,9 +365,14 @@ def normalize_ir(construct: Construct) -> None:
     # fan-in today, so the limitation is documented rather than closed here.
     # See neograph-vn5f (site 2).
     peer_field_names: set[str] = set()
+    # Accumulator channels at this level: the pre-registered `Accumulated`
+    # Source variant goes live here and nowhere else (construction ban). Read
+    # off the shared write-set enumeration, never re-derived from outputs.
+    channel_names: set[str] = set()
     portal_members: list[ConstructItem] = []
     for item in construct.nodes:
         peer_field_names |= declared_output_fields(item)
+        channel_names |= {p.field_name for p in contributed_fields(item) if p.is_accumulator}
         # Portal mesh members at THIS level (top-level siblings, D-MESH-LEVEL).
         # Collected in the existing allowlisted `.nodes` walk so no new raw walk
         # is introduced (arm-blind-walk guard). A member — including the mesh
@@ -442,6 +447,19 @@ def normalize_ir(construct: Construct) -> None:
             if group_channel is not None:
                 key = item.handoff_param or "handoff"
                 updates["input_sources"] = with_source(item, key, HandoffChannel(group_channel))
+        # A dict-form input key that names a channel reads the UNION off that
+        # unprefixed field. Stamped as its own Source variant so the address
+        # table says what it is; the runtime read is the same state[key] as a
+        # peer field -- the difference is what the value MEANS, not where it is.
+        ni = normalize_inputs(item.inputs)
+        if ni.is_dict_form:
+            for key in ni.by_name:
+                if key in channel_names and key not in (item.input_sources or {}):
+                    updates["input_sources"] = with_source(
+                        item if "input_sources" not in updates else item.model_copy(update=updates),
+                        key,
+                        Accumulated(key),
+                    )
         if updates:
             container[idx] = item.model_copy(update=updates)
 

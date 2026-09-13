@@ -159,6 +159,57 @@ The validator (`_types_compatible`) accepts `list[X]` against a `dict[str, X]` p
 
 **Ordering caveat**: `dict.values()` preserves insertion order, but Each's barrier collects `Send()` results in arrival order, not `each.over` collection order. Use `list[X]` for order-independent reductions (counts, aggregates, summaries). If you need deterministic ordering, consume as `dict[str, X]` and sort explicitly on the key.
 
+### Accumulator channels: `Accumulate[T]` -- many nodes append, one reads the union
+
+A value could enter state only as a NODE'S OUTPUT, so accumulating across an Each fan cost a
+wrapper type, a scripted node whose only job was to push the branch's evidence out, and a
+hand-written merge at the parent -- and the failure was silent: a branch returning a bare
+`Claim` dropped every reading it took, by construction, on a green run (GH #16). An
+accumulator channel is declared where it is WRITTEN, as a dict-form output key:
+
+```python
+verify = Node.scripted("verify", fn=..., inputs={"item": str},
+                       outputs={"result": Verdict, "readings": Accumulate[Reading]}) | Each(over="seed.claims", key="text")
+decide = Node.scripted("decide", fn=..., inputs={"verify_result": dict[str, Verdict], "readings": list[Reading]}, outputs=Decision)
+```
+
+The KEY is the channel name. The field on the bus is `readings` -- UNPREFIXED, never
+`{node}_readings` -- shared by every node that declares it and merged by the existing
+`_concat_reducer` (the same operator the agent `tool_log` and Oracle collectors use). A
+per-write `list` extends; a scalar appends. Same spelling on all three surfaces; a `@node`
+consumer is just a param `readings: list[Reading]`.
+
+**The marker never survives the discriminator.** `Accumulate[Reading]` is a plain generic
+alias, accepted by `_validate_type_spec` because it has an `__origin__`, and stripped at
+`normalize_outputs` -- the ONE place `Node.outputs` is discriminated -- into `list[Reading]`
+plus `NormalizedOutputs.accumulator_keys`. Nothing downstream of the discriminator sees the
+marker. `contributed_fields` emits the channel as an unprefixed `Producer(is_accumulator=True)`;
+that is how the validator, `state.py`, the fingerprint and lint all learn about it, and it
+enters the enumeration exactly once per appending node. There is no construct-level
+declaration, no new IR field and no new normalizer: this is LangGraph's own `Annotated[list, add]`
+surfaced, not a new mechanism, so it did not earn the Portal-scale shape.
+
+**Ordering, defined**: the union is ordered WITHIN a branch and UNORDERED ACROSS branches --
+Each collects `Send()` results in arrival order, exactly the `list[X]`-consumer-of-Each caveat
+above. A reader wanting determinism sorts on a stable key it placed in the element.
+
+**What is refused at assembly** (`_check_channel_registration`, `_validation_arms.py`): two
+channels of one name with different element types; a channel colliding with a node's own field
+name; a channel as the PRIMARY key of a think/agent/act node (the model authors the first key,
+nothing authors a channel); a channel on an Oracle- or Portal-modified node (their collectors
+own the additive merge). A node cannot read the channel it appends to -- nothing preceding it
+produces the field -- and a non-first node reading a channel nobody appends to is refused by the
+existing no-producer check; a FIRST node is not, which is `neograph-rfp5s`, not this feature.
+
+**What has no representation, and says so**: `to_agent_spec` fails loud for a construct with a
+channel (Agent Spec has no many-writers-one-field semantic; exporting it as a per-node
+`list[T]` Property would wire an artifact the runtime does not take -- the `neograph-t1nbp`
+shape), and `dump_spec` records it as an `accumulator_channel` loss instead of flattening it.
+
+**The two follow-ups the reporter asked for, scoped out on purpose**: `appends={channel: fn}`,
+the transform that derives an agent node's channel write from its `tool_log`; and a declarable
+reducer (union-by-key / last-write-wins / dedup). Both are filed.
+
 ### The free Loop scope projections: `all_in_scope` and `from_enclosing(n)`
 
 Mirrors the Each `list[X]` rule above, but for `Loop`. A `Loop`-modified node's state field is *already* a full per-iteration history — `state.py`'s `PrimaryShape.LOOP` case is `Annotated[list[output_type], _append_loop_result]`, and `_append_loop_result` (`_state_reducers.py`) is a pure append (`[*existing, new]`). Loop is sequential (not parallel like Each), so list position **is** iteration order for a non-nested Loop — no new storage, no per-iteration metadata, just a read-time view over what already exists:

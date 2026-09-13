@@ -28,6 +28,7 @@ from collections import OrderedDict
 
 from neograph._ir_branch import iter_with_arm_ids
 from neograph._ir_protocols import ConstructLike
+from neograph._normalize import normalize_outputs
 from neograph._state_keys import StateKeys
 from neograph._validation_types import NodeItem, Producer, ProducerMap, _fmt_type, _source_location, _types_compatible
 from neograph.errors import ConstructError, NeographError
@@ -37,7 +38,7 @@ from neograph.modifiers import (
     classify_modifiers,
     modifier_names_for_combo,
 )
-from neograph.node import TypeSpecStatic
+from neograph.node import Node, TypeSpecStatic
 
 
 class ArmScopedProducers:
@@ -220,4 +221,71 @@ def _check_no_modifier_in_branch_arm(construct: ConstructLike) -> None:
             node=name,
             construct=construct.name,
             location=_source_location(),
+        )
+
+
+def _check_channel_registration(
+    construct: ConstructLike, item: NodeItem, producer: Producer, all_producers: ProducerMap
+) -> None:
+    """Accumulator channels are the ONE case where two items legally produce
+    one field -- and only when both sides declare a channel of the same
+    element type. Everything else about a duplicate field is untouched here.
+
+    Refused, at assembly, naming both sides:
+    - a channel and a non-channel on one field name (a node named ``readings``
+      next to a ``"readings": Accumulate[...]`` key would silently share a
+      field with two different reducers);
+    - two channels of one name with different element types (a union of
+      ``Reading`` and ``str`` is not a union of anything).
+
+    An LLM-mode node (think/agent/act) may not make a channel its PRIMARY key:
+    the first dict key is what the model is asked to author, and nothing authors
+    a channel -- the framework only appends what the body returns under it.
+    Oracle- and Portal-modified nodes may not declare a channel at all: their
+    collectors already own the additive merge, and stacking a second one is not
+    a supported shape (stated, not silent).
+    """
+    name = getattr(item, "name", None)
+    if producer.is_accumulator and isinstance(item, Node):
+        no = normalize_outputs(item.outputs)
+        if item.mode in ("think", "agent", "act") and no.primary_key == producer.field_name:
+            raise ConstructError.build(
+                f"channel '{producer.field_name}' cannot be the primary (first) output key of a {item.mode} node",
+                found=f"outputs={{{producer.field_name!r}: Accumulate[...], ...}} on node '{name}'",
+                hint="put the model-authored output first; a channel is appended by the body, not authored by the model",
+                node=name,
+                construct=construct.name,
+            )
+        ms = item.modifier_set
+        if ms.oracle is not None or ms.portal is not None:
+            raise ConstructError.build(
+                f"channel '{producer.field_name}' is not supported on an Oracle- or Portal-modified node",
+                found=f"node '{name}' declares Accumulate[...] under {'Oracle' if ms.oracle is not None else 'Portal'}",
+                hint="append from a bare, Each- or Loop-modified node; Oracle/Portal collectors own their own merge",
+                node=name,
+                construct=construct.name,
+            )
+    existing = all_producers.get(producer.field_name)
+    if existing is None:
+        return
+    if producer.is_accumulator and existing.is_accumulator:
+        if _types_compatible(existing.effective_type, producer.effective_type) and _types_compatible(
+            producer.effective_type, existing.effective_type
+        ):
+            return
+        raise ConstructError.build(
+            f"channel '{producer.field_name}' is declared with two different element types",
+            found=f"{existing.label}: {_fmt_type(existing.effective_type)}; {producer.label}: {_fmt_type(producer.effective_type)}",
+            hint="every appender of a channel must declare the same Accumulate[T]",
+            node=name,
+            construct=construct.name,
+        )
+    if producer.is_accumulator or existing.is_accumulator:
+        channel, other = (producer, existing) if producer.is_accumulator else (existing, producer)
+        raise ConstructError.build(
+            f"channel '{channel.field_name}' collides with a node output field of the same name",
+            found=f"{channel.label} and {other.label}",
+            hint="rename the node or the channel; a channel field is unprefixed and shared, a node field is not",
+            node=name,
+            construct=construct.name,
         )

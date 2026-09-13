@@ -122,17 +122,33 @@ def contributed_fields(item: ConstructItem) -> list[Producer]:
 
     out: list[Producer] = []
     if no.is_dict_form:
-        out.extend(
-            Producer(
-                field_name=output_field_name(base, key),
-                effective_type=effective_producer_type_for(key_type, item.modifier_set),
-                declared_type=key_type,
-                # Per-key label, rendered verbatim in validation errors.
-                label=f"node '{name}' output '{key}'",
-                is_loop=is_loop,
+        for key, key_type in no.all_keys.items():
+            if key in no.accumulator_keys:
+                # A channel: the field is the KEY itself, unprefixed and shared,
+                # and its type is the flat list[T] the discriminator already
+                # produced -- deliberately NOT passed through
+                # effective_producer_type_for, because an Each branch appends a
+                # flat list to the channel; it does not write a per-key dict.
+                out.append(
+                    Producer(
+                        field_name=key,
+                        effective_type=key_type,
+                        declared_type=key_type,
+                        label=f"node '{name}' channel '{key}'",
+                        is_accumulator=True,
+                    )
+                )
+                continue
+            out.append(
+                Producer(
+                    field_name=output_field_name(base, key),
+                    effective_type=effective_producer_type_for(key_type, item.modifier_set),
+                    declared_type=key_type,
+                    # Per-key label, rendered verbatim in validation errors.
+                    label=f"node '{name}' output '{key}'",
+                    is_loop=is_loop,
+                )
             )
-            for key, key_type in no.all_keys.items()
-        )
     elif not no.is_none:
         out.append(
             Producer(
@@ -333,6 +349,11 @@ class Producer:
     label: str
     is_loop: bool = False
     declared_type: TypeSpecStatic | None = None
+    #: An ACCUMULATOR CHANNEL: the field is UNPREFIXED, shared by every item
+    #: that declares it, and merged by ``_concat_reducer``. The one case where
+    #: several items legally produce one field -- validation permits the
+    #: duplicate only when both sides carry this flag and agree on type.
+    is_accumulator: bool = False
 
 
 def effective_producer_type(item: ConstructItem) -> TypeSpecStatic:

@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 from neograph._construct_graph import (
     _build_adjacency,
     _build_decorated_dict,
+    _channel_producers,
     _resolve_dict_output_param,
     _topo_sort,
 )
@@ -170,6 +171,7 @@ def _cleanup_inputs_and_register(
     """
     # Single-pass: accumulate all updates per node, then one model_copy each.
     # Previously 3 separate loops with up to 3 model_copy calls per node.
+    channels = _channel_producers(decorated)
     for field in list(decorated):
         n = decorated[field]
         if field in plain_fields:
@@ -198,8 +200,12 @@ def _cleanup_inputs_and_register(
                     (k in decorated and k != field)
                     or k in sub_by_field
                     or k in skip
+                    or k in channels
                     or _resolve_dict_output_param(k, decorated) is not None
                 ):
+                    # `k in channels`: a param naming an accumulator channel reads
+                    # the union off that unprefixed field -- it is a real input
+                    # key, not an unknown name to strip.
                     filtered[k] = v
             if filtered != ni.by_name:
                 updates["inputs"] = filtered

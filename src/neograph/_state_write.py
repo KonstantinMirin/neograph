@@ -117,6 +117,13 @@ def _build_state_update(
                 # Secondary keys (framework-collected, e.g. tool_log) are
                 # demand-driven and legitimately absent — stay tolerant.
                 continue
+            if key in no.accumulator_keys:
+                # A channel write: the KEY is the field, unprefixed and shared,
+                # and the value is a flat list for _concat_reducer -- NEVER the
+                # per-branch {each_key: val} wrap the ordinary keys get, which
+                # would union dicts instead of readings.
+                update[key] = val
+                continue
             key_field = output_field_name(field_name, key)
             if each_mod and each_item is not None:
                 key_val = getattr(each_item, each_mod.key, str(each_item))

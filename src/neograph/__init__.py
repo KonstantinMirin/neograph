@@ -18,6 +18,7 @@ For advanced use (IR-level tests, programmatic construction from config,
 sub-constructs), see Node and Construct directly.
 """
 
+from neograph._accumulate import Accumulate
 from neograph._agent_spec import to_agent_spec
 from neograph._agent_spec_conformance import ConformanceReport, ConformanceTier
 from neograph._agent_spec_conformance_report import export_conformance
@@ -117,6 +118,7 @@ __all__ = [
     "node",
     "construct_from_module",
     "construct_from_functions",
+    "Accumulate",
     "FromInput",
     "FromConfig",
     "FromResource",

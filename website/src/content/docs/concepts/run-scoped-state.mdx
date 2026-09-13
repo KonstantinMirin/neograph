@@ -104,3 +104,54 @@ Tool(
 Arguments not named stay exactly as the model composed them. The binding is declared, so assembly fails when no upstream produces the path's root — a reference the framework resolves must be proven resolvable before a run, not silently become `None` and query the wrong thing.
 
 Reach for it whenever the **correctness** of an argument matters rather than its plausibility. `examples/33_run_scoped_state.py` shows all three routes in one pipeline, with a fake model that queries the wrong warehouse on purpose.
+
+## Accumulating across a fan: `Accumulate[T]`
+
+`context=` solves *reading* a value produced earlier. Its mirror image is *writing* to one place from many — every branch of an `Each` taking readings that a judge downstream must see together. Until now a value could enter state only as a node's output, so that cost a wrapper type to carry two things through one port, a scripted node inside the branch whose only job was to push the readings out, and a hand-written merge at the parent. The failure it invited was silent: a branch returning a bare `Claim` dropped every reading it took, by construction, and the judge re-decided over the opening reads while each claim cited evidence that was gone. Green run.
+
+An accumulator channel is declared where it is written, as a dict-form output key:
+
+```python
+from pydantic import BaseModel
+
+from neograph import Accumulate, Each, Node
+
+
+class Reading(BaseModel, frozen=True):
+    claim: str
+    locus: str
+
+
+class Verdict(BaseModel, frozen=True):
+    claim: str
+    status: str
+
+
+class Decision(BaseModel, frozen=True):
+    loci: list[str]
+
+
+verify = Node.scripted(
+    "verify", fn="verify_one",
+    inputs={"item": str},
+    outputs={"result": Verdict, "readings": Accumulate[Reading]},   # every branch appends
+) | Each(over="seed.claims", key="text")
+
+decide = Node.scripted(
+    "decide", fn="decide_all",
+    inputs={"verify_result": dict[str, Verdict], "readings": list[Reading]},   # reads the union
+    outputs=Decision,
+)
+```
+
+The key is the channel's name. The field on the bus is `readings` — not `verify_readings` — shared by every node that declares it and merged by the same append operator the agent tool log uses. A branch body returns a list under that key (a scalar is appended as one element). A `@node` consumer is just a parameter of that name typed `list[Reading]`; the declaration is the same on all three surfaces.
+
+Nothing else about the fan changes. `result` stays a per-branch dict keyed by the each-key, and a branch still sees only the snapshot it was sent — the channel is the one thing that unions.
+
+**Ordering is defined, not deterministic.** The union is ordered within a branch and unordered across branches, because `Each` collects results in arrival order. Sort on a stable key you placed in the element.
+
+**Refused at assembly**: two declarations of one channel with different element types; a channel named like a node's own field; a channel as the *first* output key of a `think`/`agent`/`act` node (the model authors that key, nothing authors a channel); a channel on an Oracle- or Portal-modified node. A node cannot read the channel it appends to.
+
+**No representation, said aloud**: `to_agent_spec` fails loud for a pipeline with a channel — Agent Spec has no field that many nodes write — and `dump_spec` records it as a loss rather than flattening it to an ordinary `list[T]` key.
+
+Two things the channel does not yet do: derive an agent node's append from its tool log automatically (today that is a one-line scripted node inside the branch), and de-duplicate by key. Both are tracked.

@@ -85,6 +85,10 @@ DUMP_LOSS_META: dict[str, DumpLossMeta] = {
     "callable_skip_when": DumpLossMeta("NO_REPR", "Node.skip_when is a Python predicate"),
     "callable_skip_value": DumpLossMeta("NO_REPR", "Node.skip_value is a Python callable"),
     "raw_fn": DumpLossMeta("NO_REPR", "Node.raw_fn is a Python function"),
+    "accumulator_channel": DumpLossMeta(
+        "NO_REPR",
+        "Accumulate[T] declares a shared, unprefixed, concat-merged channel; the spec slot holds one per-node type",
+    ),
     "renderer": DumpLossMeta("NO_REPR", "renderer is a live Renderer instance"),
     "oracle_merge_hook": DumpLossMeta(
         "NO_REPR", "Oracle merge_pre_process/merge_post_process/merge_fallback are Python callables"
@@ -319,7 +323,17 @@ def _dump_node(node: Node, dump: _Dump, path: str) -> dict[str, Any]:
     if outputs.is_none:
         out["outputs"] = dump.lose("absent_outputs", f"{path}.outputs")
     elif outputs.is_dict_form:
-        out["outputs"] = {key: dump.type_ref(value, f"{path}.outputs.{key}") for key, value in outputs.all_keys.items()}
+        # An accumulator channel has no spec slot: dumping it as its stripped
+        # list[T] would load back as an ordinary per-node key and silently lose
+        # the shared, unprefixed, concat-merged field. Record the loss instead.
+        out["outputs"] = {
+            key: (
+                dump.lose("accumulator_channel", f"{path}.outputs.{key}")
+                if key in outputs.accumulator_keys
+                else dump.type_ref(value, f"{path}.outputs.{key}")
+            )
+            for key, value in outputs.all_keys.items()
+        }
     else:
         out["outputs"] = dump.type_ref(outputs.primary, f"{path}.outputs")
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING
 
-from neograph._construct_graph import _resolve_dict_output_param
+from neograph._construct_graph import _channel_producers, _resolve_dict_output_param
 from neograph._construct_validation import ConstructError
 from neograph._normalize import normalize_inputs
 from neograph._sidecar import _get_param_res, _get_sidecar, _set_param_res
@@ -102,8 +102,12 @@ def _detect_fan_out_params(
             _, pnames = sidecar
             di_params = set(_get_param_res(n))
             _ports = port_params.get(field_name, set())
+            # A param that names an accumulator channel reads the union, so it is
+            # a dataflow edge, never the Each item receiver -- same exclusion the
+            # normalizer's fan_out_candidates applies via the producer set.
+            channels = _channel_producers(decorated)
             fan_out_params[field_name] = {
-                p for p in pnames if p not in decorated and p not in di_params and p not in _ports
+                p for p in pnames if p not in decorated and p not in di_params and p not in _ports and p not in channels
             }
     return fan_out_params
 

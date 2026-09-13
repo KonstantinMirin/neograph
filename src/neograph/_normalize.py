@@ -18,8 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
+from neograph._accumulate import accumulate_element
 from neograph._ir_protocols import ConstructItem
-from neograph.errors import ConfigurationError
+from neograph.errors import ConfigurationError, ConstructError
 from neograph.naming import output_field_name
 from neograph.node import Node, TypeSpecStatic
 
@@ -42,6 +43,27 @@ class NormalizedOutputs:
     all_keys: dict[str, Any]
     is_dict_form: bool
     is_none: bool
+    #: Dict-form keys declared as ``Accumulate[T]``. In ``all_keys`` /
+    #: ``primary`` / ``secondary`` those values are ALREADY ``list[T]`` -- the
+    #: marker is stripped here, at the single discriminator, so no reader
+    #: downstream of it ever sees ``Accumulate``. The set is what
+    #: ``contributed_fields`` reads to emit the channel as an unprefixed producer.
+    accumulator_keys: frozenset[str] = frozenset()
+
+    def without_channels(self) -> NormalizedOutputs:
+        """This view minus its accumulator keys -- for the per-key ``{node}_{key}``
+        field loops, which a channel must never enter. A projection of the
+        discriminated view, kept HERE so no caller re-discriminates."""
+        keys = {k: v for k, v in self.all_keys.items() if k not in self.accumulator_keys}
+        items = list(keys.items())
+        return NormalizedOutputs(
+            primary=items[0][1] if items else None,
+            primary_key=items[0][0] if items else None,
+            secondary=dict(items[1:]),
+            all_keys=keys,
+            is_dict_form=True,
+            is_none=not items,
+        )
 
 
 @dataclass(frozen=True)
@@ -76,16 +98,37 @@ def normalize_outputs(outputs: Any) -> NormalizedOutputs:
             is_none=True,
         )
     if isinstance(outputs, dict):
-        items = list(outputs.items())
+        # Strip the Accumulate[T] channel marker to list[T] HERE and nowhere
+        # else: every reader of a dict-form output goes through this view, so
+        # a marker that survived it would have to be re-stripped at each one.
+        stripped: dict[str, Any] = {}
+        channels: set[str] = set()
+        for key, value in outputs.items():
+            element = accumulate_element(value)
+            if element is None:
+                stripped[key] = value
+            else:
+                stripped[key] = list[element]  # type: ignore[valid-type]
+                channels.add(key)
+        items = list(stripped.items())
         primary_key, primary = items[0]
         secondary = dict(items[1:])
         return NormalizedOutputs(
             primary=primary,
             primary_key=primary_key,
             secondary=secondary,
-            all_keys=dict(outputs),
+            all_keys=stripped,
             is_dict_form=True,
             is_none=False,
+            accumulator_keys=frozenset(channels),
+        )
+    if accumulate_element(outputs) is not None:
+        # A channel is NAMED by its dict key; the bare form has no name to write to.
+        raise ConstructError.build(
+            "outputs=Accumulate[T] needs a channel name",
+            expected='dict-form outputs, e.g. outputs={"readings": Accumulate[Reading]}',
+            found=f"bare {outputs!r}",
+            hint="the dict key is the channel name every appender and the reader share",
         )
     return NormalizedOutputs(
         primary=outputs,

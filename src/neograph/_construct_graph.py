@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from neograph._construct_validation import ConstructError, _types_compatible, effective_producer_type
 from neograph._ir_consume import single_type_candidates
+from neograph._ir_fields import contributed_fields
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._sidecar import _get_node_source, _get_param_res, _get_sidecar
 from neograph.naming import field_name_for, split_output_field
@@ -50,6 +51,22 @@ def _resolve_dict_output_param(
         if output_key in up_no.all_keys:
             return upstream_name
     return None
+
+
+def _channel_producers(decorated: dict[str, Node]) -> dict[str, list[str]]:
+    """Accumulator channel name -> the field names of every @node that appends to it.
+
+    Read off ``contributed_fields`` -- the shared write-set enumeration -- so the
+    @node builder does not re-derive which keys are channels. A consumer param
+    that names a channel is a dataflow edge to EVERY appender (the union is
+    complete only after all of them ran), and is never a fan-out receiver.
+    """
+    channels: dict[str, list[str]] = {}
+    for field_name, n in decorated.items():
+        for producer in contributed_fields(n):
+            if producer.is_accumulator:
+                channels.setdefault(producer.field_name, []).append(field_name)
+    return channels
 
 
 def _resolve_loop_self_param(
@@ -152,12 +169,24 @@ def _build_adjacency(
     loop_param_renames: dict[str, dict[str, str]] = {}
     all_known = {**dict.fromkeys(decorated), **dict.fromkeys(sub_by_field)}
     adjacency: dict[str, list[str]] = {k: [] for k in all_known}
+    channels = _channel_producers(decorated)
+
+    def _add_channel_edges(consumer_field: str, channel: str, seen: set[str]) -> None:
+        for producer_field in channels[channel]:
+            if producer_field != consumer_field and producer_field not in seen:
+                adjacency[consumer_field].append(producer_field)
+                seen.add(producer_field)
+
     for field_name, n in decorated.items():
         if field_name in plain_fields:
             # Plain Node — derive adjacency from dict-form inputs keys.
             n_inputs_norm = normalize_inputs(n.inputs)
             if n_inputs_norm.is_dict_form:
+                plain_seen: set[str] = set()
                 for dep_name in n_inputs_norm.by_name:
+                    if dep_name in channels:
+                        _add_channel_edges(field_name, dep_name, plain_seen)
+                        continue
                     dep_field = field_name_for(dep_name)
                     if dep_field in decorated or dep_field in sub_by_field:
                         adjacency[field_name].append(dep_field)
@@ -185,6 +214,9 @@ def _build_adjacency(
                 if pname not in seen_deps:
                     adjacency[field_name].append(pname)
                     seen_deps.add(pname)
+                continue
+            if pname in channels and pname not in decorated:
+                _add_channel_edges(field_name, pname, seen_deps)
                 continue
             if pname not in decorated:
                 resolved_upstream = _resolve_dict_output_param(pname, decorated)

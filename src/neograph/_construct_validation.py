@@ -36,7 +36,11 @@ from neograph._ir_branch import iter_with_arm_ids
 from neograph._ir_fields import contributed_fields
 from neograph._ir_protocols import ConstructLike
 from neograph._state_keys import StateKeys
-from neograph._validation_arms import ArmScopedProducers, _check_no_modifier_in_branch_arm
+from neograph._validation_arms import (
+    ArmScopedProducers,
+    _check_channel_registration,
+    _check_no_modifier_in_branch_arm,
+)
 from neograph._validation_inputs import _check_bound_args, _check_item_input
 from neograph._validation_modifiers import (
     _validate_merge_hooks,
@@ -213,6 +217,7 @@ def _validate_node_chain(
         # validator's producer set" and "the resolver's candidate set" the same
         # object rather than two things asserted to agree.
         for producer in contributed_fields(item):
+            _check_channel_registration(construct, item, producer, arms.all_producers)
             arms.register(producer.field_name, producer, arm_key)
 
         # Loop + skip_when without skip_value is surprising.

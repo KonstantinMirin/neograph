@@ -27,6 +27,7 @@ from neograph._agent_spec_modifier_lowering import (
     _lower_operator,
     _lower_oracle,
 )
+from neograph._normalize import normalize_outputs
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
 from neograph.modifiers import (
@@ -85,6 +86,21 @@ def _lower_construct_item(item: Any, provider: ApiProviderResolver, flow_export:
             expected="Node, Construct, or _BranchNode",
             found=type(item).__name__,
         )
+    if isinstance(item, Node):
+        channels = normalize_outputs(item.outputs).accumulator_keys
+        if channels:
+            # Agent Spec has no many-writers-one-field semantic: every Property is
+            # produced by one node. Exporting a channel as a per-node list[T]
+            # Property would wire an artifact whose data flow the runtime does not
+            # take -- the neograph-t1nbp defect by another route. Fail loud, the
+            # same permanent scope boundary the dispatch-mode Portal has.
+            raise ConfigurationError.build(
+                f"node {item.name!r} declares accumulator channel(s) {sorted(channels)} — no Agent Spec lowering",
+                expected="a node whose every output key is produced by that node alone",
+                found=f"outputs keys {sorted(channels)} are Accumulate[...] channels shared across appenders",
+                node=item.name,
+                hint="Agent Spec has no shared, concat-merged output field; export a pipeline without the channel",
+            )
 
     # Node AND Construct items go through the SAME modifier dispatch — a
     # Construct item's modifiers are NOT silently dropped (the pre-fix bug: the

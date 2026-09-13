@@ -194,6 +194,14 @@
       "signature": "(name: 'str', functions: 'list[Any]', *, llm_config: 'dict[str, Any] | LlmConfig | None' = None, input: 'type[BaseModel] | None' = None, output: 'type[BaseModel] | None' = None, output_from: 'str | None' = None) -> 'Construct'"
     },
     {
+      "anchor": "accumulate",
+      "bases": [],
+      "doc": "Marker: this dict-form output key is an accumulator channel of ``T``.",
+      "kind": "class",
+      "name": "Accumulate",
+      "signature": "() -> 'None'"
+    },
+    {
       "anchor": "frominput",
       "bases": [],
       "doc": "Dependency-injection marker: parameter value comes from ``run(input=...)``.",
