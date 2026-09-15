@@ -81,7 +81,7 @@ class TestTheGuardActuallyDetects:
         assert _citations('"""First-of-chain with declared input is NOT flagged -- runtime-seeded."""')
         assert _citations('Each(over="seeded_from_runtime.groups", key="label")')
 
-    def test_would_be_missed_spelling_variants_are_still_caught(self):
+    def test_slip_dead_citation_spelling_variants_are_still_caught(self):
         """Hyphen, doubled whitespace, participle and case are the cheap dodges."""
         for variant in ("isinstance-scan", "isinstance  scan", "IsInstance Scanning", "defers to the runtime  isinstance"):
             assert _citations(variant), variant
