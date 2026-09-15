@@ -588,12 +588,12 @@ def make_portal_dispatch_fn(
     def dispatch_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any] | Command:
         child_config = gate.check_and_increment_depth(config)
         update = inner.invoke(state, config)
-        compiled, expected, spec_name, dispatch_input, gate_error_msg = gate.prepare(update)
+        compiled, expected, spec_name, dispatch_input, gate_error_msg, eligible = gate.prepare(update)
         if gate_error_msg is not None:
             assert error_field is not None and exit_name is not None  # route_to_error invariant
             return Command(goto=portal.error_handler, update={**update, error_field: gate_error_msg})
         result = compiled.invoke(dispatch_input, config=child_config)
-        final_update = gate.finish(update, result, expected, spec_name)
+        final_update = gate.finish(update, result, expected, spec_name, eligible)
         if portal.on_invalid == "route_to_error":
             assert exit_name is not None
             return Command(goto=exit_name, update=final_update)
@@ -602,12 +602,12 @@ def make_portal_dispatch_fn(
     async def adispatch_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any] | Command:
         child_config = gate.check_and_increment_depth(config)
         update = await inner.ainvoke(state, config)
-        compiled, expected, spec_name, dispatch_input, gate_error_msg = gate.prepare(update)
+        compiled, expected, spec_name, dispatch_input, gate_error_msg, eligible = gate.prepare(update)
         if gate_error_msg is not None:
             assert error_field is not None and exit_name is not None  # route_to_error invariant
             return Command(goto=portal.error_handler, update={**update, error_field: gate_error_msg})
         result = await compiled.ainvoke(dispatch_input, config=child_config)
-        final_update = gate.finish(update, result, expected, spec_name)
+        final_update = gate.finish(update, result, expected, spec_name, eligible)
         if portal.on_invalid == "route_to_error":
             assert exit_name is not None
             return Command(goto=exit_name, update=final_update)

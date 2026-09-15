@@ -305,11 +305,15 @@ resolutions, 26 with more than one type match, 2 changed — both the bug.
   already accept a `str` meaning a TYPE NAME (via `lookup_type`). One spelling with two
   contradictory meanings on sibling boundary fields is the same duplicated-authority
   condition that produced the bug.
-- **The type scan survives, deliberately, in two places.** A multi-arm branch's boundary
+- **The type scan survives, deliberately, in ONE place.** A multi-arm branch's boundary
   is satisfied by a different node per arm (`output_reachable_on_every_arm`), which one
-  name cannot express; and Portal mode-(b) dispatch invokes a flow emitted at RUNTIME
-  whose item names are unknowable at assembly. The latter is the ONLY caller allowed to
-  pass `eligible=None`, pinned by `TestSubConstructBoundaryEligibilityMonopoly`.
+  name cannot express, so the boundary is still resolved by TYPE -- over the eligible
+  set, never the whole state. `_scan_subgraph_output` takes `eligible` as a REQUIRED
+  argument, and `TestSubConstructBoundaryEligibilityMonopoly`'s allowlist of whole-state
+  callers is empty and may only stay empty. Portal mode-(b) dispatch is not an
+  exception: the dispatched flow is built by `from_agent_spec` and normalized before it
+  is invoked, so its item names are as knowable as any other construct's
+  (`neograph-5zl3c`).
 - **A port has no Property representation**, so the Agent Spec export stamps it as a
   `neograph/boundary_spec` marker (`attach_boundary_marker`, called from the exporter so
   every export path carries it) and `_construct_from_subflow` restores it. Without that,

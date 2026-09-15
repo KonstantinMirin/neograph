@@ -32,7 +32,7 @@ log = structlog.get_logger()
 
 
 def _scan_subgraph_output(
-    sub_result: dict[str, Any], sub_output_type: type, *, eligible: list[str] | None = None
+    sub_result: dict[str, Any], sub_output_type: type, *, eligible: list[str]
 ) -> Any:
     """Resolve a sub-construct's boundary value from the child's final state.
 
@@ -45,24 +45,18 @@ def _scan_subgraph_output(
     and keep resolving exactly as before, which is why ORDERING was chosen over
     refusing (a refusal would have broken the canonical refine sub-construct).
 
-    ``eligible=None`` keeps the historical whole-state reverse scan. That is NOT a
-    deprecated path: Portal mode-(b) dispatch (``_agent_spec_dispatch``) invokes a
-    flow EMITTED AT RUNTIME whose item names are unknowable at assembly, so it has
-    no eligibility set to pass and the type scan is the only resolution available.
+    ``eligible`` is REQUIRED: there is no whole-state caller. Portal mode-(b)
+    dispatch resolves its flow's boundary over the same set, because the dispatched
+    flow is built through ``from_agent_spec`` and normalized before it is invoked
+    -- neograph-5zl3c.
 
     Unwraps loop append-lists (``list[T]`` from the reducer) by checking ``val[-1]``
     against the declared output type.
     """
-    if eligible is not None:
-        for field in reversed(eligible):
-            if field not in sub_result:
-                continue
-            check_val = _unwrap_loop_value(sub_result[field], object)
-            if isinstance(check_val, sub_output_type):
-                return check_val
-        return None
-    for val in reversed(list(sub_result.values())):
-        check_val = _unwrap_loop_value(val, object)
+    for field in reversed(eligible):
+        if field not in sub_result:
+            continue
+        check_val = _unwrap_loop_value(sub_result[field], object)
         if isinstance(check_val, sub_output_type):
             return check_val
     return None

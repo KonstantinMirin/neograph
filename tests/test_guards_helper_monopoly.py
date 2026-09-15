@@ -857,38 +857,60 @@ class TestSubConstructBoundaryEligibilityMonopoly:
     """GH #17: a sub-construct's boundary may only be resolved over the fields its
     OWN declared items write.
 
-    ``_scan_subgraph_output`` still accepts the historical whole-state scan
-    (``eligible=None``) because Portal mode-(b) dispatch invokes a flow EMITTED AT
-    RUNTIME whose item names cannot be known at assembly -- there is no eligibility
-    set to pass there. That escape hatch is exactly how the bug would come back, so
-    it is pinned to the ONE call site that legitimately needs it.
-
-    The disease-scan for that ticket measured this at zero other instances, which is
-    what makes the ratchet cheap now and expensive to recover later: a second
-    whole-state caller is invisible until some unrelated declaration puts a
-    type-compatible value into a child's state.
+    ``_scan_subgraph_output`` once kept a whole-state scan (``eligible=None``) for
+    Portal mode-(b) dispatch, justified by the claim that a flow emitted at runtime
+    has item names that "cannot be known at assembly". The claim was false
+    (neograph-5zl3c): ``_agent_spec_dispatch`` builds the dispatched flow through
+    ``from_agent_spec`` -- the same ``Construct(...)`` gate as a hand-written
+    pipeline, normalization included -- BEFORE it is invoked, so its item names are
+    exactly as knowable as any other construct's. A guard that pinned that hatch as
+    legitimate converted a wrong comment into infrastructure. The hatch is gone:
+    every caller passes ``eligible=``, the allowlist below is EMPTY, and it may only
+    stay empty.
     """
 
-    #: The ONLY call site allowed to resolve a boundary over the whole child state.
-    _WHOLE_STATE_ALLOWED = {"_agent_spec_dispatch.py"}
+    #: Call sites allowed to resolve a boundary over the whole child state: none.
+    _WHOLE_STATE_ALLOWED: frozenset[str] = frozenset()
+
+    @staticmethod
+    def _whole_state_calls(source: str) -> list[int]:
+        """Line numbers of every ``_scan_subgraph_output(...)`` call that omits ``eligible=``."""
+        return [
+            node.lineno
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "_scan_subgraph_output"
+            and not any(kw.arg == "eligible" for kw in node.keywords)
+        ]
 
     def test_only_portal_dispatch_scans_the_whole_child_state(self):
         offenders = []
         for py in sorted(SRC_DIR.rglob("*.py")):
-            if "__pycache__" in py.parts:
+            if "__pycache__" in py.parts or py.name in self._WHOLE_STATE_ALLOWED:
                 continue
-            for node in ast.walk(ast.parse(py.read_text())):
-                if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_scan_subgraph_output"):
-                    continue
-                passes_eligible = any(kw.arg == "eligible" for kw in node.keywords)
-                if not passes_eligible and py.name not in self._WHOLE_STATE_ALLOWED:
-                    offenders.append(f"{py.name}:{node.lineno}")
+            offenders.extend(f"{py.name}:{lineno}" for lineno in self._whole_state_calls(py.read_text()))
         assert offenders == [], (
             "_scan_subgraph_output was called without eligible=, which resolves a boundary over the "
             "WHOLE child state -- including values the construct was merely handed (a forwarded "
-            "context= field, neo_subgraph_input). That is GH #17. Pass eligible=item_field_names(sub) "
-            f"unless this is the Portal mode-(b) dispatch site:\n  {offenders}"
+            "context= field, neo_subgraph_input). That is GH #17. Pass eligible=item_field_names(sub); "
+            f"there is no sanctioned whole-state caller:\n  {offenders}"
         )
+
+    def test_the_hatch_itself_is_gone(self):
+        """``eligible`` has no default: a caller cannot fall into the whole-state scan
+        by omission, which is the only way the allowlist above could grow back."""
+        import inspect
+
+        from neograph._subconstruct import _scan_subgraph_output
+
+        param = inspect.signature(_scan_subgraph_output).parameters["eligible"]
+        assert param.default is inspect.Parameter.empty, "eligible= must be required, not Optional-with-None"
+
+    def test_positive_an_injected_whole_state_caller_is_caught(self):
+        assert self._whole_state_calls("out = _scan_subgraph_output(result, expected)\n") == [1]
+
+    def test_negative_an_eligibility_scoped_caller_is_not_caught(self):
+        assert self._whole_state_calls("out = _scan_subgraph_output(result, expected, eligible=fields)\n") == []
 
     def test_the_scanner_sees_the_real_call_sites(self):
         """Non-vacuity: a predicate matching nothing passes the assertion above."""

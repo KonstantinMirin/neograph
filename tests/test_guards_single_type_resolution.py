@@ -69,9 +69,8 @@ _ALLOWED: dict[str, str] = {
         "over Source VARIANTS, not user types, and selects nothing"
     ),
     "_subconstruct.py": (
-        "_scan_subgraph_input (neograph-5suot #5, open) and _scan_subgraph_output, "
-        "whose eligible=None arm is the sanctioned Portal mode-(b) fallback: the "
-        "flow is EMITTED AT RUNTIME so its item names cannot exist at assembly."
+        "_scan_subgraph_input (neograph-5suot #5, open): the INPUT-side whole-bag scan. "
+        "_scan_subgraph_output no longer has a whole-state arm."
     ),
 }
 

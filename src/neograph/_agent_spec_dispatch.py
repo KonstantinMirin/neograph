@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ValidationError
 
 from neograph._agent_spec_markers import import_pyagentspec
+from neograph._ir_fields import item_field_names
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import _scan_subgraph_output
 from neograph.errors import ConfigurationError, ConstructError, ExecutionError
@@ -43,8 +44,8 @@ if TYPE_CHECKING:
 class DispatchGate:
     """The gate handle ``make_portal_dispatch_fn`` must consume in full."""
 
-    prepare: Callable[[dict[str, Any]], tuple[Any, type[BaseModel], str, Any, str | None]]
-    finish: Callable[[dict[str, Any], dict[str, Any], type[BaseModel], str], dict[str, Any]]
+    prepare: Callable[[dict[str, Any]], tuple[Any, type[BaseModel], str, Any, str | None, list[str]]]
+    finish: Callable[[dict[str, Any], dict[str, Any], type[BaseModel], str, list[str]], dict[str, Any]]
     check_and_increment_depth: Callable[[RunnableConfig], RunnableConfig]
 
 
@@ -72,11 +73,14 @@ def make_dispatch_gate(
         assert out is not None  # dispatch-mode invariant (T1 validation)
         return out
 
-    def _prepare(update: dict[str, Any]) -> tuple[Any, type[BaseModel], str, Any, str | None]:
+    def _prepare(update: dict[str, Any]) -> tuple[Any, type[BaseModel], str, Any, str | None, list[str]]:
         """Shared pre-invoke: read the emitted spec/input, run the SAME gate, compile.
 
         Returns ``(compiled, expected_output, spec_name, dispatch_input,
-        gate_error_message)``. ``gate_error_message`` is non-None ONLY when
+        gate_error_message, eligible)``. ``eligible`` is the dispatched flow's OWN
+        item fields (``item_field_names``), the set ``_finish`` resolves the
+        boundary over -- the flow is a normalized Construct by this point, so its
+        item names are as knowable as any other construct's. ``gate_error_message`` is non-None ONLY when
         ``portal.on_invalid == 'route_to_error'`` and the spec-validation gate
         (deserialize + ``from_agent_spec``) failed -- in that case ``compiled``/
         ``dispatch_input`` are meaningless and the caller must route to
@@ -122,7 +126,7 @@ def make_dispatch_gate(
             # error_handler instead of raising. on_invalid='raise' (default):
             # surface it wrapped, naming the spec, BEFORE anything runs.
             if portal.on_invalid == "route_to_error":
-                return None, expected, spec_name, None, f"{spec_name}: {gate_error}"
+                return None, expected, spec_name, None, f"{spec_name}: {gate_error}", []
             raise ExecutionError.build(
                 "dispatched flow spec is invalid",
                 construct=spec_name,
@@ -141,13 +145,22 @@ def make_dispatch_gate(
             )
 
         compiled = compile_construct(sub, scripted=portal.scripted, conditions=portal.conditions)
-        return compiled, expected, spec_name, dispatch_input, None
+        return compiled, expected, spec_name, dispatch_input, None, item_field_names(sub)
 
     def _finish(
-        update: dict[str, Any], result: dict[str, Any], expected: type[BaseModel], spec_name: str
+        update: dict[str, Any],
+        result: dict[str, Any],
+        expected: type[BaseModel],
+        spec_name: str,
+        eligible: list[str],
     ) -> dict[str, Any]:
-        """Shared post-invoke: extract the typed output, write ``{node}_dispatch``."""
-        out = _scan_subgraph_output(result, expected)
+        """Shared post-invoke: extract the typed output, write ``{node}_dispatch``.
+
+        The boundary is resolved over ``eligible`` -- the flow's own item fields --
+        exactly as a hand-written sub-construct's is; a value the flow was merely
+        handed can never win (GH #17).
+        """
+        out = _scan_subgraph_output(result, expected, eligible=eligible)
         if out is None:
             raise ExecutionError.build(
                 "dispatched flow did not produce the required output type",
