@@ -135,6 +135,13 @@ def _build_construct(spec: Spec) -> Construct:
                 hint="check that the name matches a defined node or construct in the spec",
             )
 
+    first = pipeline_nodes[0] if pipeline_nodes else None
+    if isinstance(first, Node) and field_name_for(first.name) not in explicit_inputs:
+        # The implicit same-type read minted in _build_node names a value nothing
+        # writes when the node is first: clear it rather than declare an
+        # unfeedable read the validator now refuses -- neograph-rfp5s.
+        pipeline_nodes[0] = first.model_copy(update={"inputs": None})
+
     return Construct(
         name=spec.name,
         description=spec.description,
@@ -208,7 +215,9 @@ def _build_node(node_spec: NodeSpec) -> Node:
     elif isinstance(spec_inputs, str):
         inputs = lookup_type(spec_inputs)
     else:
-        inputs = outputs  # single-type fallback for type-scan extraction
+        # Implicit read of the upstream value of the node's own type. A FIRST
+        # pipeline node has no upstream, so _build_construct clears it there.
+        inputs = outputs
 
     node = Node(
         name=node_spec.name,

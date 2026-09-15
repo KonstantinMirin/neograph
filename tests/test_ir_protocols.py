@@ -45,7 +45,7 @@ class TestConstructItemConformance:
         assert isinstance(node, ConstructItem)
 
     def test_construct_conforms(self):
-        producer = Node.scripted("p", fn="f", inputs=_Payload, outputs=_Payload)
+        producer = Node.scripted("p", fn="f", outputs=_Payload)
         construct = Construct("c", nodes=[producer])
         assert isinstance(construct, ConstructItem)
 

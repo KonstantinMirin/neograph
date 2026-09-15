@@ -1507,7 +1507,7 @@
       "doc": "Import an Open Agent Spec ``Flow`` into a neograph ``Construct`` --",
       "kind": "function",
       "name": "from_agent_spec",
-      "signature": "(flow: 'Any') -> 'Construct'"
+      "signature": "(flow: 'Any', *, _boundary: 'dict[str, Any] | None' = None) -> 'Construct'"
     },
     {
       "anchor": "export_conformance",

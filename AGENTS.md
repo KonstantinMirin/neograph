@@ -93,7 +93,7 @@ This is the most important architectural fact. All three produce the same intern
 
 | Surface | How it produces `inputs` |
 |---|---|
-| Declarative `Node(...)` | Author writes `inputs={'claims': Claims, 'scores': Scores}` (or a single type for backward-compat; the single-type form skips fan-in validation and defers to runtime isinstance scan). |
+| Declarative `Node(...)` | Author writes `inputs={'claims': Claims, 'scores': Scores}` (or a single type, resolved at assembly to the last compatible producer by type -- `resolve_single_type_source`; a first node has no producer to resolve to and is refused). |
 | `@node` decorator | Decoration walks the function signature and emits `inputs={param_name: annotation}` for every typed upstream param. Fan-out (`map_over`) receivers, DI params (`FromInput`/`FromConfig`), and default-value constants are stripped at construct-assembly time. |
 | Programmatic / runtime | Same dict shape as declarative. LLM-driven pipelines serialize to JSON with string type names and resolve them via a type registry. |
 
@@ -198,8 +198,8 @@ channels of one name with different element types; a channel colliding with a no
 name; a channel as the PRIMARY key of a think/agent/act node (the model authors the first key,
 nothing authors a channel); a channel on an Oracle- or Portal-modified node (their collectors
 own the additive merge). A node cannot read the channel it appends to -- nothing preceding it
-produces the field -- and a non-first node reading a channel nobody appends to is refused by the
-existing no-producer check; a FIRST node is not, which is `neograph-rfp5s`, not this feature.
+produces the field -- and a node reading a channel nobody appends to is refused by the no-producer
+check, first node included since `neograph-rfp5s` removed the first-of-chain tolerance.
 
 **What has no representation, and says so**: `to_agent_spec` fails loud for a construct with a
 channel (Agent Spec has no many-writers-one-field semantic; exporting it as a per-node

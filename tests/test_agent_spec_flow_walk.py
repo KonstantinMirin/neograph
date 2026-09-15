@@ -184,16 +184,19 @@ def _loop_flow() -> Any:
     item = Node.scripted("refine", fn="refine_fn", inputs=Claims, outputs=Claims) | Loop(
         when="claims_incomplete", max_iterations=3
     )
-    return to_agent_spec(Construct("loop-entry-pipeline", nodes=[item]))
+    # The root declares the port its first node reads; a portless first read is
+    # refused at assembly (neograph-rfp5s).
+    return to_agent_spec(Construct("loop-entry-pipeline", input=Claims, nodes=[item]))
 
 
 def _each_flow() -> Any:
     """A real exported Flow carrying a ``MapNode`` -- a live singular-subflow holder."""
     from neograph.modifiers import Each
-    from tests.schemas import Claims, RawText, _consumer
+    from tests.schemas import ClusterGroup, Clusters, MatchResult, _consumer, _producer
 
-    item = _consumer("verify", RawText, Claims) | Each(over="items", key="label")
-    return to_agent_spec(Construct("each-pipeline", nodes=[item]))
+    make = _producer("make", Clusters)
+    item = _consumer("verify", ClusterGroup, MatchResult) | Each(over="make.groups", key="label")
+    return to_agent_spec(Construct("each-pipeline", nodes=[make, item]))
 
 
 # -- R0 ----------------------------------------------------------------------

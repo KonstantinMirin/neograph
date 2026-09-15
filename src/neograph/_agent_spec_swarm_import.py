@@ -113,7 +113,7 @@ def _swarm_trigger(swarm: Any) -> Literal["output", "tool"]:
     return mode_to_trigger(value)
 
 
-def _flow_member_to_construct(agent: Any, payload: type[BaseModel], from_spec: Callable[[Any], Construct]) -> Construct:
+def _flow_member_to_construct(agent: Any, payload: type[BaseModel], from_spec: Callable[..., Construct]) -> Construct:
     """Reconstruct a Flow Swarm member (C1) onto a Construct mesh member whose
     boundary I/O is the synthesized uniform mesh ``payload`` (by identity).
 
@@ -145,7 +145,7 @@ def _flow_member_to_construct(agent: Any, payload: type[BaseModel], from_spec: C
     return sub.model_copy(update={"input": payload, "output": payload, "nodes": nodes})
 
 
-def _reconstruct_swarm_mesh(swarm: Any, from_spec: Callable[[Any], Construct]) -> Construct:
+def _reconstruct_swarm_mesh(swarm: Any, from_spec: Callable[..., Construct]) -> Construct:
     """Import a foreign pyagentspec ``Swarm`` onto a native Portal peer mesh
     (gap 2, ratification §3a).
 
@@ -266,7 +266,7 @@ def _reconstruct_swarm_mesh(swarm: Any, from_spec: Callable[[Any], Construct]) -
     return Construct(name=swarm.name, nodes=members)
 
 
-def _reconstruct_swarm_mesh_with_operator_gates(flow: Any, from_spec: Callable[[Any], Construct]) -> Construct | None:
+def _reconstruct_swarm_mesh_with_operator_gates(flow: Any, from_spec: Callable[..., Construct]) -> Construct | None:
     """Recognize the Phase 6 mesh-exit pause composite
     (``AgentNode(Swarm)`` -> ``BranchingNode['portal_operator']`` ->
     ``InputMessageNode``) and reconstruct the underlying Portal mesh with

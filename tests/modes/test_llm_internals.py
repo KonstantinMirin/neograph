@@ -4449,7 +4449,6 @@ class TestLlmConfigAsIRType:
         n = Node(
             name="child",
             mode="think",
-            inputs=Claims,
             outputs=MergedResult,
             model="fast",
             prompt="p",

@@ -229,7 +229,7 @@ def _group_flow_items(flow: Any) -> list[tuple[frozenset[str], dict[str, Any]]]:
     return items
 
 
-def from_agent_spec(flow: Any) -> Construct:
+def from_agent_spec(flow: Any, *, _boundary: dict[str, Any] | None = None) -> Construct:
     """Import an Open Agent Spec ``Flow`` into a neograph ``Construct`` --
     the inverse of ``to_agent_spec()``.
 
@@ -340,7 +340,11 @@ def from_agent_spec(flow: Any) -> Construct:
 
         pipeline_items.append(item)
 
-    return Construct(name=flow.name, nodes=pipeline_items)
+    # ``_boundary`` is a sub-flow's restored ``input``/``output``/``output_from``,
+    # passed by ``_construct_from_subflow`` so the child is BUILT with its ports
+    # and validated against them -- a port attached afterwards by ``model_copy``
+    # skips ``__init__``, so the child's first read would be refused as unfed.
+    return Construct(name=flow.name, nodes=pipeline_items, **(_boundary or {}))
 
 
 # -- Parsing -----------------------------------------------------------------

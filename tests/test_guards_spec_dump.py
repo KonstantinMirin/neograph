@@ -65,7 +65,7 @@ class TestLossIdsAreRegistered:
             "n", fn="guard_dump_fn", inputs=Thing, outputs=Thing
         ) | Loop(when=lambda d: d is None, max_iterations=2)
 
-        emitted = _emitted_ids(dump_spec(Construct("c", nodes=[looped])))
+        emitted = _emitted_ids(dump_spec(Construct("c", input=Thing, nodes=[looped])))
 
         unregistered = sorted(emitted - set(DUMP_LOSS_META))
         assert unregistered == [], (

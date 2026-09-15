@@ -239,10 +239,12 @@ class TestModifierAsFirstNode:
             return MatchResult(cluster_label=input_data.label, matched=["done"])
 
         process = Node.scripted("process", fn="process_item", inputs=ClusterGroup, outputs=MatchResult) | Each(
-            over="make_items.groups", key="label"
+            over="neo_subgraph_input.groups", key="label"
         )
 
-        pipeline = Construct("test-each-start", nodes=[process])
+        # The root declares the port the fan-out reads; an Each whose root names
+        # nothing is refused at assembly (neograph-rfp5s).
+        pipeline = Construct("test-each-start", input=Clusters, nodes=[process])
         state_model = compile_state_model(pipeline)
         graph = StateGraph(state_model)
         prev = _add_node_to_graph(

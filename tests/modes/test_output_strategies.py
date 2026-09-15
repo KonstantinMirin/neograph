@@ -189,7 +189,6 @@ class TestCarriedOutputField:
                         outputs=Verdict,
                         model="fast",
                         prompt="judge",
-                        inputs={"seed": Verdict},
                     )
                 ],
             )
@@ -217,7 +216,6 @@ class TestCarriedOutputField:
                         outputs=Verdict,
                         model="fast",
                         prompt="judge ${topic}",
-                        inputs={"topic": str},
                         tools=[Tool(name="t_read", budget=1)],
                     )
                 ],

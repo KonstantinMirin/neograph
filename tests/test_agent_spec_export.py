@@ -698,16 +698,17 @@ class TestToAgentSpecLowersModifiers:
         from neograph._agent_spec import to_agent_spec
         from neograph.modifiers import Each
 
-        node = _consumer("verify", RawText, Claims)
-        node = node | Each(over="items", key="label")
-        pipeline = Construct("each-pipeline", nodes=[node])
+        make = _producer("make", Clusters)
+        node = _consumer("verify", ClusterGroup, MatchResult)
+        node = node | Each(over="make.groups", key="label")
+        pipeline = Construct("each-pipeline", nodes=[make, node])
 
         flow = to_agent_spec(pipeline)
 
         map_nodes = [n for n in flow.nodes if isinstance(n, MapNode)]
         assert len(map_nodes) == 1
         assert map_nodes[0].metadata[_MARK_MODIFIER] == "each"
-        assert map_nodes[0].metadata[_MARK_EACH_SPEC]["over"] == "items"
+        assert map_nodes[0].metadata[_MARK_EACH_SPEC]["over"] == "make.groups"
 
     def test_map_over_dict_form_fan_out_receiver_exports_without_error(self):
         """neograph-qtfof.1: @node's map_over= sugar (dict-form inputs where
@@ -772,7 +773,7 @@ class TestToAgentSpecLowersModifiers:
 
         node = Node.scripted("refine", fn="refine_fn", inputs=Claims, outputs=Claims)
         node = node | Loop(when="claims_incomplete", max_iterations=3)
-        pipeline = Construct("loop-pipeline", nodes=[node])
+        pipeline = Construct("loop-pipeline", input=Claims, nodes=[node])
 
         flow = to_agent_spec(pipeline)
 
@@ -824,7 +825,7 @@ class TestToAgentSpecLowersModifiers:
 
         node = Node.scripted("refine", fn="refine_fn", inputs=Claims, outputs=Claims)
         node = node | Loop(when=lambda d: d is None, max_iterations=3)
-        pipeline = Construct("loop-callable-pipeline", nodes=[node])
+        pipeline = Construct("loop-callable-pipeline", input=Claims, nodes=[node])
 
         with pytest.raises(ConfigurationError, match="Loop.when"):
             to_agent_spec(pipeline)

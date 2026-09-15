@@ -196,7 +196,7 @@ class TestDumpIsDeterministic:
         ).model_copy(update={"skip_when": lambda d: False})
         sub = Construct("sub", input=Finding, output=Finding, nodes=[inner])
 
-        losses = dump_spec(Construct("ordered", nodes=[head, sub]))["neograph/losses"]
+        losses = dump_spec(Construct("ordered", input=Finding, nodes=[head, sub]))["neograph/losses"]
         paths = [entry["path"] for entry in losses]
 
         assert len(paths) >= 2, paths

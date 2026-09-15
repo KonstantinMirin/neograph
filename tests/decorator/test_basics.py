@@ -722,7 +722,7 @@ class TestNodeDecoratorRawMode:
 
         mod = self._fresh_module("test_raw_downstream")
 
-        @node(mode="raw", inputs=Claims, outputs=Claims)
+        @node(mode="raw", outputs=Claims)
         def produce_claims(state, config):
             return {"produce_claims": Claims(items=["x", "y"])}
 

@@ -9,11 +9,6 @@ For each item with a declared input, verify some upstream producer supplies
 a compatible value — directly, or through an `Each` modifier whose `over`
 path resolves to `list[input_type]`.
 
-Defers to runtime isinstance-scanning when evidence is insufficient:
-  - No upstream producers (first-of-chain — input comes from run(input=...))
-  - dict / non-class input types (multi-field or raw extraction)
-  - Each modifier whose root segment doesn't match a known producer
-
 This module is the ORCHESTRATOR + the single public seam for the validation
 cluster, per neograph-gig0. The per-rule logic lives in flat peer modules:
   - ``_validation_types``     — type-compat primitives + shared vocabulary
@@ -165,16 +160,14 @@ def _validate_node_chain(
             # Construct items use .input (singular boundary port).
             input_type = getattr(item, "input", None)
         if input_type is not None:
-            # Warn on single-type inputs (isinstance scan) — dict-form is safer.
-            if (
-                isinstance(item, Node) and not isinstance(input_type, dict) and visible_producers  # not the first node
-            ):
+            # Warn on single-type inputs — dict-form names the producer explicitly.
+            if isinstance(item, Node) and not isinstance(input_type, dict):
                 import warnings
 
                 type_name = _fmt_type(input_type)
                 warnings.warn(
                     f"Node '{item.name}': single-type inputs={type_name} "
-                    f"relies on O(N) isinstance scan at runtime. "
+                    f"resolves to the last compatible producer by type. "
                     f"Use dict-form inputs={{'{field_name_for(item.name)}': {type_name}}} "
                     f"for explicit named resolution.",
                     DeprecationWarning,

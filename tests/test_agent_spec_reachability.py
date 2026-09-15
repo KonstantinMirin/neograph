@@ -117,7 +117,7 @@ class TestLoopEntersTheBodyBeforeTheCheck:
         node = Node.scripted("refine", fn="refine_fn", inputs=Claims, outputs=Claims) | Loop(
             when="claims_incomplete", max_iterations=3
         )
-        return Construct("loop-entry-pipeline", nodes=[node])
+        return Construct("loop-entry-pipeline", input=Claims, nodes=[node])
 
     def test_the_flow_enters_the_loop_body_not_the_check_node(self) -> None:
         flow = to_agent_spec(self._pipeline())

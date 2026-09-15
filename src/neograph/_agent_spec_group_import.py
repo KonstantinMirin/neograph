@@ -48,7 +48,7 @@ from neograph.modifiers import Each, Loop, Oracle
 from neograph.node import Node
 
 
-def _construct_from_subflow(subflow: Any, name: str, from_spec: Callable[[Any], Construct]) -> Construct:
+def _construct_from_subflow(subflow: Any, name: str, from_spec: Callable[..., Construct]) -> Construct:
     """Rebuild a sub-``Flow`` into a ``Construct``, boundary port intact.
 
     THE single site that recurses through ``from_agent_spec`` on a sub-flow.
@@ -68,8 +68,7 @@ def _construct_from_subflow(subflow: Any, name: str, from_spec: Callable[[Any], 
     Reads the boundary off the sub-FLOW, not off the wrapping FlowNode, because
     ``_flow_member_to_construct`` (Swarm C1 import) has only a ``Flow``.
     """
-    sub = from_spec(subflow)
-    restored: dict[str, Any] = {"name": name}
+    restored: dict[str, Any] = {}
     port_in = _agent_spec_props_to_type(getattr(subflow, "inputs", None))
     port_out = _agent_spec_props_to_type(getattr(subflow, "outputs", None))
     if port_in is not None:
@@ -84,11 +83,19 @@ def _construct_from_subflow(subflow: Any, name: str, from_spec: Callable[[Any], 
     boundary = (getattr(subflow, "metadata", None) or {}).get(_MARK_BOUNDARY_SPEC) or {}
     if boundary.get("output_from"):
         restored["output_from"] = boundary["output_from"]
-    return sub.model_copy(update=restored)
+    # The ports go INTO ``Construct(...)``, not onto it afterwards: ``model_copy``
+    # skips ``__init__``, so a child restored that way was validated portless and
+    # its first read refused as unfed -- neograph-rfp5s.
+    sub = from_spec(subflow, _boundary=restored)
+    if any(getattr(sub, key) is not value for key, value in restored.items()):
+        # A dispatcher that returned before the final Construct(...) (a Swarm
+        # mesh) never saw the boundary; attach it the old way.
+        sub = sub.model_copy(update=restored)
+    return sub.model_copy(update={"name": name})
 
 
 def _reconstruct_item_body(
-    spec_node: Any, flow: Any, output_types: dict[str, Any], from_spec: Callable[[Any], Construct]
+    spec_node: Any, flow: Any, output_types: dict[str, Any], from_spec: Callable[..., Construct]
 ) -> Node | Construct:
     """Reconstruct ONE construct item's body, whether it is a Node or a Construct.
 
@@ -128,7 +135,7 @@ def _oracle_kwargs(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _reconstruct_oracle_group(
-    group: list[Any], flow: Any, output_types: dict[str, Any], from_spec: Callable[[Any], Construct]
+    group: list[Any], flow: Any, output_types: dict[str, Any], from_spec: Callable[..., Construct]
 ) -> Node | Construct | None:
     """Reconstruct an Oracle-modified Node from its exported variant+merge
     group -- the inverse of ``_agent_spec._lower_oracle``.
@@ -225,7 +232,7 @@ def _reconstruct_oracle_group(
 
 
 def _reconstruct_each_node(
-    map_node: Any, flow: Any, output_types: dict[str, Any], from_spec: Callable[[Any], Construct]
+    map_node: Any, flow: Any, output_types: dict[str, Any], from_spec: Callable[..., Construct]
 ) -> Node | Construct:
     """Reconstruct an Each-modified Node from its exported MapNode --
     the inverse of ``_agent_spec._lower_each``."""
@@ -272,7 +279,7 @@ def _reconstruct_each_node(
 
 
 def _reconstruct_loop_item(
-    body_spec: Any, check_spec: Any, flow: Any, output_types: dict[str, Any], from_spec: Callable[[Any], Construct]
+    body_spec: Any, check_spec: Any, flow: Any, output_types: dict[str, Any], from_spec: Callable[..., Construct]
 ) -> Node | Construct:
     """Reconstruct a Loop-modified Node from its exported body+check pair --
     the inverse of ``_agent_spec._lower_loop``."""
@@ -307,7 +314,7 @@ def _reconstruct_loop_item(
 
 
 def _reconstruct_operator_primary(
-    primary_spec: Any, flow: Any, output_types: dict[str, Any], from_spec: Callable[[Any], Construct]
+    primary_spec: Any, flow: Any, output_types: dict[str, Any], from_spec: Callable[..., Construct]
 ) -> Node | Construct:
     """Reconstruct the BODY node of a BARE+Operator composite, with its external
     inputs routed -- the inverse of the ``PrimaryShape.BARE`` half of
@@ -332,7 +339,7 @@ def _reconstruct_operator_primary(
 
 
 def _reconstruct_fused_each_oracle_node(
-    map_node: Any, output_types: dict[str, Any], from_spec: Callable[[Any], Construct]
+    map_node: Any, output_types: dict[str, Any], from_spec: Callable[..., Construct]
 ) -> Node | Construct | None:
     """Reconstruct an Each x Oracle FUSED Node from its exported MapNode whose
     sub-flow is an Oracle variant+merge group -- the inverse of

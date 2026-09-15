@@ -118,21 +118,19 @@ class TestConstructValidation:
         with pytest.raises(ConstructError, match=r"list\[str\]"):
             Construct("bad-each-element", nodes=[a, b])
 
-    def test_first_item_deferred_when_has_input(self):
-        """First-of-chain with declared input is NOT flagged -- runtime-seeded."""
+    def test_first_item_with_single_type_inputs_is_refused(self):
+        """A first node's single-type read has no producer and no port, so nothing
+        can ever feed it; it is refused, not tolerated (neograph-rfp5s)."""
         b = _consumer("b", Claims, ClassifiedClaims)
-        pipeline = Construct("top-level", nodes=[b])
-        assert len(pipeline.nodes) == 1
-        assert pipeline.nodes[0].inputs is Claims
+        with pytest.raises(ConstructError, match="no upstream produces a compatible value"):
+            Construct("top-level", nodes=[b])
 
-    def test_top_level_each_deferred_when_root_unknown(self):
-        """Each at position 0 whose root isn't a known producer defers cleanly."""
+    def test_top_level_each_with_unknown_root_is_refused(self):
+        """Each at position 0 whose root names no producer can never be fanned:
+        nothing seeds the root at run time, so it is refused (neograph-rfp5s)."""
         process = _consumer("process", ClusterGroup, MatchResult) | Each(over="seeded_from_runtime.groups", key="label")
-        pipeline = Construct("top-each", nodes=[process])
-        assert len(pipeline.nodes) == 1
-        each = pipeline.nodes[0].get_modifier(Each)
-        assert isinstance(each, Each)
-        assert each.over == "seeded_from_runtime.groups"
+        with pytest.raises(ConstructError, match="does not match any upstream node"):
+            Construct("top-each", nodes=[process])
 
     def test_sub_construct_input_port_satisfies_inner_node(self):
         """Inner node reading from the sub-construct's input port validates."""
@@ -531,7 +529,6 @@ class TestToolFactoryRegistrationCheck:
         n = Node(
             "research",
             mode="agent",
-            inputs=RawText,
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -549,7 +546,6 @@ class TestToolFactoryRegistrationCheck:
         n = Node(
             "actor",
             mode="act",
-            inputs=RawText,
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -569,7 +565,6 @@ class TestToolFactoryRegistrationCheck:
         n = Node(
             "research-ok",
             mode="agent",
-            inputs=RawText,
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -593,7 +588,6 @@ class TestLlmConfiguredCheck:
         n = Node(
             "think-node",
             mode="think",
-            inputs=RawText,
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -607,7 +601,6 @@ class TestLlmConfiguredCheck:
         n = Node(
             "think-node-pc",
             mode="think",
-            inputs=RawText,
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -653,7 +646,6 @@ class TestOutputStrategyValidation:
             Node(
                 "bad-strat",
                 mode="think",
-                inputs=RawText,
                 outputs=Claims,
                 model="fast",
                 prompt="test",
@@ -669,7 +661,6 @@ class TestOutputStrategyValidation:
             n = Node(
                 f"strat-{strategy}",
                 mode="think",
-                inputs=RawText,
                 outputs=Claims,
                 model="fast",
                 prompt="test",
@@ -686,7 +677,6 @@ class TestOutputStrategyValidation:
         n = Node(
             "no-strat",
             mode="think",
-            inputs=RawText,
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -917,6 +907,81 @@ class TestSingleTypeInputsDeprecation:
         b = _consumer("b", RawText, Claims)  # _consumer uses single-type inputs
         with pytest.warns(DeprecationWarning, match="single-type.*inputs"):
             Construct(name="test", nodes=[a, b])
+
+
+class TestFirstNodeSingleTypeInputsCannotBeFed:
+    """A top-level FIRST node declaring single-type ``inputs=X`` can never be fed.
+
+    Nothing precedes it, the construct declares no port, the compiled state has no
+    field that could hold an ``X``, and ``run(input={...})`` keys become config, not
+    state. Until neograph-rfp5s the validator tolerated the shape on the strength of
+    a runtime isinstance scan that had already been deleted, so the body ran with
+    ``None`` and the run finished green. The ``@node`` surface has always refused
+    the same shape ("parameter 'seed' does not match any @node"); the declarative
+    and programmatic surfaces must agree with it -- three-surface parity.
+    """
+
+    def test_declarative_first_node_with_single_type_inputs_is_refused_at_assembly(self):
+        first = Node.scripted("first", fn="f", inputs=RawText, outputs=Claims)
+        with pytest.raises(ConstructError, match="first|no upstream"):
+            Construct(name="c", nodes=[first])
+
+    def test_programmatic_first_node_with_single_type_inputs_is_refused_at_assembly(self):
+        first = Node(name="first", mode="scripted", scripted_fn="f", inputs=RawText, outputs=Claims) | Oracle(
+            n=2, merge_fn="nonexistent_merge_fn"
+        )
+        with pytest.raises(ConstructError, match="first|no upstream"):
+            Construct(name="c", nodes=[first])
+
+    def test_node_decorator_first_node_with_an_unfed_param_is_refused_at_assembly(self):
+        """The surface that was already right, pinned so parity is graded from both sides."""
+
+        @node(outputs=Claims)
+        def first(seed: RawText) -> Claims:
+            return Claims(items=[seed.text])
+
+        with pytest.raises(ConstructError, match="does not match any @node"):
+            construct_from_functions("c", [first])
+
+    def test_a_first_node_never_runs_green_with_none(self):
+        """The acceptance itself, proven by a RUN: either assembly refuses the shape,
+        or the body receives the caller's value. A green run that handed the body
+        ``None`` is the defect."""
+        seen: list = []
+
+        def body(value, config=None):
+            seen.append(value)
+            return Claims(items=[])
+
+        first = Node.scripted("first", fn="f", inputs=RawText, outputs=Claims)
+        try:
+            c = Construct(name="c", nodes=[first])
+        except ConstructError:
+            return
+        run(compile(c, scripted={"f": body}), input={"seed": RawText(text="hi")})
+        assert seen == [RawText(text="hi")], f"first node body received {seen!r} on a green run"
+
+    def test_each_over_the_port_is_accepted_when_the_construct_declares_one(self):
+        """``neo_subgraph_input`` is a real producer only when ``input=`` is declared."""
+        process = _consumer("process", ClusterGroup, MatchResult) | Each(over="neo_subgraph_input.groups", key="label")
+        c = Construct("ported", input=Clusters, nodes=[process])
+        assert c.input is Clusters
+
+    def test_each_over_the_port_is_refused_when_no_port_exists(self):
+        """Without a port the framework root names nothing; it used to be waved
+        through as 'framework-injected'."""
+        process = _consumer("process", ClusterGroup, MatchResult) | Each(over="neo_subgraph_input.groups", key="label")
+        with pytest.raises(ConstructError, match="does not match any upstream node"):
+            Construct("portless", nodes=[process])
+
+    def test_run_isolated_is_the_sanctioned_rescue_of_an_unresolved_read(self):
+        """``_source_candidates`` ends with the framework port keys so that a node with
+        NO construct -- ``run_isolated`` seeds ``_neo_isolated_input`` -- can still be
+        fed. That tail is the one place an assembly-unresolved read is rescued; every
+        other unresolved read is refused before it can reach the tail (the tests above)."""
+        n = Node.scripted("n", fn="f", inputs=RawText, outputs=Claims)
+        result = n.run_isolated(input=RawText(text="hi"), scripted={"f": lambda v, _c: Claims(items=[v.text])})
+        assert result == Claims(items=["hi"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════

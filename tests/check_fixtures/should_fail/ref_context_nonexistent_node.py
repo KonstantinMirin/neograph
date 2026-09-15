@@ -23,7 +23,6 @@ pipeline = Construct(
         Node(
             name="first",
             mode="think",
-            inputs=Input,
             outputs=Output,
             model="fast",
             prompt="test",

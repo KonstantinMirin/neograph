@@ -17,7 +17,6 @@ from typing import cast, get_args, get_origin
 
 from neograph._ir_consume import fan_out_candidates, single_type_candidates
 from neograph._ir_protocols import ConstructItem, ConstructLike
-from neograph._state_keys import StateKeys
 from neograph._validation_arms import _build_cross_arm_error
 from neograph._validation_types import (
     _MISSING,
@@ -45,11 +44,8 @@ def _check_item_input(
 ) -> None:
     """Validate that `item.inputs` is satisfied by some upstream producer.
 
-    Static validation only fires when there's enough evidence to make a
-    definite call. Cases that defer to runtime isinstance-scanning:
-      - No upstream producers at all (first-of-chain).
-      - `dict` / non-class input types (multi-field or raw extraction).
-      - Each modifier whose root segment doesn't match a known producer.
+    A read with no producer in scope is REFUSED: there is no runtime fallback (the
+    whole-state scan is gone, neograph-t1nbp) -- neograph-rfp5s. Two shapes stay tolerated.
 
     ``producers`` is the caller's VISIBLE set (arm-scoped when ``item`` is a
     branch-arm consumer — see neograph-ftnxl.2). ``all_producers`` is an
@@ -73,7 +69,13 @@ def _check_item_input(
                     construct=construct.name,
                     location=_source_location(),
                 )
-        return
+        if not isinstance(item, Node):
+            # A child port at position 0 of a portless parent -- neograph-xejyn.
+            return
+        ms_first = getattr(item, "modifier_set", None)
+        if ms_first is not None and ms_first.portal is not None:
+            # A mesh member's single-type read (handoff is dict-form only) -- neograph-sdqsv.
+            return
     # Fan-in dict instance: inputs={"a": A, "b": B, ...} — validate each
     # (upstream_name, expected_type) pair against the upstream named by the
     # key (neograph-kqd.2). This was a bypass pre-kqd; it is now a positive
@@ -225,9 +227,7 @@ def _check_each_path(
     root_type: TypeSpecStatic = matched.effective_type if matched is not None else None
 
     if root_type is None:
-        # Allow framework-injected roots (sub-construct port param).
-        if root == StateKeys.SUBGRAPH_INPUT:
-            return
+        # A declared port is already in ``producers``; an unmatched neo_subgraph_input root has none.
         known_roots = set(producers)
         if all_producers is not None and root in all_producers and root not in producers:
             cross_arm_error = _build_cross_arm_error(

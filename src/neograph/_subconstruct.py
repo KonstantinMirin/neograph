@@ -90,7 +90,7 @@ def make_subgraph_fn(
     ``handoff_channel`` (do0d9 site 7): when this sub-construct is a Portal mesh
     MEMBER, its boundary input MUST be sourced DETERMINISTICALLY from the routed
     parent handoff channel (``StateKeys.handoff_payload(entry_field)``) — NOT the
-    blind reverse type-scan below. In a uniform-payload mesh every member field
+    port read below. In a uniform-payload mesh every member field
     AND the channel hold the same payload type, so a blind scan can feed the
     WRONG instance (a silent mis-route the North Star forbids). This mirrors the
     atomic member's reserved-``handoff`` read (``_input_shape.py:119-123``). The
@@ -144,8 +144,8 @@ def make_subgraph_fn(
         # branch's item into EACH_ITEM (the Send payload). Deliver it AS the
         # sub-construct's single-value input port so the isolated ReAct cycle reads
         # its OWN per-branch value — mirroring the qot6 single-key dict-form rewrite.
-        # Takes precedence over the type-scan below (EACH_ITEM is the specific
-        # dispatched value; a blind type-scan could match the wrong instance).
+        # Takes precedence over the port read below (EACH_ITEM is the specific
+        # dispatched value for THIS branch).
         if has_each and input_data is None:
             # StateBus.get optional: EACH_ITEM is populated by the each_router Send
             # for every fanned branch; absent only on a mis-wired graph.
@@ -155,10 +155,10 @@ def make_subgraph_fn(
 
         # Portal mesh member (do0d9 site 7): source the boundary input
         # DETERMINISTICALLY from the routed parent handoff channel, taking
-        # precedence over the blind type-scan below. A member reached via a hop
+        # precedence over the port read below. A member reached via a hop
         # always has the channel populated by the prior hop's Command update; on
         # the mesh entry's first activation the channel default (None) falls
-        # through to the type-scan.
+        # through to the port read.
         if input_data is None and handoff_channel is not None:
             # StateBus.get optional: Portal mesh channel — populated by the prior
             # hop's Command update for a member reached via a hop; the mesh
