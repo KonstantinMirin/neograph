@@ -22,3 +22,8 @@ pipeline = Construct(
         Node.scripted("billing", fn="km_f", inputs={"handoff": Handoff}, outputs=Handoff) | Portal(to=["triage"]),
     ],
 )
+
+# The claim, made assertable (neograph-36302): triage's goto is "__end__", so the
+# mesh terminates at the entry member and `billing` never runs -- no `billing`
+# key in the result at all.
+EXPECT = {"triage": Handoff(goto="__end__")}

@@ -38,3 +38,7 @@ pipeline = Construct(
         ),
     ],
 )
+
+# The claim, made assertable (neograph-36302). Declaration order would pick
+# `second`; `input_from="first"` overrides it, so the sink must see FIRST.
+EXPECT = {"sink": Alpha(tag="saw-FIRST")}

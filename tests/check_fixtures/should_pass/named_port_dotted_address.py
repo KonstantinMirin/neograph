@@ -20,9 +20,10 @@ class Case(BaseModel, frozen=True):
     label: str = "L"
 
 
+register_scripted("npda_seed", lambda _i, _c: Seed())
 register_scripted("npda_multi", lambda _i, _c: {"result": Case(), "extra": Seed()})
 
-pipeline = Construct(
+boundary = Construct(
     "boundary",
     input=Seed,
     output=Case,
@@ -31,3 +32,18 @@ pipeline = Construct(
         Node.scripted("settle", fn="npda_multi", inputs=Seed, outputs={"result": Case, "extra": Seed}),
     ],
 )
+
+# A parent, because a boundary only resolves when something CONSUMES it: run
+# standalone this construct reports settle's own per-key state fields and the
+# dotted port is never exercised (neograph-36302).
+pipeline = Construct(
+    "dotted-parent",
+    nodes=[
+        Node.scripted("seed", fn="npda_seed", outputs=Seed),
+        boundary,
+    ],
+)
+
+# The claim, made assertable: "settle.result" addresses ONE of the node's two
+# dict-form output keys, and that key's value is what crosses the boundary.
+EXPECT = {"boundary": Case(label="L")}

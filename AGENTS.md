@@ -783,7 +783,7 @@ Supporting files: `conftest.py` (registry cleanup fixture), `schemas.py` (shared
 | Directory | Purpose | Convention |
 |-----------|---------|------------|
 | `should_fail/` | Each file has one known defect. Must raise during import or compile. | `# CHECK_ERROR: <regex>` comment matches the expected error message |
-| `should_pass/` | Valid pipelines. Must import and compile cleanly. | No special comment needed |
+| `should_pass/` | Valid pipelines. Must import and compile cleanly, and — when the fixture declares `EXPECT` — RUN and resolve to the declared values. | `EXPECT = {state_field: value}` opts the fixture into execution; no comment otherwise |
 
 Only these two directories exist and are scanned by `test_check_fixtures.py`. A
 `known_gaps/` tier (validator-SHOULD-catch-but-doesn't-yet fixtures) was
@@ -792,8 +792,38 @@ improvements lives in beads, not a fixture directory. If you want a fixture tier
 for known gaps, create `known_gaps/` AND teach `test_check_fixtures.py` to scan
 it (xfail-style) before documenting it here.
 
+#### `EXPECT`: the should_pass tier's second question (neograph-36302)
+
+A should_pass fixture asks *does this shape assemble*. That question is worth keeping, and
+for most fixtures it is the whole point. But it is only an absence-of-exception assertion,
+so a fixture can assemble the right graph, deliver the **wrong value** at run time, and
+stay green — the same instrument shape this repo has had to fix elsewhere: a green signal
+compatible with the thing you care about not happening. `input_from_names_the_port` was
+written with two producers tagged FIRST and SECOND precisely to discriminate, and the
+harness threw its run away for as long as it existed.
+
+A fixture that has an answer to the VALUE question declares it, and is then executed:
+
+```python
+EXPECT = {"sink": Alpha(tag="saw-FIRST")}   # state field -> expected value, partial match
+```
+
+- **Opt-in, never blanket.** A fixture that needs an LLM, credentials or a driver the
+  harness does not have declares nothing and is compiled exactly as before. Forcing a run
+  on those would reintroduce skips, which this repo has no allowlist for, deliberately.
+- **One root construct.** A fixture that declares `EXPECT` must have exactly one
+  module-level Construct that no other module-level Construct contains (matched by NAME —
+  `sub | Each(...)` pipes a `model_copy`). Two roots is a loud failure, not a guess.
+- **A boundary only resolves when something CONSUMES it.** An `output=`/`output_from=`
+  fixture run standalone reports its member's own state fields and never exercises the
+  port, so those fixtures wrap the sub-construct in a parent.
+- **The list is ratcheted.** `TestValueResolutionFixturesDeclareExpectations` names the
+  fixtures whose claim is a resolved value and fails if one stops declaring `EXPECT`. It
+  may grow; it shrinks only when a fixture is deleted.
+
 **Rules:**
 - Every new validation rule gets a corresponding should_fail fixture AND a should_pass fixture.
+- A fixture whose point is a RESOLVED VALUE (which producer, port, arm or peer was selected) carries an `EXPECT`; one whose point is a valid SHAPE does not.
 - Fixtures derived from real consumer code (piarch patterns) are higher quality than hypothetical ones. When adding fixtures, look at actual usage in `piarch/src/derive_ensemble/constructs/`.
 - The fixture author should be different from the validation author when possible — a fixture written AFTER the validation is "done" catches gaps the author's own fixtures miss.
 - Keep fixtures minimal — one Construct, one defect, ~15 lines.

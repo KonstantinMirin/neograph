@@ -5,10 +5,20 @@ with a `# CHECK_ERROR: <regex>` comment for should_fail fixtures.
 
     tests/check_fixtures/
         should_fail/   — each file has a known defect, must raise during import or compile
-        should_pass/   — each file is valid, must compile without errors
+        should_pass/   — each file is valid, must compile without errors; a file that
+                         declares a module-level ``EXPECT`` is also RUN and its values
+                         asserted
 
 To add a new test case: create a .py file in the right directory.
 The test harness discovers it automatically.
+
+``EXPECT`` (neograph-36302) is the tier's second question. "It compiles" is an
+absence-of-exception assertion, so a fixture could assemble the right graph,
+deliver the WRONG VALUE at run time, and stay green. A fixture whose point is a
+resolved value — which producer an input port read, which member is the boundary,
+which peer a mesh handed off to — declares the state fields it must resolve to and
+is executed. Opt-in rather than blanket: a fixture needing an LLM, credentials or a
+driver this harness lacks declares nothing, so no skip is ever introduced.
 """
 
 from __future__ import annotations
@@ -18,6 +28,7 @@ import importlib
 import re
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -26,6 +37,10 @@ from tests.fakes import build_test_compile_kwargs
 FIXTURES = Path(__file__).parent / "check_fixtures"
 SHOULD_FAIL = sorted(FIXTURES.glob("should_fail/*.py"))
 SHOULD_PASS = sorted(FIXTURES.glob("should_pass/*.py"))
+
+# The module-level name a should_pass fixture uses to declare the state values it
+# must resolve to. Its presence is what opts the fixture into execution.
+EXPECT_ATTR = "EXPECT"
 
 
 @contextlib.contextmanager
@@ -120,20 +135,10 @@ def _try_compile(mod: object, *, try_without_llm: bool = True) -> Exception | No
     this False — an LLM-mode node (e.g. an agent) legitimately requires runtime
     config, so it can only be expected to compile WITH the placeholder LLM.
     """
-    from langgraph.checkpoint.memory import MemorySaver
-
     from neograph.compiler import compile
     from neograph.construct import Construct
 
-    placeholder_llm_kwargs = {
-        "llm_factory": lambda tier: None,
-        "prompt_compiler": lambda template, data, **kw: [],
-        # A placeholder checkpointer so an Operator-carrying fixture (which
-        # always requires one to compile, regardless of its condition) isn't
-        # universally excluded from this harness -- harmless for fixtures
-        # that don't need one.
-        "checkpointer": MemorySaver(),
-    }
+    placeholder_llm_kwargs = _placeholder_llm_kwargs()
 
     for name in dir(mod):
         obj = getattr(mod, name)
@@ -152,6 +157,112 @@ def _try_compile(mod: object, *, try_without_llm: bool = True) -> Exception | No
                 except Exception as exc:
                     return exc
     return None
+
+
+def _placeholder_llm_kwargs() -> dict:
+    """Compile kwargs that let a fixture past the LLM fail-loud check.
+
+    A placeholder checkpointer rides along so an Operator-carrying fixture
+    (which always requires one to compile, regardless of its condition) isn't
+    universally excluded from this harness -- harmless for fixtures that don't
+    need one, though it does mean a RUN must supply a ``thread_id``.
+    """
+    from langgraph.checkpoint.memory import MemorySaver
+
+    return {
+        "llm_factory": lambda tier: None,
+        "prompt_compiler": lambda template, data, **kw: [],
+        "checkpointer": MemorySaver(),
+    }
+
+
+def _nested_construct_names(construct: object) -> set[str]:
+    """Every Construct name reachable BELOW ``construct`` (excluding itself).
+
+    Walks through branch arms via ``iter_with_arms`` -- the sanctioned
+    arm-descent primitive -- so a sub-construct parked inside an arm is not
+    mistaken for a second root.
+    """
+    from neograph._ir_branch import iter_with_arms
+    from neograph.construct import Construct
+
+    found: set[str] = set()
+    stack = [construct]
+    while stack:
+        for item in iter_with_arms(stack.pop()):
+            if isinstance(item, Construct):
+                found.add(item.name)
+                stack.append(item)
+    return found
+
+
+def _root_construct(mod: object, fixture_name: str):
+    """The one module-level Construct that no other module-level Construct contains.
+
+    Matched by NAME, not identity: ``sub | Each(...)`` pipes a ``model_copy``,
+    so the parent holds a different object with the same name. Two roots is a
+    LOUD failure rather than a guess about which one the fixture meant.
+    """
+    from neograph.construct import Construct
+
+    module_level: list[Construct] = []
+    seen: set[int] = set()
+    for attr in dir(mod):
+        obj = getattr(mod, attr)
+        if isinstance(obj, Construct) and id(obj) not in seen:
+            seen.add(id(obj))
+            module_level.append(obj)
+
+    contained: set[str] = set()
+    for candidate in module_level:
+        contained |= _nested_construct_names(candidate)
+    roots = [c for c in module_level if c.name not in contained]
+
+    assert len(roots) == 1, (
+        f"Fixture {fixture_name} declares {EXPECT_ATTR} but has {len(roots)} root constructs "
+        f"({[c.name for c in roots]}). A fixture that declares expectations must have exactly one "
+        f"top-level construct, so the harness knows which one to run."
+    )
+    return roots[0]
+
+
+def _assert_declared_expectations(mod: object, fixture_path: Path) -> None:
+    """Run a fixture that declares ``EXPECT`` and assert the values it claims.
+
+    Opt-in by design (neograph-36302). A fixture whose point is a valid SHAPE
+    declares nothing and is compiled exactly as before; a fixture whose point is
+    a resolved VALUE -- which producer an input port read, which member is the
+    boundary, which peer a mesh handed off to -- declares the state fields it
+    expects and is executed. Opt-in rather than blanket, because some fixtures
+    need an LLM, credentials or a driver this harness does not have, and forcing
+    a run on those would reintroduce skips.
+    """
+    expect = getattr(mod, EXPECT_ATTR, None)
+    if expect is None:
+        return  # Shape-only fixture: compile is the whole question.
+
+    from neograph.compiler import compile
+    from neograph.runner import run
+
+    assert isinstance(expect, dict) and expect, (
+        f"Fixture {fixture_path.name}: {EXPECT_ATTR} must be a non-empty dict of "
+        f"{{state_field: expected_value}}, got {expect!r}."
+    )
+
+    root = _root_construct(mod, fixture_path.name)
+    graph = compile(root, **_placeholder_llm_kwargs(), **build_test_compile_kwargs())
+    result = run(graph, input={}, config={"configurable": {"thread_id": f"check-fixture-{uuid4()}"}})
+
+    for field, expected in expect.items():
+        assert field in result, (
+            f"Fixture {fixture_path.name}: {EXPECT_ATTR} names state field {field!r}, "
+            f"which the run never produced. Produced: {sorted(result)}."
+        )
+        assert result[field] == expected, (
+            f"Fixture {fixture_path.name}: state field {field!r} resolved to {result[field]!r}, "
+            f"but the fixture declares {expected!r}. The graph assembled correctly and still "
+            f"delivered the wrong value."
+        )
 
 
 # =============================================================================
@@ -207,4 +318,76 @@ def test_should_pass(fixture_path: Path):
         # so the no-LLM second compile (a should_fail probe) must not gate
         # should_pass.
         compile_error = _try_compile(mod, try_without_llm=False)
-    assert compile_error is None, f"Fixture {fixture_path.name} should compile cleanly but raised: {compile_error}"
+        assert compile_error is None, f"Fixture {fixture_path.name} should compile cleanly but raised: {compile_error}"
+
+        # And, for a fixture that declares what it should RESOLVE TO, run it.
+        _assert_declared_expectations(mod, fixture_path)
+
+
+# =============================================================================
+# The harness's own regression tests (neograph-36302)
+# =============================================================================
+
+
+class TestShouldPassExecutesDeclaredExpectations:
+    """A should_pass fixture that declares ``EXPECT`` is RUN and its values asserted.
+
+    Regression for neograph-36302: ``test_should_pass`` asserted only
+    absence-of-exception, so a fixture could assemble the right graph, deliver
+    the WRONG VALUE at run time, and stay green. The tier could not distinguish
+    "this pipeline is valid" from "this pipeline is valid and means what it says".
+    """
+
+    _FIXTURE_SRC = '''\
+"""Synthetic should_pass fixture, written by the harness's own regression tests."""
+
+from pathlib import Path
+
+from pydantic import BaseModel
+
+from neograph import Construct, Node
+from neograph._runtime_registry import register_scripted
+
+
+class Alpha(BaseModel, frozen=True):
+    tag: str = "a"
+
+
+def _source(_i, _c):
+    Path({sentinel!r}).write_text("ran")
+    return Alpha(tag="FIRST")
+
+
+register_scripted("{prefix}_source", _source)
+
+pipeline = Construct(
+    "{prefix}-synthetic",
+    nodes=[Node.scripted("source", fn="{prefix}_source", outputs=Alpha)],
+)
+
+EXPECT = {{"source": Alpha(tag={expected!r})}}
+'''
+
+    def _write_fixture(self, tmp_path: Path, *, prefix: str, expected: str, sentinel: Path) -> Path:
+        path = tmp_path / f"{prefix}_synthetic.py"
+        path.write_text(
+            self._FIXTURE_SRC.format(prefix=prefix, expected=expected, sentinel=str(sentinel)),
+        )
+        return path
+
+    def test_should_pass_fails_when_the_declared_expectation_is_wrong(self, tmp_path: Path):
+        """The node produces FIRST; the fixture declares SECOND. That must be red."""
+        sentinel = tmp_path / "ran.txt"
+        path = self._write_fixture(tmp_path, prefix="wrongexp", expected="SECOND", sentinel=sentinel)
+
+        with pytest.raises(AssertionError):
+            test_should_pass(path)
+
+    def test_should_pass_actually_executes_a_fixture_that_declares_expectations(self, tmp_path: Path):
+        """Compiling is not running -- the node body must have been invoked."""
+        sentinel = tmp_path / "ran.txt"
+        path = self._write_fixture(tmp_path, prefix="rightexp", expected="FIRST", sentinel=sentinel)
+
+        test_should_pass(path)
+
+        assert sentinel.exists(), "Fixture declared EXPECT but its node body never ran -- the harness only compiled it."

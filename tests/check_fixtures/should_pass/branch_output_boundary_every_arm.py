@@ -48,3 +48,8 @@ sub = Construct(
 )
 
 pipeline = Construct("boundary-parent", nodes=[sub])
+
+# The claim, made assertable (neograph-36302): the boundary is satisfied by the
+# arm that actually ran. The condition reads seed.text ("hi" -> truthy), so the
+# true arm's differently-named producer supplies the sub-construct's output.
+EXPECT = {"boundary_sub": BoundaryResult(value="t")}
