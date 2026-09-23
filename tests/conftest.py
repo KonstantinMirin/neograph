@@ -41,6 +41,38 @@ def _src_tree_signature() -> str | None:
     return hashlib.sha256((diff + "\x00" + status).encode("utf-8", "surrogatepass")).hexdigest()
 
 
+def pytest_configure(config):
+    """Arm the declared-read stamp instrument for the WHOLE session.
+
+    ``pytest_configure`` runs before collection, so a construct built at a test
+    module's IMPORT time is measured too. Read-only: it wraps
+    ``Construct.__init__`` to audit what assembly produced and changes nothing
+    about what assembly does. See ``tests/stamp_instrument.py``.
+    """
+    from tests import stamp_instrument
+
+    stamp_instrument.install()
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(session, config, items):
+    """Run the stamp instrument's corpus assertion LAST.
+
+    It asserts over what the SESSION built, so it has to see the session first.
+    ``trylast`` so any plugin that reorders (or shuffles) collection has already
+    run. Deterministic: a stable partition, not a sort key.
+
+    Running the guard module ALONE is still meaningful -- it drives its own
+    corpus (``tests/check_fixtures`` + the keyless examples) before asserting --
+    so this hook widens the corpus rather than being what makes it non-vacuous.
+    """
+    instrument = [i for i in items if i.nodeid.startswith("tests/test_guards_declared_read_stamped.py")]
+    if not instrument:
+        return
+    rest = [i for i in items if not i.nodeid.startswith("tests/test_guards_declared_read_stamped.py")]
+    items[:] = rest + instrument
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _src_tree_unmodified_by_suite():
     """Permanent alarm: the test run must not mutate git-tracked ``src/neograph``.
