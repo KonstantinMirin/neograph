@@ -20,9 +20,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from neograph._construct_validation import ConstructError, _types_compatible, effective_producer_type
+from neograph._construct_validation import ConstructError, _loop_aware_compatible, effective_producer_type
 from neograph._ir_consume import single_type_candidates
-from neograph._ir_fields import contributed_fields
+from neograph._ir_fields import Producer, contributed_fields
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._sidecar import _get_node_source, _get_param_res, _get_sidecar
 from neograph.naming import field_name_for, split_output_field
@@ -95,11 +95,11 @@ def _resolve_loop_self_param(
     # which is the epic's first acceptance criterion.
     field_name = field_name_for(node.name)
     preceding = [
-        (up_field, effective_producer_type(upstream), upstream)
+        Producer(field_name=up_field, effective_type=effective_producer_type(upstream), label=up_field)
         for up_field, upstream in {**decorated, **sub_by_field}.items()
         if up_field != field_name  # skip self
     ]
-    candidates = single_type_candidates(preceding, param_type, _types_compatible)
+    candidates = [p.field_name for p in single_type_candidates(preceding, param_type, _loop_aware_compatible)]
 
     if len(candidates) == 1:
         return candidates[0]

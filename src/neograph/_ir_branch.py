@@ -146,24 +146,45 @@ def iter_item_slots(
     :func:`iter_with_arms` yields, so a walk that rewrites items via
     ``model_copy`` can target the correct storage slot uniformly.
 
+    A thin wrapper over :func:`iter_item_slots_with_arm_ids` (drops the arm tag),
+    exactly as :func:`iter_with_arms` wraps :func:`iter_with_arm_ids` -- so the
+    slot walk and the tagged slot walk cannot drift about WHICH slots exist.
+    """
+    for container, idx, _ in iter_item_slots_with_arm_ids(construct):
+        yield (container, idx)
+
+
+def iter_item_slots_with_arm_ids(
+    construct: Construct,
+) -> Iterator[tuple[MutableSequence[Any], int, tuple[int, bool] | None]]:
+    """Like :func:`iter_item_slots`, but tags each slot with its arm identity --
+    ``None`` at top level, or ``(branch_key, is_true_arm)`` inside an arm, the
+    same tag :func:`iter_with_arm_ids` yields.
+
     For a top-level item the slot is ``(construct.nodes, i)``; for an arm item
     the slot is ``(meta.true_arm_nodes, j)`` or ``(meta.false_arm_nodes, j)``.
     The ``_BranchNode`` sentinel's own top-level slot is NOT yielded (it is not
-    a real IR node any rewriting walk touches) — it is replaced by its arm
+    a real IR node any rewriting walk touches) -- it is replaced by its arm
     slots, mirroring :func:`iter_with_arms`.
 
-    The write-back counterpart of :func:`iter_with_arms`, for the two walks
-    that mutate nodes in place (``normalize_ir`` and the ``Construct.__init__``
-    llm_config/renderer inheritance pass). Without this, an arm node's rewrite
-    would land in a detached copy that never reaches the compiled arm. See
-    neograph-vn5f.
+    The write-back counterpart of :func:`iter_with_arms`, for the walks that
+    mutate nodes in place (``normalize_ir``, the stamping walk in ``_ir_stamp``,
+    and the ``Construct.__init__`` llm_config/renderer inheritance pass). Without
+    it, an arm node's rewrite would land in a detached copy that never reaches
+    the compiled arm.
+
+    The ARM TAG exists because a stamping walk must read what the VALIDATOR can
+    see from each slot, and that differs inside an arm -- a walk that writes to
+    arm slots but resolves against a flat producer list is the two-candidate-set
+    defect this split exists to retire.
     """
     for i, item in enumerate(construct.nodes):
         if isinstance(item, _BranchNode):
             meta = item._neo_branch_meta
+            branch_key = id(meta)
             for j in range(len(meta.true_arm_nodes)):
-                yield (meta.true_arm_nodes, j)
+                yield (meta.true_arm_nodes, j, (branch_key, True))
             for j in range(len(meta.false_arm_nodes)):
-                yield (meta.false_arm_nodes, j)
+                yield (meta.false_arm_nodes, j, (branch_key, False))
         else:
-            yield (construct.nodes, i)
+            yield (construct.nodes, i, None)

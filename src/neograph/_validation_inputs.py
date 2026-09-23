@@ -13,11 +13,13 @@ Imports the type-compat primitives + shared vocabulary from
 
 from __future__ import annotations
 
-from typing import cast, get_args, get_origin
+from typing import cast, get_origin
 
-from neograph._ir_consume import fan_out_candidates, single_type_candidates
+from neograph._ir_consume import fan_out_candidates
 from neograph._ir_protocols import ConstructItem, ConstructLike
+from neograph._ir_stamp import read_refusals
 from neograph._validation_arms import _build_cross_arm_error
+from neograph._validation_render import _build_no_producer_error
 from neograph._validation_types import (
     _MISSING,
     NodeItem,
@@ -29,7 +31,7 @@ from neograph._validation_types import (
     _source_location,
     _types_compatible,
 )
-from neograph.errors import ConstructError, NeographError
+from neograph.errors import ConstructError
 from neograph.modifiers import Each, split_each_path
 from neograph.naming import field_name_for
 from neograph.node import Node, TypeSpecStatic
@@ -108,12 +110,17 @@ def _check_item_input(
         _check_each_path(construct, item, input_type, each, producers, all_producers)
         return
 
-    # LAST eligible producer wins. Several eligible is NOT refused: measured at 47 failures, nearly all ordinary same-typed chains -- neograph-5fvsu.
-    for p in producers.values():
-        if _loop_aware_compatible(p, input_type):
-            return
-
-    error = _build_no_producer_error(construct, item, input_type, producers, all_producers)
+    # RENDER the resolver's verdict; do not re-derive it. `normalize_ir` ran
+    # before validation and resolved this read once, against this same arm-scoped
+    # producer set (`_ir_stamp.stamp_declared_reads`). The loop that used to sit
+    # here was a SECOND derivation of the same answer -- an existence check that
+    # threw the choice away -- and it is how the validator came to accept a
+    # pre-branch producer while the normalizer stamped a branch arm
+    # A read with no entry in the table resolved.
+    refusal = read_refusals(construct).get(item.name)
+    if refusal is None:
+        return
+    error = _build_no_producer_error(construct, item, input_type, producers, all_producers, refusal=refusal)
     raise error
 
 
@@ -297,83 +304,6 @@ def _check_each_path(
             construct=construct.name,
             location=_source_location(),
         )
-
-
-def _build_no_producer_error(
-    construct: ConstructLike,
-    item: NodeItem,
-    input_type: TypeSpecStatic,
-    producers: ProducerMap,
-    all_producers: ProducerMap | None = None,
-) -> NeographError:
-    if all_producers is not None:
-        unreachable = [(n, p.effective_type, p) for n, p in all_producers.items() if n not in producers]
-        if single_type_candidates(unreachable, input_type, _types_compatible):
-            return ConstructError.build(
-                f"declares "
-                f"{'inputs' if isinstance(item, Node) else 'input'}="
-                f"{_fmt_type(input_type)} but the only compatible producer is on a "
-                f"branch arm this node cannot reach",
-                expected="a producer reachable on every path to this node",
-                found=f"available upstreams: {sorted(producers) or '(none)'}",
-                hint="move the producer above the branch, or have every arm produce a compatible value",
-                node=item.name,
-                construct=construct.name,
-                location=_source_location(),
-            )
-    if producers:
-        producer_summary = "\n".join(f"    - {p.label}: {_fmt_type(p.effective_type)}" for p in producers.values())
-    else:
-        producer_summary = "    (no upstream producers)"
-
-    return ConstructError.build(
-        f"declares "
-        f"{'inputs' if isinstance(item, Node) else 'input'}="
-        f"{_fmt_type(input_type)} but no upstream produces a "
-        f"compatible value",
-        found=f"upstream producers:\n{producer_summary}",
-        hint=_suggest_hint(input_type, producers),
-        node=item.name,
-        construct=construct.name,
-        location=_source_location(),
-    )
-
-
-def _suggest_hint(
-    input_type: TypeSpecStatic,
-    producers: ProducerMap,
-) -> str | None:
-    """Scan producer outputs for actionable suggestions."""
-    # Check for Each dict[str, X] → raw X mismatch first.
-    for p in producers.values():
-        p_origin = get_origin(p.effective_type)
-        if p_origin is dict:
-            p_args = get_args(p.effective_type)
-            if p_args and len(p_args) == 2:
-                element_type = p_args[1]
-                if isinstance(input_type, type) and isinstance(element_type, type):
-                    try:
-                        match = issubclass(element_type, input_type) or issubclass(input_type, element_type)
-                    except TypeError:
-                        match = False
-                    if match:
-                        return (
-                            f"upstream produces dict[str, {_fmt_type(element_type)}] "
-                            f"via Each — consume the whole dict with input=dict "
-                            f"or input=dict[str, {_fmt_type(element_type)}]"
-                        )
-
-    # Fallback: scan for list[input_type] fields and suggest .map().
-    for p in producers.values():
-        model_fields = getattr(p.effective_type, "model_fields", None) or {}
-        for fname in model_fields:
-            resolved = _resolve_field_annotation(p.effective_type, fname)
-            if resolved is _MISSING:
-                continue
-            element = _extract_list_element(resolved)
-            if element is not None and _types_compatible(element, input_type):
-                return f"did you forget to fan out? try .map(lambda s: s.{p.field_name}.{fname}, key='...')"
-    return None
 
 
 def _check_bound_args(

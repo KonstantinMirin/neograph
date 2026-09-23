@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_fields import item_field_names
 from neograph._ir_normalize import resolve_output_from
-from neograph._ir_source import Peer
+from neograph._ir_source import Peer, Port
 from neograph._oracle import _inject_oracle_config
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
@@ -31,9 +31,7 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
-def _scan_subgraph_output(
-    sub_result: dict[str, Any], sub_output_type: type, *, eligible: list[str]
-) -> Any:
+def _scan_subgraph_output(sub_result: dict[str, Any], sub_output_type: type, *, eligible: list[str]) -> Any:
     """Resolve a sub-construct's boundary value from the child's final state.
 
     ``eligible`` restricts the candidates to the fields the
@@ -174,6 +172,18 @@ def make_subgraph_fn(
         # keep -- when the accumulator channel adds a variant that can feed a port,
         # this line stops type-checking until it is taught, instead of reading an
         # attribute that is not there at run time.
+        if input_data is None and sub.input is not None and isinstance(sub.port_source, Port):
+            # The child's port is fed by the PARENT'S OWN port. Rule 3 of the
+            # resolver ("a peer outranks the port, and the port is still a
+            # candidate") has always said so for a Node's read; the port question
+            # was answered by a second derivation that had no such rung, so a
+            # ported child placed first in a ported parent read nothing while the
+            # value it was placed to consume sat in the parent's port.
+            # One resolver, one rung set.
+            # StateBus.get optional: a portless parent has no port field at all,
+            # and the next rung (the resolved peer field) answers those.
+            input_data = bus.get(StateKeys.SUBGRAPH_INPUT)
+
         if input_data is None and sub.input is not None and isinstance(sub.port_source, Peer):
             # StateBus.get optional: the resolved field may be unbound on this
             # superstep (a Loop's iteration-0 read, an unreached branch arm).

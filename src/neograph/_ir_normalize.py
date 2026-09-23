@@ -30,18 +30,30 @@ preserved.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from pydantic import BaseModel
 
-from neograph._construct_validation import (
-    _types_compatible,
-)
+from neograph._construct_validation import _loop_aware_compatible
 from neograph._ir_branch import _BranchNode, iter_item_slots
-from neograph._ir_consume import fan_out_candidates, port_source_field, single_type_candidates, with_source
-from neograph._ir_fields import contributed_fields, declared_output_fields
+from neograph._ir_consume import fan_out_candidates, single_type_candidates, with_source
+from neograph._ir_fields import Producer, contributed_fields, declared_output_fields
 from neograph._ir_protocols import ConstructItem, ConstructLike
-from neograph._ir_source import Accumulated, EachItem, HandoffChannel, Peer, Port, PortRef, Source
+from neograph._ir_source import (
+    Accumulated,
+    Candidate,
+    EachItem,
+    HandoffChannel,
+    Peer,
+    Port,
+    PortRef,
+    Resolution,
+    Resolved,
+    Source,
+    Unresolved,
+)
+from neograph._ir_stamp import stamp_declared_reads
 from neograph._normalize import normalize_inputs
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._sidecar import infer_oracle_gen_type
@@ -52,12 +64,6 @@ from neograph.node import Node, TypeSpecStatic
 
 if TYPE_CHECKING:
     from neograph.construct import Construct
-
-
-# Preserves the concrete item type through the stamping helper: a slot in
-# ``construct.nodes`` is typed ``Node | Construct``, and a stamp returns the same
-# item (or a ``model_copy`` of it), never a widened one.
-_ItemT = TypeVar("_ItemT", bound=ConstructItem)
 
 
 class IrNormalizer(Protocol):
@@ -109,71 +115,114 @@ def resolve_output_from(construct: ConstructLike) -> PortRef | None:
     return PortRef.parse(port)
 
 
-def resolve_single_type_source(
-    node: Node,
-    preceding: list[tuple[str, TypeSpecStatic, ConstructItem]],
-    construct_input: type[BaseModel] | None,
-) -> str | None:
-    """The ONE answer to "which state field satisfies this node's single-type
-    ``inputs=X``".
+def single_type_demand(node: Node) -> TypeSpecStatic | None:
+    """The type a node's single-type ``inputs=`` demands, or ``None`` for no demand.
 
-    ``preceding`` is the ordered ``(field_name, effective_type)`` list of the
-    producers declared BEFORE ``node`` at this construct level; ``construct_input``
-    is the enclosing construct's ``input=`` port type (or ``None``).
-
-    Three rules, each of them measured rather than assumed:
-
-    1. **The candidate set is the declared producers, plus the own port.** The
-       scan this replaces walked the whole state bag, so framework bookkeeping
-       competed to be input -- a ``neo_node_fingerprints`` entry (a dict of SHA
-       prefixes) matched as a legitimate candidate in 25 measured sites.
-
-    2. **The port stays eligible, and this is NOT the output side's rule.**
-       ``item_field_names`` excludes ``neo_subgraph_input`` by design: on the
-       OUTPUT boundary it is the paradigm "value the child was merely HANDED"
-       (GH #17). On the INPUT side that same value IS the legitimate source --
-       195 of 918 measured resolutions are a sub-construct's first node reading
-       its port. Transplanting the output-side eligibility rule here would break
-       every one of them. Two different sets, one shared SHAPE.
-
-    3. **A peer producer outranks the port**, so the port is consulted only when
-       no declared producer matches. Not a new rule: ``_param_classify`` already
-       states it for port params ("peer @node takes priority").
-
-    Returns the resolved field name, or ``None`` when there is nothing to
-    resolve.
+    Split out from the resolver so "is there a read here" and "what feeds it" are
+    separate questions: the stamp walk, the validator's render and the instrument
+    all need the first one, and only the resolver answers the second.
     """
     ni = normalize_inputs(node.inputs)
     if ni.is_dict_form or ni.is_none:
         return None
-    input_type = ni.single_type
-    if input_type is None:
-        return None
+    return ni.single_type
 
-    if node.input_from is not None:
-        # A NAMED port is the answer, not a candidate. Type-checked at assembly by
-        # _validation_inputs, so an unknown or mismatched name refuses there rather
-        # than silently falling through to the scan -- the x8i3s defect, which this
-        # is the input-side twin of.
-        return PortRef.parse(node.input_from).field
-    matches = single_type_candidates(preceding, input_type, _types_compatible)
+
+def _candidate(producer: Producer, reason: str) -> Candidate:
+    """One near-miss, with the reason COMPUTED HERE so diagnostics render it."""
+    return Candidate(ref=PortRef(producer.field_name), reason=reason)
+
+
+def _resolve_by_type(
+    input_type: TypeSpecStatic,
+    visible: Sequence[Producer],
+    shadowed: Sequence[Producer],
+) -> Resolution:
+    """The ONE answer to "which declared producer satisfies this type-addressed read".
+
+    Serves both type-addressed reads neograph has -- a Node's single-type
+    ``inputs=X`` and a placed sub-construct's ``input=`` port. They were two
+    derivations (``resolve_single_type_source`` and ``port_source_field``) that
+    disagreed about the predicate, about arm scoping and about whether the
+    enclosing port is a candidate; each disagreement was a separate silent
+    ``None`` (neograph-la3a4, neograph-chunx, neograph-yi9t5).
+
+    ``visible`` is the arm-scoped producer sequence in declaration order, WITH the
+    enclosing construct's own port seeded first when it has one -- so "a
+    type-compatible peer outranks the port" falls out of last-wins rather than
+    being a separate rule that could drift from it.
+
+    ``shadowed`` is the producers a BRANCH ARM registered that ``visible``
+    deliberately hides -- non-empty only for a read placed after a join. When one
+    of them satisfies the type, the read is REFUSED rather than resolved to
+    whatever sits above the branch: which arm ran is a runtime fact, so resolving
+    by type there hands the reader a stale value on every path. The legitimate
+    every-arm-produces-it form -- stamping the arms as one ordered read -- is
+    filed and deliberately not smuggled in here.
+    """
+    arm_matches = [p for p in shadowed if p.effective_type is not None and _loop_aware_compatible(p, input_type)]
+    if arm_matches:
+        return Unresolved(
+            tuple(
+                _candidate(
+                    p, "produced on a branch arm; which arm runs is a runtime fact, so it cannot be resolved by type"
+                )
+                for p in arm_matches
+            )
+        )
+    matches = single_type_candidates(visible, input_type, _loop_aware_compatible)
     if matches:
         # LAST compatible producer wins: the node's IMMEDIATE upstream, which is
         # what an author reading a pipeline top to bottom means by "the Claims"
         # -- and, not incidentally, the answer the Agent Spec export was already
         # giving. The runtime's forward scan was the side that was wrong.
         #
-        # This RESOLVES rather than REFUSES, which is the first of the two
-        # outcomes this ticket's acceptance allows. Refusing was implemented and
-        # measured first, and rejected on evidence: a consumer placed AFTER a
-        # Portal mesh has no name it could correctly give, because WHICH member
-        # ran last is a runtime fact. Refusal there would make a correct program
-        # unwritable -- the inverse of the restriction this ticket adds. The
-        # measurement and the open question are in neograph-t1nbp and neograph-5fvsu.
-        return matches[-1]
-    if construct_input is not None and _types_compatible(construct_input, input_type):
-        return StateKeys.SUBGRAPH_INPUT
-    return None
+        # Several eligible is NOT refused: measured at 47 failures, nearly all
+        # ordinary same-typed chains -- neograph-5fvsu.
+        winner = matches[-1]
+        source: Source = Port() if winner.field_name == StateKeys.SUBGRAPH_INPUT else Peer(PortRef(winner.field_name))
+        return Resolved(source)
+    return Unresolved(
+        tuple(
+            _candidate(p, f"produces {p.effective_type!r}, which does not satisfy the declared type") for p in visible
+        )
+    )
+
+
+def resolve_single_type_source(
+    node: Node,
+    visible: Sequence[Producer],
+    shadowed: Sequence[Producer] = (),
+) -> Resolution | None:
+    """Resolve a Node's single-type ``inputs=X``; ``None`` when it declares none.
+
+    ``input_from`` is the author NAMING the port, so it short-circuits the search.
+    Whether the name exists and type-checks is step 2's question; today it is taken
+    on trust, which is the defect that step owns.
+    """
+    input_type = single_type_demand(node)
+    if input_type is None:
+        return None
+    if node.input_from is not None:
+        return Resolved(Peer(PortRef.parse(node.input_from)))
+    return _resolve_by_type(input_type, visible, shadowed)
+
+
+def resolve_port_source(
+    sub_input: TypeSpecStatic | None,
+    visible: Sequence[Producer],
+    shadowed: Sequence[Producer] = (),
+) -> Resolution | None:
+    """Resolve a placed sub-construct's ``input=`` port; ``None`` when it has none.
+
+    The PARENT is the only place this is answerable: a sub-construct normalises
+    during its own ``__init__``, before it is placed, so it cannot see the
+    producers that will feed it. Same derivation as a Node's read, which is what
+    gives the port the enclosing-port fallback and the arm scoping it never had.
+    """
+    if sub_input is None:
+        return None
+    return _resolve_by_type(sub_input, visible, shadowed)
 
 
 class _FanOutParamNormalizer:
@@ -288,64 +337,6 @@ _NORMALIZERS: list[IrNormalizer] = [
     _OracleGenTypeNormalizer(),
     _HandoffParamNormalizer(),
 ]
-
-
-def _producer_pairs(item: ConstructItem) -> list[tuple[str, TypeSpecStatic, ConstructItem]]:
-    """``(state_field, effective_type, producing_item)`` for everything ``item``
-    produces.
-
-    The tuple SHAPE is this module's, for the two resolvers that consume it
-    (``single_type_candidates`` and ``port_source_field``, which need the
-    producing item alongside the type). The CONTENT is now read off
-    ``contributed_fields`` -- the shared write-set enumeration -- rather than
-    re-derived here.
-
-    This docstring previously described two derivations that "do currently agree"
-    and named the collapse as future work under neograph-yz69e. They did not agree:
-    both omitted the Portal ``{node}_dispatch`` field the validator registers, so
-    a single-type consumer of a dispatched result type-checked green and resolved
-    to nothing, and the runtime handed it ``None``. The collapse is done and the
-    note is deleted rather than reworded, per design 7.5.
-    """
-    return [(p.field_name, p.effective_type, item) for p in contributed_fields(item)]
-
-
-def _stamp_single_type_sources(construct: Construct) -> None:
-    """Resolve every single-type ``inputs=`` binding to a NAMED state field, so the runtime and the Agent Spec export read one answer
-    instead of each scanning the state bag in opposite directions.
-
-    Walks declaration order accumulating producers, which makes "preceding" mean
-    what a reader means by it. Branch arms are SCOPED: each arm resolves against
-    the producers visible before the branch, never against its sibling arm's --
-    otherwise a false-arm node could be stamped with a true-arm field, which is
-    the cross-arm read the validator already refuses.
-    """
-    construct_input = getattr(construct, "input", None)
-
-    def _stamp(item: _ItemT, visible: list[tuple[str, TypeSpecStatic, ConstructItem]]) -> _ItemT:
-        if not isinstance(item, Node) or item.input_source_field is not None:
-            return item
-        source = resolve_single_type_source(item, visible, construct_input)
-        if source is None:
-            return item
-        addr: Source = Port() if source == StateKeys.SUBGRAPH_INPUT else Peer(PortRef.parse(source))
-        return item.model_copy(update={"input_sources": with_source(item, StateKeys.SINGLE_INPUT, addr)})
-
-    visible: list[tuple[str, TypeSpecStatic, ConstructItem]] = []
-    for i, item in enumerate(construct.nodes):
-        if isinstance(item, _BranchNode):
-            meta = item._neo_branch_meta
-            for arm in (meta.true_arm_nodes, meta.false_arm_nodes):
-                scoped: list[tuple[str, TypeSpecStatic, ConstructItem]] = list(visible)
-                for j in range(len(arm)):
-                    arm[j] = _stamp(arm[j], scoped)
-                    scoped.extend(_producer_pairs(arm[j]))
-            for arm in (meta.true_arm_nodes, meta.false_arm_nodes):
-                for arm_item in arm:
-                    visible.extend(_producer_pairs(arm_item))
-            continue
-        construct.nodes[i] = _stamp(item, visible)
-        visible.extend(_producer_pairs(construct.nodes[i]))
 
 
 def normalize_ir(construct: Construct) -> None:
@@ -463,26 +454,23 @@ def normalize_ir(construct: Construct) -> None:
         if updates:
             container[idx] = item.model_copy(update=updates)
 
-    # Runs LAST: the pass above may replace node objects, and this one resolves
-    # against the final IR.
-    _stamp_single_type_sources(construct)
-    stamp_sub_construct_ports(construct)
+    # Runs LAST: the pass above may replace node objects, and the declared-read
+    # walk resolves against the final IR. ONE walk now answers both type-addressed
+    # reads -- a Node's single-type ``inputs=`` and a sub-construct's ``input=``
+    # port -- against the VALIDATOR's arm-scoped producer set, so the two cannot
+    # disagree the way two walks with two candidate sets did (neograph-z2ayo,
+    # neograph-chunx). The resolvers are handed over rather than imported, which
+    # keeps Source construction in this module alone.
+    resolve_and_stamp_reads(construct)
 
 
-def stamp_sub_construct_ports(construct: Construct) -> None:
-    """Resolve each sub-construct's input PORT to a parent field, once.
+def resolve_and_stamp_reads(construct: Construct) -> None:
+    """Resolve and stamp every declared read of ``construct``, with THIS module's
+    resolvers.
 
-    Replaces the runtime scan of the whole parent bag. The PARENT is the only place
-    this is answerable: a sub-construct normalises during its own ``__init__``,
-    before it is placed, so it cannot see the producers that will feed it. Never
-    overwrites -- a construct placed twice keeps the first answer, the same
-    discipline the other stamps here follow.
+    The one place the walk is bound to its resolvers. ``_fan_agent_wrap`` calls it
+    too: ``model_copy`` skips ``__init__``, so the sub-constructs it synthesizes
+    have never been normalised in a parent context, and their port would otherwise
+    hold no source at all.
     """
-    preceding: list[tuple[str, TypeSpecStatic, ConstructItem]] = []
-    for container, idx in iter_item_slots(construct):
-        item = container[idx]
-        if not isinstance(item, Node) and getattr(item, "nodes", None) is not None and item.port_source is None:
-            field = port_source_field(preceding, item.input, _types_compatible)
-            if field is not None:
-                item.port_source = Peer(PortRef(field))
-        preceding.extend(_producer_pairs(item))
+    stamp_declared_reads(construct, resolve_read=resolve_single_type_source, resolve_port=resolve_port_source)

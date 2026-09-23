@@ -826,8 +826,30 @@ class TestForwardConstructLoop:
         assert result["high"].label == "high-after-loop"
 
     def test_branch_followed_by_loop(self):
-        """if/else branch followed by self.loop() — branch first, then loop."""
+        """A single-arm ``if`` whose value is then looped over is REFUSED.
+
+        This test used to run the pipeline and pass. It passed because the branch
+        condition was TRUE: ``d`` after the join was stamped with the arm producer
+        ``boost``, so the taken path read the right value and the untaken path --
+        never exercised here -- would have read ``None`` on a green run. Two
+        candidate sets, one of them wrong, and the test happened to sit on the
+        lucky arm.
+
+        Resolving it to the pre-branch ``check`` instead is not the fix: that
+        value is STALE on the arm that ran, so both paths would silently receive
+        the wrong draft. Which arm ran is a runtime fact, so nothing resolved by
+        TYPE can answer it -- the read is refused until the read itself can name
+        the alternatives (``LastPresent`` over the arms; ``bd show neograph-q63q9``).
+
+        The refusal is the whole point of the step that introduced it, so this
+        test asserts the refusal AND the advice: a message that tells the author
+        to produce a compatible value on every arm is useless here, because both
+        arms already do.
+        """
+        import pytest
+
         from neograph import ForwardConstruct
+        from neograph.errors import ConstructError
 
         class BranchThenLoop(ForwardConstruct):
             seed = Node.scripted("seed", fn="fc_seed_bl", outputs=Draft)
@@ -861,13 +883,20 @@ class TestForwardConstructLoop:
 
         register_scripted("fc_refine_bl", fc_refine_bl)
 
-        pipeline = BranchThenLoop()
-        graph = compile(pipeline, **build_test_compile_kwargs())
-        result = run(graph, input={"node_id": "fc-branch-loop"})
+        with pytest.raises(ConstructError) as exc_info:
+            BranchThenLoop()
 
-        # Branch should have taken the boost path (0.6 > 0.5)
-        # Loop: 0.6 → 0.75 → 0.90 → exits (2 iterations)
-        assert _refine_bl_count[0] >= 2, f"Expected refine to run >= 2 times, ran {_refine_bl_count[0]}"
+        message = str(exc_info.value)
+        assert "boost" in message, (
+            f"the refusal must name the arm producer that shadows the read. Got: {message}"
+        )
+        assert "input_from" in message, (
+            f"the refusal must name a spelling that says WHICH producer is meant. Got: {message}"
+        )
+        assert "have every arm produce a compatible value" not in message, (
+            f"advice the author has already followed is not advice. Got: {message}"
+        )
+        assert _refine_bl_count[0] == 0, "nothing may run: the construct was refused at assembly"
 
     def test_two_sequential_loops(self):
         """Two self.loop() calls in sequence — both should cycle independently."""

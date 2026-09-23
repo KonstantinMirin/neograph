@@ -52,6 +52,7 @@ from neograph._validation_types import (
     _extract_list_element,
     _fmt_type,
     _is_construct_like,
+    _loop_aware_compatible,
     _resolve_field_annotation,
     _source_location,
     _types_compatible,
@@ -74,6 +75,7 @@ log = structlog.get_logger()
 # effective_producer_type. Listed in __all__ so the re-export is explicit
 # (no star-import) and ruff treats it as used.
 __all__ = [
+    "ArmScopedProducers",
     "ConstructError",
     "NodeItem",
     "Producer",
@@ -81,6 +83,7 @@ __all__ = [
     "ValidationMode",
     "_MISSING",
     "_extract_list_element",
+    "_loop_aware_compatible",
     "_resolve_field_annotation",
     "_types_compatible",
     "_validate_node_chain",

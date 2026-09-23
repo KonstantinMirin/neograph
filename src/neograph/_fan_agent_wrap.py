@@ -22,7 +22,7 @@ from pydantic import BaseModel, create_model
 
 from neograph._fan_agent import is_supported_fan_over_agent
 from neograph._ir_branch import iter_with_arms
-from neograph._ir_normalize import stamp_sub_construct_ports
+from neograph._ir_normalize import resolve_and_stamp_reads
 from neograph._normalize import normalize_inputs
 from neograph._state_keys import StateKeys
 from neograph.construct import Construct
@@ -77,7 +77,7 @@ def wrap_fan_over_agents(construct: Construct, scripted_lookup: dict[str, Callab
         # and the runtime's last rung reads nothing: an isolated agent cycle received an
         # empty upstream. Calling the normalizer's own stamp keeps it the single writer
         # rather than re-deriving the answer here.
-        stamp_sub_construct_ports(wrapped)
+        resolve_and_stamp_reads(wrapped)
 
     # Anything still classifying as a supported fan-over-agent after the
     # top-level rewrite is necessarily in a branch arm (iter_with_arms flattens

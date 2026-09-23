@@ -23,6 +23,10 @@ VALIDATION_CLUSTER = frozenset(
         "_validation_portal.py",
         "_validation_arms.py",
         "_validation_outputs.py",
+        # Rendering, not deciding: the resolver decides a read once, before
+        # validation, and this module says what it found. In the cluster because
+        # it reads the cluster's producer map and error vocabulary.
+        "_validation_render.py",
     }
 )
 
@@ -1868,6 +1872,11 @@ class TestValidationModuleBoundary:
             "def _check_item_input",
             "def _check_fan_in_inputs",
             "def _check_each_path",
+        },
+        # RE-KEYED, not widened: the two error builders moved out of
+        # _validation_inputs when the decision they explain moved out of the
+        # cluster entirely. Deciding stays above; rendering lives here.
+        "_validation_render.py": {
             "def _build_no_producer_error",
             "def _suggest_hint",
         },

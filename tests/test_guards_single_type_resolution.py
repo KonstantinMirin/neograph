@@ -191,6 +191,56 @@ def _iterates_a_bag(expr: ast.expr) -> bool:
     return False
 
 
+#: Names that hold a producer collection in the validation cluster. A loop over
+#: one of these that type-checks its members AND hands back the member it liked is
+#: a second answer to "which producer feeds this read" -- the exact loop
+#: ``_check_item_input`` used to carry beside the resolver's own.
+_PRODUCER_ITERABLES = frozenset({"producers", "all_producers", "preceding", "candidates", "visible", "matches"})
+
+#: Type-compat calls that turn a loop into a SELECTION rather than a report.
+_COMPAT_CALLS = frozenset({"_types_compatible", "_loop_aware_compatible", "issubclass"})
+
+
+def _selection_loops(source: str) -> list[str]:
+    """Loops that type-check producers and RETURN the producer they picked.
+
+    The discrimination that matters: ``_suggest_hint`` also loops over producers
+    calling ``issubclass``, but it hands back a SENTENCE, and a sentence cannot be
+    mistaken for the resolver's answer. What is banned is handing back the
+    producer, its field name, or a bool standing in for "one matched" -- which is
+    the existence check the validator used to run in place of reading the
+    resolver's verdict.
+    """
+    hits: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.For) or not isinstance(node.target, ast.Name):
+            continue
+        iter_names = {n.id for n in ast.walk(node.iter) if isinstance(n, ast.Name)}
+        if not (iter_names & _PRODUCER_ITERABLES):
+            continue
+        body = list(ast.walk(ast.Module(body=node.body, type_ignores=[])))
+        calls = {
+            f.id if isinstance(f, ast.Name) else f.attr
+            for f in (c.func for c in body if isinstance(c, ast.Call))
+            if isinstance(f, (ast.Name, ast.Attribute))
+        }
+        if not (calls & _COMPAT_CALLS):
+            continue
+        for ret in (r for r in body if isinstance(r, ast.Return)):
+            value = ret.value
+            if value is None:
+                hits.append(f"line {ret.lineno}: bare return inside a producer type-check loop")
+                continue
+            root = value
+            while isinstance(root, ast.Attribute):
+                root = root.value
+            picked = isinstance(root, ast.Name) and root.id == node.target.id
+            existence = isinstance(value, ast.Constant) and isinstance(value.value, bool)
+            if picked or existence:
+                hits.append(f"line {ret.lineno}: returns the producer it type-matched")
+    return hits
+
+
 class TestNoSecondSingleTypeResolver:
     """No module outside the allowlist resolves a value by scanning a whole bag."""
 
@@ -210,6 +260,27 @@ class TestNoSecondSingleTypeResolver:
             "Read the resolved name instead -- Node.input_source_field, written once by "
             "_ir_normalize.resolve_single_type_source -- or add an allowlist row saying why "
             "this site structurally cannot.\nViolations:\n" + "\n".join(violations)
+        )
+
+    def test_no_validation_module_selects_a_producer_by_type(self):
+        """The validation cluster RENDERS the resolver's verdict; it never recomputes it.
+
+        ``_check_item_input`` used to end in ``for p in producers.values(): if
+        _loop_aware_compatible(p, input_type): return`` -- an existence check that
+        threw away the choice. It passed while the normalizer, walking a DIFFERENT
+        candidate set, stamped a branch arm, so the read the validator had approved
+        against the node above the branch was wired to the arm and delivered
+        ``None`` on the path that ran.
+        """
+        violations = [
+            f"  {py_file.name}: {hit}"
+            for py_file in sorted(SRC_DIR.glob("_validation_*.py"))
+            for hit in _selection_loops(py_file.read_text())
+        ]
+        assert violations == [], (
+            "A validation module is selecting a producer by type. Resolution happens ONCE, in "
+            "_ir_normalize, before validation; read the stored verdict (_ir_stamp.read_refusals) "
+            "and render it.\nViolations:\n" + "\n".join(violations)
         )
 
     def test_allowlist_rows_are_live_and_justified(self):
@@ -310,6 +381,26 @@ class TestTheGuardActuallyDetects:
                 f"the guard no longer detects the {label} that neograph-t1nbp removed "
                 f"({rel} at {_PRE_FIX_COMMIT}). Someone narrowed the detector past usefulness."
             )
+
+    def test_selection_loop_detector_fires_on_the_deleted_validator_loop(self):
+        """The real pre-fix loop, verbatim -- a detector nobody can see fire is decoration."""
+        deleted = (
+            "def _check(producers, input_type):\n"
+            "    for p in producers.values():\n"
+            "        if _loop_aware_compatible(p, input_type):\n"
+            "            return\n"
+        )
+        assert _selection_loops(deleted), "the detector misses the loop it was written for"
+
+    def test_selection_loop_detector_spares_a_hint_loop(self):
+        """``_suggest_hint``'s real shape: same iterable, same issubclass, returns a SENTENCE."""
+        hint = (
+            "def _suggest(producers, input_type):\n"
+            "    for p in producers.values():\n"
+            "        if issubclass(p.effective_type, input_type):\n"
+            "            return f'did you mean {p.field_name}?'\n"
+        )
+        assert _selection_loops(hint) == [], "a loop that returns advice is not a second resolver"
 
     def test_negative_plain_iteration_is_not_caught(self):
         assert not _scan_source(

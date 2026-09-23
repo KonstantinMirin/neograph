@@ -86,7 +86,7 @@ def contributed_fields(item: ConstructItem) -> list[Producer]:
 
     **Per-ITEM, and deliberately never walks a construct.** Three callers need
     three different arm policies -- ``normalize_ir``'s peer set is top-level only,
-    ``_stamp_single_type_sources`` is arm-SCOPED (an arm must never see its
+    ``_ir_stamp.stamp_declared_reads`` is arm-SCOPED (an arm must never see its
     sibling arm's producers, which is the cross-arm read validation refuses), and
     ``item_field_names`` is arm-inclusive and flat. A version that walked
     internally could serve at most one of them and would silently destroy the arm
@@ -264,7 +264,7 @@ def item_field_names(construct: Any) -> list[str]:
     # The ARM-INCLUSIVE, FLAT projection of the shared write-set, neograph-yz69e.
     # The walk and its arm policy stay HERE -- `contributed_fields` is per-item
     # precisely so this caller, `normalize_ir` (top-level only) and
-    # `_stamp_single_type_sources` (arm-SCOPED) can each keep their own.
+    # `_ir_stamp.stamp_declared_reads` (arm-SCOPED) can each keep their own.
     #
     # Declaration order is preserved because the reader depends on it: the
     # boundary picks the LAST eligible item. The dict-form per-key rule and the

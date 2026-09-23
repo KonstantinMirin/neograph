@@ -9,7 +9,9 @@ Each rule here answers "which upstream thing feeds this binding":
 
 - ``fan_out_candidates``  -- which dict-form input key could be an Each fan-out receiver
 - ``single_type_candidates`` -- which declared producers satisfy a single-type ``inputs=X``
-- ``port_source_field``   -- which PARENT field feeds a sub-construct's ``input=`` port
+  (also the PARENT-side answer for a sub-construct's ``input=`` port: one question,
+  one derivation -- ``port_source_field`` was the second one, and it disagreed about
+  the loop-aware predicate, arm scoping and the port fallback all three)
 - ``loop_carry_dest_key`` -- which input key a Loop's fed-back output lands on
 - ``with_source``         -- the copy-not-mutate write into a node's address table
 
@@ -23,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from neograph._ir_fields import _subclass_either_way
+from neograph._ir_fields import Producer, _subclass_either_way
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._type_spec import TypeSpecStatic
 from neograph.naming import field_name_for
@@ -32,7 +34,6 @@ from neograph.node import Node
 __all__ = [
     "fan_out_candidates",
     "loop_carry_dest_key",
-    "port_source_field",
     "single_type_candidates",
     "with_source",
 ]
@@ -66,60 +67,33 @@ def fan_out_candidates(node: Node, known_field_names: set[str]) -> list[str]:
     ]
 
 
-def port_source_field(
-    candidates: Sequence[tuple[str, TypeSpecStatic, object]],
-    sub_input: type | None,
-    compatible: Callable[[TypeSpecStatic, TypeSpecStatic], bool],
-) -> str | None:
-    """Which PARENT field feeds a sub-construct's input port.
-
-    The assembly-time answer to a question the runtime used to ask by scanning.
-    ``_scan_subgraph_input`` reverse-iterated the ENTIRE parent state bag and
-    returned the first value that passed ``isinstance`` against the declared
-    ``input=`` -- so framework bookkeeping, forwarded ``context=`` fields and every
-    unrelated producer all competed to be the port's value, and which one won
-    depended on dict ordering at run time.
-
-    Same PRECEDENCE, computed once from declarations instead of values: the LAST
-    declared producer whose effective type can satisfy the port. Reverse iteration
-    was the scan's own rule -- later pipeline nodes take precedence over earlier
-    ones, e.g. a loop's output over its seed -- so preserving it is what keeps this
-    a relocation of the answer rather than a change to it.
-
-    ``candidates`` are ``(field_name, effective_type, item)`` triples in declaration
-    order, and ``compatible`` is the caller's type predicate: this module is a leaf
-    and must not reach into the validation cluster for one.
-
-    Returns ``None`` when nothing can satisfy the port, which is not an error here
-    -- the runtime's remaining ladder rungs (loop carry, fanned item, mesh channel)
-    may still supply a value, and a genuinely unsatisfiable port is the validator's
-    to refuse.
-    """
-    if sub_input is None:
-        return None
-    for field, effective, _item in reversed(candidates):
-        if effective is not None and compatible(effective, sub_input):
-            return field
-    return None
-
-
 def single_type_candidates(
-    preceding: Sequence[tuple[str, TypeSpecStatic, object]],
+    preceding: Sequence[Producer],
     input_type: TypeSpecStatic,
-    compatible: Callable[[TypeSpecStatic, TypeSpecStatic], bool],
-) -> list[str]:
-    """Every declared producer field whose type can satisfy a single-type ``inputs=``.
+    compatible: Callable[[Producer, TypeSpecStatic], bool],
+) -> list[Producer]:
+    """Every declared producer that can satisfy a single-type ``inputs=`` or an
+    ``input=`` port, in declaration order.
 
-    ONE derivation with two readers: the normalizer takes the last of these as the
-    resolved source, and validation refuses when there is more than one. Before this
-    they would have been two walks over the same producer list, which is how the
-    runtime and the exporter came to disagree in the first place.
+    ONE derivation with one reader: ``_ir_normalize``'s resolver, which takes the
+    LAST of these. Validation no longer walks the producers itself -- it RENDERS
+    the resolver's ``Resolution`` (neograph-4cvx8 step 1) -- so "the last compatible
+    producer" cannot be computed twice and come out differently, which is how the
+    normalizer stamped a branch arm while the validator had accepted the node above
+    it.
+
+    Takes ``Producer`` records rather than ``(field, type)`` pairs: the pair form
+    dropped ``is_loop``, so a ``list[T]`` read after a ``Loop`` producer of ``T``
+    type-checked green in validation -- which IS loop-aware -- and resolved to
+    nothing here. ``compatible`` is the caller's PRODUCER-level
+    predicate for the same reason; this module is a leaf and must not reach into
+    the validation cluster for one.
 
     Order is declaration order, so ``[-1]`` is the node's immediate upstream -- what
     an author reading a pipeline top to bottom means by "the Claims".
     """
     return [
-        field for field, prod_type, _producer in preceding if prod_type is not None and compatible(prod_type, input_type)
+        producer for producer in preceding if producer.effective_type is not None and compatible(producer, input_type)
     ]
 
 

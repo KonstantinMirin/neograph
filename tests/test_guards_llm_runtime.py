@@ -1121,6 +1121,18 @@ class TestNormalizeIrIsSoleIrFieldWriter:
     # TIGHTENING -- one writable IR field where there were five.
     IR_FIELDS = frozenset({"input_sources", "oracle_gen_type"})
 
+    #: The assembly-time normalization PASS, which is what the single-writer rule
+    #: is really about -- not one file. It spans two modules: ``_ir_normalize``
+    #: owns the inferences and is the only module that may construct a ``Source``;
+    #: ``_ir_stamp`` owns the WALK that attaches one, and constructs none.
+    #:
+    #: RE-KEYED, NOT WIDENED, and the containment test below is what makes that
+    #: true: ``_ir_stamp`` is reachable from ``_ir_normalize`` alone, so the write
+    #: permission did not become available to any assembly path. Splitting the walk
+    #: out was the alternative to adding a module to SRC_CONSTRUCTION_ALLOWED,
+    #: which AGENTS.md's first refusal forbids.
+    NORMALIZATION_PASS = frozenset({"_ir_normalize.py", "_ir_stamp.py"})
+
     # Sanctioned (file, field) pre-population writes outside _ir_normalize.
     # After neograph-k7bg, _construct_builder no longer writes fan_out_param —
     # the normalizer is its sole writer. Only the @node decoration-time eager
@@ -1219,7 +1231,7 @@ class TestNormalizeIrIsSoleIrFieldWriter:
             if not written:
                 continue
             name = py_file.name
-            if name == "_ir_normalize.py":
+            if name in self.NORMALIZATION_PASS:
                 continue  # the canonical site may write any IR field
             allowed = self.ALLOWED_PREPOP.get(name, frozenset())
             unexpected = written - allowed
@@ -1235,6 +1247,31 @@ class TestNormalizeIrIsSoleIrFieldWriter:
             + "\n\nIf this is a new IR inference, add it as an IrNormalizer in "
             "_ir_normalize.py — do NOT inline it in an assembly path (that "
             "re-creates the drift class of neograph-vgc1/aqau/20xq)."
+        )
+
+    def test_the_stamping_walk_is_reachable_from_the_normalizer_alone(self):
+        """``_ir_stamp`` holds an IR-write permission, so its IMPORTERS are the
+        ratchet: one module, or the permission has spread.
+
+        Without this, adding ``_ir_stamp.py`` to :data:`NORMALIZATION_PASS` would
+        be a widening dressed as a re-key -- any assembly path could import the
+        walk and stamp a node outside the pass.
+        """
+        READ_ONLY = {"read_refusals"}
+        offenders: list[str] = []
+        for py_file in sorted(SRC_DIR.glob("*.py")):
+            if py_file.name == "_ir_stamp.py":
+                continue
+            for node in ast.walk(ast.parse(py_file.read_text())):
+                if not (isinstance(node, ast.ImportFrom) and node.module == "neograph._ir_stamp"):
+                    continue
+                imported = {alias.name for alias in node.names}
+                if py_file.name == "_ir_normalize.py" or imported <= READ_ONLY:
+                    continue
+                offenders.append(f"{py_file.name} imports {sorted(imported)}")
+        assert offenders == [], (
+            "the stamping walk must stay reachable from the normalizer alone -- anything else may "
+            f"import only the read-only view {sorted(READ_ONLY)}. Offenders: {offenders}"
         )
 
     def test_tool_trigger_adds_no_new_node_ir_field(self):
