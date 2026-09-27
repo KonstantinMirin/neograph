@@ -30,28 +30,20 @@ preserved.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from pydantic import BaseModel
 
-from neograph._construct_validation import _loop_aware_compatible
 from neograph._ir_branch import _BranchNode, iter_item_slots
-from neograph._ir_consume import fan_out_candidates, single_type_candidates, with_source
-from neograph._ir_fields import Producer, contributed_fields, declared_output_fields
+from neograph._ir_consume import fan_out_candidates, with_source
+from neograph._ir_fields import contributed_fields, declared_output_fields
 from neograph._ir_protocols import ConstructItem, ConstructLike
+from neograph._ir_resolve import resolve_port_source, resolve_single_type_source
 from neograph._ir_source import (
     Accumulated,
-    Candidate,
     EachItem,
     HandoffChannel,
-    Peer,
-    Port,
     PortRef,
-    Resolution,
-    Resolved,
-    Source,
-    Unresolved,
 )
 from neograph._ir_stamp import stamp_declared_reads
 from neograph._normalize import normalize_inputs
@@ -60,7 +52,7 @@ from neograph._sidecar import infer_oracle_gen_type
 from neograph._state_keys import StateKeys
 from neograph.modifiers import _group_portal_members
 from neograph.naming import field_name_for
-from neograph.node import Node, TypeSpecStatic
+from neograph.node import Node
 
 if TYPE_CHECKING:
     from neograph.construct import Construct
@@ -113,116 +105,6 @@ def resolve_output_from(construct: ConstructLike) -> PortRef | None:
     if port is None:
         return None
     return PortRef.parse(port)
-
-
-def single_type_demand(node: Node) -> TypeSpecStatic | None:
-    """The type a node's single-type ``inputs=`` demands, or ``None`` for no demand.
-
-    Split out from the resolver so "is there a read here" and "what feeds it" are
-    separate questions: the stamp walk, the validator's render and the instrument
-    all need the first one, and only the resolver answers the second.
-    """
-    ni = normalize_inputs(node.inputs)
-    if ni.is_dict_form or ni.is_none:
-        return None
-    return ni.single_type
-
-
-def _candidate(producer: Producer, reason: str) -> Candidate:
-    """One near-miss, with the reason COMPUTED HERE so diagnostics render it."""
-    return Candidate(ref=PortRef(producer.field_name), reason=reason)
-
-
-def _resolve_by_type(
-    input_type: TypeSpecStatic,
-    visible: Sequence[Producer],
-    shadowed: Sequence[Producer],
-) -> Resolution:
-    """The ONE answer to "which declared producer satisfies this type-addressed read".
-
-    Serves both type-addressed reads neograph has -- a Node's single-type
-    ``inputs=X`` and a placed sub-construct's ``input=`` port. They were two
-    derivations (``resolve_single_type_source`` and ``port_source_field``) that
-    disagreed about the predicate, about arm scoping and about whether the
-    enclosing port is a candidate; each disagreement was a separate silent
-    ``None`` (neograph-la3a4, neograph-chunx, neograph-yi9t5).
-
-    ``visible`` is the arm-scoped producer sequence in declaration order, WITH the
-    enclosing construct's own port seeded first when it has one -- so "a
-    type-compatible peer outranks the port" falls out of last-wins rather than
-    being a separate rule that could drift from it.
-
-    ``shadowed`` is the producers a BRANCH ARM registered that ``visible``
-    deliberately hides -- non-empty only for a read placed after a join. When one
-    of them satisfies the type, the read is REFUSED rather than resolved to
-    whatever sits above the branch: which arm ran is a runtime fact, so resolving
-    by type there hands the reader a stale value on every path. The legitimate
-    every-arm-produces-it form -- stamping the arms as one ordered read -- is
-    filed and deliberately not smuggled in here.
-    """
-    arm_matches = [p for p in shadowed if p.effective_type is not None and _loop_aware_compatible(p, input_type)]
-    if arm_matches:
-        return Unresolved(
-            tuple(
-                _candidate(
-                    p, "produced on a branch arm; which arm runs is a runtime fact, so it cannot be resolved by type"
-                )
-                for p in arm_matches
-            )
-        )
-    matches = single_type_candidates(visible, input_type, _loop_aware_compatible)
-    if matches:
-        # LAST compatible producer wins: the node's IMMEDIATE upstream, which is
-        # what an author reading a pipeline top to bottom means by "the Claims"
-        # -- and, not incidentally, the answer the Agent Spec export was already
-        # giving. The runtime's forward scan was the side that was wrong.
-        #
-        # Several eligible is NOT refused: measured at 47 failures, nearly all
-        # ordinary same-typed chains -- neograph-5fvsu.
-        winner = matches[-1]
-        source: Source = Port() if winner.field_name == StateKeys.SUBGRAPH_INPUT else Peer(PortRef(winner.field_name))
-        return Resolved(source)
-    return Unresolved(
-        tuple(
-            _candidate(p, f"produces {p.effective_type!r}, which does not satisfy the declared type") for p in visible
-        )
-    )
-
-
-def resolve_single_type_source(
-    node: Node,
-    visible: Sequence[Producer],
-    shadowed: Sequence[Producer] = (),
-) -> Resolution | None:
-    """Resolve a Node's single-type ``inputs=X``; ``None`` when it declares none.
-
-    ``input_from`` is the author NAMING the port, so it short-circuits the search.
-    Whether the name exists and type-checks is step 2's question; today it is taken
-    on trust, which is the defect that step owns.
-    """
-    input_type = single_type_demand(node)
-    if input_type is None:
-        return None
-    if node.input_from is not None:
-        return Resolved(Peer(PortRef.parse(node.input_from)))
-    return _resolve_by_type(input_type, visible, shadowed)
-
-
-def resolve_port_source(
-    sub_input: TypeSpecStatic | None,
-    visible: Sequence[Producer],
-    shadowed: Sequence[Producer] = (),
-) -> Resolution | None:
-    """Resolve a placed sub-construct's ``input=`` port; ``None`` when it has none.
-
-    The PARENT is the only place this is answerable: a sub-construct normalises
-    during its own ``__init__``, before it is placed, so it cannot see the
-    producers that will feed it. Same derivation as a Node's read, which is what
-    gives the port the enclosing-port fallback and the arm scoping it never had.
-    """
-    if sub_input is None:
-        return None
-    return _resolve_by_type(sub_input, visible, shadowed)
 
 
 class _FanOutParamNormalizer:

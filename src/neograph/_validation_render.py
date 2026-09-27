@@ -49,6 +49,25 @@ def _build_no_producer_error(
     predicate of this module's own is what let the verdict and its explanation
     disagree (design 7.4).
     """
+    authored = getattr(item, "input_from", None)
+    if authored is not None and refusal is not None and refusal.candidates:
+        # The author NAMED a port and the name did not resolve. Lead with the name,
+        # because that is the one thing they wrote and the one thing to fix; the
+        # reason comes from the resolver, which is why it can say "no such producer"
+        # and "wrong type" without this module re-deciding which it was.
+        why = refusal.candidates[0]
+        return ConstructError.build(
+            f"declares input_from={authored!r}, which {why.reason}",
+            expected=f"a member producing {_fmt_type(input_type)}",
+            found=f"input_from={authored!r}",
+            hint=(
+                "input_from names a MEMBER, or 'member.output' for one of a dict-form node's keys, "
+                "declared before this node (a branch arm's member counts, and means that arm's value)"
+            ),
+            node=item.name,
+            construct=construct.name,
+            location=_source_location(),
+        )
     arm_candidates = [c for c in (refusal.candidates if refusal else ()) if "branch arm" in c.reason]
     if arm_candidates:
         named = ", ".join(sorted(c.ref.member for c in arm_candidates))

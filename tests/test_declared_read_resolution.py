@@ -670,3 +670,157 @@ class TestReusedConstructResolvesItsOwnPortPerParent:
             f"so the inner body was handed {recorder.received[-1]!r} and the port was silently "
             "omitted. Each parent must resolve its own port."
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 6 -- neograph-3mqw4: ``input_from`` is an AUTHORED name, and assembly
+# used to take it on trust.
+#
+# The resolver short-circuited on it and stamped Peer(PortRef.parse(spelling))
+# whatever the spelling said, citing a type check in _validation_inputs that did
+# not exist. So a misspelling silently DISPLACED a compatible producer: the field
+# it named is written by nobody, and the body was handed None on a green run.
+#
+# The scan for this step found it was the last authored reference in the IR that
+# nothing verified -- output_from, Each.over, bound_args, Portal route=, carried=,
+# context= and string Loop conditions all have a named checker.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _input_from_names_nothing(recorder: _Recorder) -> Construct:
+    """``producer(Token) -> consumer(inputs=Token, input_from='nosuch')``."""
+    register_scripted("dr_if_producer", _emit_token("REAL-PRODUCER"))
+    register_scripted("dr_if_consumer", recorder.echo)
+
+    return Construct(
+        "mqw4-nonexistent",
+        nodes=[
+            Node.scripted("producer", fn="dr_if_producer", outputs=Token),
+            Node(
+                name="consumer",
+                mode="scripted",
+                scripted_fn="dr_if_consumer",
+                inputs=Token,
+                outputs=Echo,
+                input_from="nosuch",
+            ),
+        ],
+    )
+
+
+def _input_from_names_an_incompatible_producer(recorder: _Recorder) -> Construct:
+    """``teller(Echo) -> token_maker(Token) -> consumer(inputs=Token, input_from='teller')``."""
+    register_scripted("dr_if_echo", lambda _i, _c: Echo(saw="WRONG-TYPE"))
+    register_scripted("dr_if_token", _emit_token("RIGHT-TYPE"))
+    register_scripted("dr_if_consumer2", recorder.echo)
+
+    return Construct(
+        "mqw4-incompatible",
+        nodes=[
+            Node.scripted("teller", fn="dr_if_echo", outputs=Echo),
+            Node.scripted("token_maker", fn="dr_if_token", outputs=Token),
+            Node(
+                name="consumer",
+                mode="scripted",
+                scripted_fn="dr_if_consumer2",
+                inputs=Token,
+                outputs=Echo,
+                input_from="teller",
+            ),
+        ],
+    )
+
+
+class TestInputFromIsResolvedNotTrusted:
+    """neograph-3mqw4."""
+
+    def test_a_name_that_matches_no_producer_is_refused(self):
+        """The repro, as a refusal.
+
+        Before: assembles, compiles, runs green, ``input_sources`` holds
+        ``Peer(PortRef(member='nosuch'))``, and the body receives ``None`` while
+        ``producer`` sits there producing exactly the declared type.
+        """
+        recorder = _Recorder()
+        try:
+            pipeline = _input_from_names_nothing(recorder)
+        except ConstructError as exc:
+            message = str(exc)
+            assert "input_from" in message and "nosuch" in message, (
+                f"the refusal must quote the name it could not resolve. Got: {message}"
+            )
+            assert "producer" in message, (
+                f"the refusal must show what IS available, so the author can see the misspelling. Got: {message}"
+            )
+            return
+
+        result = run(compile(pipeline, **build_test_compile_kwargs()), input={"node_id": "mqw4"})
+        pytest.fail(
+            "neograph-3mqw4: input_from='nosuch' assembled. The consumer was handed "
+            f"{recorder.received[0]!r} and returned {result['consumer']!r} while 'producer' produced a "
+            "compatible Token. Expected: ConstructError at Construct()."
+        )
+
+    def test_a_name_whose_producer_has_the_wrong_type_is_refused(self):
+        """Naming a REAL member is not enough; it must produce the declared type.
+
+        ``teller`` exists and is visible, so an existence-only check would accept
+        this and hand the body an ``Echo`` where it declared ``Token`` -- or, since
+        the field holds the wrong shape, whatever the runtime made of it.
+        """
+        recorder = _Recorder()
+        with pytest.raises(ConstructError) as exc_info:
+            _input_from_names_an_incompatible_producer(recorder)
+
+        message = str(exc_info.value)
+        assert "teller" in message, f"the refusal must name the producer it rejected. Got: {message}"
+        assert "Echo" in message or "Token" in message, (
+            f"the refusal must show the type mismatch it found. Got: {message}"
+        )
+
+    def test_input_from_can_name_a_branch_arm_producer(self):
+        """The escape hatch step 1's refusal ADVISES must actually exist.
+
+        Step 1 refuses a post-join read that a branch arm shadows and tells the
+        author to name the producer with ``input_from``. If ``input_from`` resolved
+        only against the VISIBLE set, an arm producer would be unnameable and that
+        advice would be false -- the same defect class as the hint it replaced.
+
+        Naming an arm is the author overriding an inference the resolver correctly
+        declines to make. The TRUE arm runs here, so the value arrives; when a named
+        arm does NOT run the field is absent, which step 9 turns into a loud failure
+        rather than a silent None.
+        """
+        recorder = _Recorder()
+        register_scripted("dr_arm_pre", _emit_token("PRE-BRANCH", take_true=True))
+        register_scripted("dr_arm_true", _emit_token("TRUE-ARM"))
+        register_scripted("dr_arm_false", _emit_token("FALSE-ARM"))
+        register_scripted("dr_arm_after", recorder.echo)
+
+        pre = Node.scripted("pre", fn="dr_arm_pre", outputs=Token)
+        true_arm = Node.scripted("true_arm", fn="dr_arm_true", inputs=Token, outputs=Token)
+        false_arm = Node.scripted("false_arm", fn="dr_arm_false", inputs=Token, outputs=Token)
+        after = Node(
+            name="after",
+            mode="scripted",
+            scripted_fn="dr_arm_after",
+            inputs=Token,
+            outputs=Echo,
+            input_from="true_arm",
+        )
+        condition = _ConditionSpec(
+            source_node=pre,
+            attr_chain=["take_true"],
+            op_fn=lambda value, _threshold: bool(value),
+            op_str="route",
+            threshold=None,
+        )
+        meta = _BranchMeta(condition_spec=condition, true_arm_nodes=[true_arm], false_arm_nodes=[false_arm])
+        pipeline = Construct("mqw4-arm-named", nodes=[pre, _BranchNode(meta, 0), after])
+
+        result = run(compile(pipeline, **build_test_compile_kwargs()), input={"node_id": "mqw4-arm"})
+
+        assert result["after"] == Echo(saw="TRUE-ARM"), (
+            "input_from must be able to name a branch-arm producer -- it is the only spelling that "
+            f"can, and step 1's refusal advertises it. Got {result['after']!r}"
+        )

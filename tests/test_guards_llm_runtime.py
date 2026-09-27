@@ -2854,7 +2854,31 @@ class TestSourceConstructionMonopoly:
     # guard that wrote that control. The defining module legitimately constructs its
     # own types (a parse/classmethod form), so the permission is real; it just has to
     # be declared, not acquired by accident.
-    SRC_CONSTRUCTION_ALLOWED = frozenset({"_ir_normalize.py", "_ir_source.py"})
+    # REDISTRIBUTED, not widened, and the SITE COUNT below is what makes that
+    # checkable. The resolvers moved to _ir_resolve.py, taking two of the six
+    # construction sites with them; the other four stay beside the inference that
+    # decides them (an Each receiver mints EachItem, a mesh member mints
+    # HandoffChannel, a channel key mints Accumulated). Splitting "decide" from
+    # "mint" would have separated a decision from its expression and left one-line
+    # minting wrappers whose only purpose is to satisfy this list -- which is how a
+    # ratchet starts shaping the architecture instead of protecting it.
+    #
+    # Both modules are the normalization PASS (see NORMALIZATION_PASS above), and
+    # _ir_resolve is reachable only from it.
+    SRC_CONSTRUCTION_ALLOWED = frozenset({"_ir_normalize.py", "_ir_resolve.py", "_ir_source.py"})
+
+    #: How many places mint an ARRIVAL CHANNEL -- a Source VARIANT, not a PortRef
+    #: address or a Resolution wrapper, which are ordinary control flow in a
+    #: resolver and fluctuate with any honest refactor. A FILE list alone cannot
+    #: tell a redistribution from a growth: three files may hold any number of
+    #: mints. This number can only go DOWN, or go up with a new arrival channel
+    #: that AGENTS.md's new-IR-capability bar has cleared.
+    SRC_CONSTRUCTION_SITE_BUDGET = 6
+
+    #: The variants that ARE arrival channels. Deliberately derived by subtraction
+    #: from SOURCE_TYPES, so a new variant added there joins the budget instead of
+    #: being silently exempt from it.
+    ARRIVAL_CHANNEL_NAMES = frozenset({"PortRef", "Candidate", "Resolved", "Unresolved"})
     SRC_SEALING_ALLOWED = frozenset({"_ir_source.py"})
     # GROWN by neograph-9axw6.10, and worth stating rather than slipping in: this is
     # the first addition to this allowlist since it was created, against three rows
@@ -2881,6 +2905,28 @@ class TestSourceConstructionMonopoly:
     @staticmethod
     def _tests_root() -> pathlib.Path:
         return pathlib.Path(__file__).resolve().parent
+
+    def test_the_number_of_source_construction_sites_has_not_grown(self):
+        """The file allowlist says WHERE a Source may be minted; this says HOW MANY.
+
+        Without it, moving a resolver into a new module reads identically to adding
+        a fifth place that mints a resolution -- the file list grows either way.
+        """
+        from tests.guard_ast import construction_call_lines, iter_py_files, rel_posix
+
+        root = self._src_root()
+        sites = {
+            f"{rel_posix(py_file, root)}:{lineno}"
+            for py_file in iter_py_files(root)
+            if rel_posix(py_file, root) in self.SRC_CONSTRUCTION_ALLOWED - {"_ir_source.py"}
+            for lineno in construction_call_lines(py_file, self.SOURCE_TYPES - self.ARRIVAL_CHANNEL_NAMES)
+        }
+        assert len(sites) <= self.SRC_CONSTRUCTION_SITE_BUDGET, (
+            f"{len(sites)} Source construction sites against a budget of "
+            f"{self.SRC_CONSTRUCTION_SITE_BUDGET}:\n" + "\n".join(f"  {s}" for s in sorted(sites)) + "\n\n"
+            "A new mint is a new ARRIVAL CHANNEL, which needs the new-IR-capability "
+            "argument AGENTS.md sets for _BranchNode and Portal -- not a budget bump."
+        )
 
     def test_source_types_are_constructed_only_in_the_normalizer(self):
         from tests.guard_ast import construction_call_lines, iter_py_files, rel_posix
