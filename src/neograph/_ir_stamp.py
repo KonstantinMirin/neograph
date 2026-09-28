@@ -119,7 +119,7 @@ def stamp_declared_reads(
 
         if isinstance(item, Node):
             resolution = resolve_read(item, visible, shadowed)
-            if isinstance(resolution, Resolved) and item.input_source_field is None:
+            if isinstance(resolution, Resolved):
                 container[idx] = item.model_copy(
                     update={"input_sources": with_source(item, StateKeys.SINGLE_INPUT, resolution.source)}
                 )

@@ -85,6 +85,8 @@ from neograph import (
     ForwardConstruct,
     Loop,
     Node,
+    Oracle,
+    Tool,
     compile,
     construct_from_functions,
     node,
@@ -92,9 +94,9 @@ from neograph import (
     to_agent_spec,
 )
 from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
-from neograph._ir_source import EachItem
+from neograph._ir_source import EachItem, Port
 from neograph._state_keys import StateKeys
-from tests.fakes import build_test_compile_kwargs, register_scripted
+from tests.fakes import FakeTool, build_test_compile_kwargs, register_scripted, register_tool_factory
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Schemas and body builders
@@ -1048,4 +1050,131 @@ class TestTheEachItemChannelIsStamped:
         assert result["fan"]["x"].saw == "x+SIBLING", (
             f"a dict-form Each node must receive its dict of upstreams, not the bare item. Got "
             f"{result['fan']!r} / seen={seen!r}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 9 -- neograph-16juo (N5) and neograph-o8zya (N6): a DERIVED stamp that
+# was treated as authored, and the framework tail that rescued it.
+#
+# `_stamp` skipped any node that already carried a stamp, so an address resolved
+# in one construct survived into another -- and the fan-agent wrapper copies a
+# STAMPED node out of its parent into an isolated sub-construct, where the field
+# it names does not exist. The value arrived anyway, through a fallback list of
+# framework port keys consulted after the stamp. 28 fan-agent reads and 4
+# `run_isolated` reads were served by that tail, which is exactly the population
+# it was written for -- and it is also what makes a wrong address survivable, so
+# nothing reports one.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestADerivedStampIsRecomputedPerConstruct:
+    """neograph-16juo (N5)."""
+
+    def test_a_stamped_node_reused_in_a_second_construct_resolves_there(self):
+        """The disease in its plainest form, no agent machinery: run-verified.
+
+        ``reader`` is stamped ``Peer(alpha)`` by construct A. Placing THAT object --
+        the stamped copy, which is what the fan-agent wrapper does -- into construct
+        B, whose producer is named ``beta``, kept A's answer: B has no ``alpha``
+        field, so the body received ``None`` on a green run.
+
+        A stamp is DERIVED from the construct that resolved it, so it is that
+        construct's answer and no other's. ``input_from`` is authored and lives in
+        its own field, which is why recomputing cannot lose it.
+        """
+        register_scripted("dr_re_alpha", _emit_token("FROM-ALPHA"))
+        register_scripted("dr_re_beta", _emit_token("FROM-BETA"))
+        recorder = _Recorder()
+        register_scripted("dr_re_read", recorder.echo)
+
+        reader = Node.scripted("reader", fn="dr_re_read", inputs=Token, outputs=Echo)
+        first = Construct("reuse-A", nodes=[Node.scripted("alpha", fn="dr_re_alpha", outputs=Token), reader])
+        stamped = first.nodes[1]
+        assert stamped.input_source_field == "alpha", "precondition: A resolved the read to its own producer"
+
+        second = Construct("reuse-B", nodes=[Node.scripted("beta", fn="dr_re_beta", outputs=Token), stamped])
+        result = run(compile(second, **build_test_compile_kwargs()), input={"node_id": "reuse"})
+
+        assert result["reader"] == Echo(saw="FROM-BETA"), (
+            "the reused node kept construct A's address, which names a field construct B does not "
+            f"have, so the body was handed {recorder.received[-1]!r}. A derived stamp must be "
+            f"recomputed per construct. Got {result['reader']!r}"
+        )
+
+    def test_the_bare_agent_inside_the_fan_wrapper_is_addressed_to_the_port(self):
+        """N5's real site: the wrapper copies a stamped node into isolated state.
+
+        ``_wrap_agent_node`` synthesizes ``input=RawText`` and the value arrives as
+        ``neo_subgraph_input``, but the bare agent carried ``Peer(seed)`` -- a field
+        that does not exist inside the wrapper. Measured before the fix:
+        ``input_source_field == 'seed'``. Only the framework tail made that work.
+        """
+        from neograph._fan_agent_wrap import wrap_fan_over_agents
+
+        register_tool_factory("dr_fa_search", lambda _c, _t: FakeTool("dr_fa_search", response="found"))
+        register_scripted("dr_fa_seed", lambda _i, _c: Token(label="seed"))
+        register_scripted("dr_fa_merge", lambda variants, _c: Echo(saw=f"merged-{len(variants)}"))
+
+        gen = Node(
+            name="agent-gen",
+            mode="agent",
+            inputs=Token,
+            outputs=Echo,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="dr_fa_search", budget=5)],
+        ) | Oracle(n=2, merge_fn="dr_fa_merge")
+        pipeline = Construct("fan-agent-stamp", nodes=[Node.scripted("seed", fn="dr_fa_seed", outputs=Token), gen])
+
+        wrapped = wrap_fan_over_agents(pipeline, {})
+        sub = next(item for item in wrapped.nodes if not isinstance(item, Node))
+        bare = sub.nodes[0]
+
+        assert isinstance(bare.input_sources[StateKeys.SINGLE_INPUT], Port), (
+            "inside the isolated wrapper the agent's value arrives on the construct's own port, so "
+            f"that is what its address must say. Got {bare.input_sources!r} -- an address into the "
+            "PARENT's state, which the wrapper does not have."
+        )
+
+    def test_run_isolated_still_delivers_its_input(self):
+        """N6 (neograph-o8zya) as a regression pin.
+
+        ``run_isolated`` builds no construct, so nothing resolved its read and the
+        value was served only by the tail's ``_neo_isolated_input`` rung. The value
+        still has to arrive once that rung is gone -- through a stamped port, because
+        the caller IS the port.
+        """
+        reader = Node.scripted("solo", fn="dr_iso", inputs=Token, outputs=Echo)
+        result = reader.run_isolated(
+            input=Token(label="HANDED-IN"),
+            scripted={"dr_iso": lambda tok, _c: Echo(saw=tok.label)},
+        )
+        assert result == Echo(saw="HANDED-IN")
+
+
+class TestTheFrameworkPortTailIsGone:
+    """The rescue is DELETED, not merely unused.
+
+    A fallback that is only reachable when an address is wrong is what makes a wrong
+    address survivable -- so while it exists, no test can distinguish "resolved
+    correctly" from "resolved wrongly and rescued". That is why this is asserted
+    structurally: the population it served (28 + 4 measured reads) is now stamped,
+    and the tail's absence is what turns those stamps into the only answer.
+    """
+
+    def test_input_shape_has_no_framework_port_fallback(self):
+        import neograph._input_shape as shape
+
+        for gone in ("_FRAMEWORK_PORT_KEYS", "_source_candidates"):
+            assert not hasattr(shape, gone), (
+                f"{gone} still exists. While a read can fall through to a framework key, a wrong "
+                "stamp is invisible: the value arrives anyway."
+            )
+
+    def test_the_isolated_input_key_is_retired(self):
+        assert not hasattr(StateKeys, "ISOLATED_INPUT"), (
+            "ISOLATED_INPUT was a second spelling of 'the value came from outside this scope'. "
+            "run_isolated now seeds the port channel, so the second spelling must go rather than "
+            "linger as a channel nothing writes."
         )

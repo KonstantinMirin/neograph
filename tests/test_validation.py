@@ -988,11 +988,18 @@ class TestFirstNodeSingleTypeInputsCannotBeFed:
         with pytest.raises(ConstructError, match="does not match any upstream node"):
             Construct("portless", nodes=[process])
 
-    def test_run_isolated_is_the_sanctioned_rescue_of_an_unresolved_read(self):
-        """``_source_candidates`` ends with the framework port keys so that a node with
-        NO construct -- ``run_isolated`` seeds ``_neo_isolated_input`` -- can still be
-        fed. That tail is the one place an assembly-unresolved read is rescued; every
-        other unresolved read is refused before it can reach the tail (the tests above)."""
+    def test_run_isolated_addresses_its_read_to_the_caller(self):
+        """A node with NO construct is fed through a STAMPED port, not a rescue.
+
+        This test used to assert the opposite and name the mechanism: a tail of
+        framework port keys, consulted after the stamp, which ``run_isolated`` relied
+        on because nothing had resolved its read. Calling that "the one place an
+        unresolved read is rescued" was true and was the problem -- a fallback
+        reachable whenever an address is wrong makes a wrong address survivable
+        everywhere, so no test could tell a correct resolution from a rescued one.
+        Two shapes depended on it (28 fan-agent reads, 4 here) and both are stamped
+        now: the caller of ``run_isolated`` IS the port, so that is what the address
+        says."""
         n = Node.scripted("n", fn="f", inputs=RawText, outputs=Claims)
         result = n.run_isolated(input=RawText(text="hi"), scripted={"f": lambda v, _c: Claims(items=[v.text])})
         assert result == Claims(items=["hi"])

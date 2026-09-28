@@ -197,6 +197,15 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # Both retire when Node loses its compile()/run() convenience methods.
     ("node.py", "neograph.errors", frozenset({"ConstructError"})),
     ("node.py", "neograph.factory", frozenset({"make_node_fn"})),
+    # node.py -> _ir_normalize — REAL cycle: run_isolated hands a value in with no
+    # construct to resolve a producer from, so the read is addressed to the CALLER as
+    # a port; the address table has ONE writer, and that writer is the normalization
+    # pass. A top-level import of it here cycles (_ir_normalize -> the validation
+    # cluster -> node.py). A factory RE-EXPORT was tried first and is banned by
+    # TestFactoryNoTestReexportShims, correctly: factory is not a hallway.
+    # Retires if run_isolated stops needing a stamp, or if the pass's front door
+    # relocates out of node.py's import chain.
+    ("node.py", "neograph._ir_normalize", frozenset({"stamp_isolated_port"})),
     # node.py — Node.run_isolated() falls back to decoration-time defaults for
     # scripted/tool-factory lookups when the caller hasn't passed scripted=/
     # tool_factories= kwargs. The registry now lives in the leaf

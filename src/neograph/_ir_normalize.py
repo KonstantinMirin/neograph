@@ -38,11 +38,12 @@ from neograph._ir_branch import _BranchNode, iter_item_slots
 from neograph._ir_consume import fan_out_candidates, with_source
 from neograph._ir_fields import contributed_fields, declared_output_fields
 from neograph._ir_protocols import ConstructItem, ConstructLike
-from neograph._ir_resolve import resolve_port_source, resolve_single_type_source
+from neograph._ir_resolve import resolve_port_source, resolve_single_type_source, single_type_demand
 from neograph._ir_source import (
     Accumulated,
     EachItem,
     HandoffChannel,
+    Port,
     PortRef,
 )
 from neograph._ir_stamp import stamp_declared_reads
@@ -344,6 +345,29 @@ def normalize_ir(construct: Construct) -> None:
     # neograph-chunx). The resolvers are handed over rather than imported, which
     # keeps Source construction in this module alone.
     resolve_and_stamp_reads(construct)
+
+
+def stamp_isolated_port(node: Node) -> Node:
+    """A copy of ``node`` whose single-type read is addressed to the CALLER.
+
+    ``Node.run_isolated`` builds no construct, so nothing can resolve which producer
+    feeds the read -- because none does: the caller hands the value in. That is a
+    port, and saying so is what lets the runtime read through the same one address
+    every other node does.
+
+    Before this the value was seeded under a second framework key and picked up by a
+    fallback list consulted after the stamp. The fallback is what made a WRONG stamp
+    survivable anywhere in the graph, so retiring its last user is the point; this
+    helper is not a convenience.
+
+    Lives here because the address table has ONE writer, and a public entry point in
+    ``node.py`` cannot import this module at the top level (the pass imports the
+    validation cluster, which reaches back to ``node``). Returns the node unchanged
+    when it declares no single-type read.
+    """
+    if single_type_demand(node) is None:
+        return node
+    return node.model_copy(update={"input_sources": with_source(node, StateKeys.SINGLE_INPUT, Port())})
 
 
 def resolve_and_stamp_reads(construct: Construct) -> None:

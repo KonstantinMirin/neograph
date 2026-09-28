@@ -27,7 +27,7 @@ baselined from, over 4785 constructs at the red step::
 
     dict-key/peer            2737    addressed by NAME (disease-scan row 47)
     single-type/each-item     223    step 3 -- stamp EachItem                 [GONE]
-    dict-key/framework-port   111    step 7 -- the synthesized port read
+    dict-key/framework-port   111    the DX port-KEY rewrite (neograph-d8ac9)
     port/sub-construct        110    step 8 -- Construct.port_source
     single-type/unfed           5    steps 2 and 4 -- refuse, do not stamp   [now 3]
     single-type/mesh-member     1    step 5 -- refuse (sdqsv)
@@ -114,10 +114,13 @@ EXPECTED_UNSTAMPED: dict[str, str] = {
     # recorded decision on neograph-sdqsv. The row goes when the refusal lands,
     # because a refused construct never reaches the instrument.
     "single-type/mesh-member": "step 5 / neograph-4cvx8.7 -- refuse (sdqsv), do not stamp",
-    # Step 7 (neograph-4cvx8.6) retires the framework-port tail: the fan-agent
-    # wrapper's synthesized `neo_subgraph_input` read gets a real `Port()` stamp,
-    # and `_FRAMEWORK_PORT_KEYS` goes with it.
-    "dict-key/framework-port": "step 7 / neograph-4cvx8.6 -- stamp Port(), delete the tail",
+    # NOT step 7's, which is what re-measuring showed. Step 7 retired the framework
+    # TAIL -- the fallback that served SINGLE-TYPE reads whose stamp was stale or
+    # absent (the fan-agent wrapper, run_isolated), and those are stamped Port() now.
+    # These are DICT-FORM keys literally named `neo_subgraph_input`, minted by the DX
+    # layer's port-param rewrite (_param_classify / _construct_builder) and stamped by
+    # nobody: the same channel with a second spelling. neograph-d8ac9 owns it.
+    "dict-key/framework-port": "neograph-d8ac9 -- the DX layer's port KEY rewrite is unstamped",
     # Step 8 (neograph-4cvx8.9) makes `Construct.port_source` the stamped Source
     # for the whole `_build_sub_input` ladder (N3, N7, xejyn half 2).
     "port/sub-construct": "step 8 / neograph-4cvx8.9 -- stamp Construct.port_source",

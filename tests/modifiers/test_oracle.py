@@ -593,10 +593,12 @@ class TestOracleModels:
         upstream input compiles AND runs.
 
         Input-port synthesis: the auto-wrap synthesizes ``input=RawText`` from
-        the agent's single-type ``inputs``. The parent's upstream ``RawText`` is
-        found by the subgraph's type-based input scan and delivered as
-        ``neo_subgraph_input``; inside the isolated sub-construct the bare agent
-        reads it via single-type extraction. The ``merged-2`` assertion detects
+        the agent's single-type ``inputs``. The parent RESOLVES which producer
+        feeds that port at assembly and delivers it as ``neo_subgraph_input``;
+        inside the isolated sub-construct the bare agent's read is stamped to the
+        wrapper's own port. (The type-based scan this once named was deleted by
+        neograph-t1nbp; the stale stamp that survived it, by step 7 of
+        neograph-4cvx8.) The ``merged-2`` assertion detects
         variant-count COLLAPSE (2 variants reach the merge), not per-cycle content
         isolation — the latter is the echo-style
         ``TestOracleOverAgentValueDelivery`` suite below. Declarative surface.
@@ -1460,7 +1462,12 @@ class TestMergePromptUpstreamContext:
 
         # Two iterations, so the append-list holds more than one entry and the
         # whole-list-vs-latest difference is observable at all.
-        @node(mode="scripted", outputs=UpstreamContext, loop_when=lambda v: v is None or v.site_name != "pass-2", max_iterations=5)
+        @node(
+            mode="scripted",
+            outputs=UpstreamContext,
+            loop_when=lambda v: v is None or v.site_name != "pass-2",
+            max_iterations=5,
+        )
         def refine(seed: UpstreamContext) -> UpstreamContext:
             nxt = {"pass-0": "pass-1", "pass-1": "pass-2"}.get(seed.site_name, "pass-2")
             return UpstreamContext(site_name=nxt, tone=seed.tone)

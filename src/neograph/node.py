@@ -359,6 +359,7 @@ class Node(AddressViews, Modifiable, BaseModel):
             config: Optional RunnableConfig. Pipeline metadata goes in
                     config["configurable"]. Defaults to an empty configurable.
         """
+        from neograph._ir_normalize import stamp_isolated_port
         from neograph.factory import make_node_fn
 
         # Modifier-bearing nodes need state fields (neo_each_item,
@@ -440,20 +441,27 @@ class Node(AddressViews, Modifiable, BaseModel):
         if tool_factories:
             tool_factory_lookup.update(tool_factories)
 
+        # Build a minimal state dict the node function can read
+        state: dict[str, Any] = {}
+        isolated = self
+        if isinstance(input, dict):
+            state.update(input)
+        elif input is not None:
+            # A typed instance handed in by the caller IS a port: no producer feeds
+            # this read, so it is addressed to the boundary and delivered on the
+            # boundary channel. It used to be seeded under a second framework key
+            # and found by a fallback list consulted after the stamp -- and that
+            # fallback is what made a wrong stamp survivable graph-wide, so its last
+            # user had to move before it could be deleted.
+            isolated = stamp_isolated_port(self)
+            state[StateKeys.SUBGRAPH_INPUT] = input
+
         node_fn = make_node_fn(
-            self,
+            isolated,
             runtime=runtime,
             scripted_lookup=scripted_lookup,
             tool_factory_lookup=tool_factory_lookup,
         )
-
-        # Build a minimal state dict the node function can read
-        state: dict[str, Any] = {}
-        if isinstance(input, dict):
-            state.update(input)
-        elif input is not None:
-            # Typed instance — place it under the node name so _extract_input finds it by type
-            state[StateKeys.ISOLATED_INPUT] = input
 
         config = config or {"configurable": {}}
         if "configurable" not in config:

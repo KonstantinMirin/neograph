@@ -118,10 +118,10 @@ def _synthesize_port(node: Node) -> tuple[type[BaseModel], Any]:
 
     - **Self-contained** (``inputs`` is None): the port is an empty synthesized
       model and the bare agent keeps ``inputs=None``. (The proven base case.)
-    - **Single-type** (``inputs=T``): the port IS ``T``. The parent's upstream
-      ``T`` is found by the subgraph's type-based scan and delivered as
-      ``neo_subgraph_input``; the bare agent keeps ``inputs=T`` and single-type
-      extraction naturally reads it back from that field — no rewrite needed.
+    - **Single-type** (``inputs=T``): the port IS ``T``. The parent resolves which
+      producer feeds the port and the value is delivered as ``neo_subgraph_input``;
+      the bare agent keeps ``inputs=T``, and the wrapper's own normalization stamps
+      that read to its port — no rewrite needed.
     - **Single-key dict-form** (``inputs={k: T}``): the port is ``T`` and the bare
       agent's read is rewritten to ``{neo_subgraph_input: T}`` — the exact
       convention the ``@node`` sub-construct port mechanism uses
@@ -170,12 +170,18 @@ def _wrap_agent_node(node: Node) -> Construct:
     # copies __pydantic_private__), so a decorator-built agent keeps its DI bindings.
     # Inside the isolated sub-construct the bare agent is NOT fanned (the Each fan
     # runs at the PARENT level over the sub-construct); the fanned item arrives as
-    # neo_subgraph_input (see make_subgraph_fn._build_sub_input, neograph-1h8c),
-    # which inner_inputs already points the read at. A stale fan_out_param (from the
-    # dropped Each) is harmless — it names a key that no longer exists in the
-    # rewritten inputs, so _extract_fan_in_dict never matches it — and clearing it
-    # here would trip the "normalize_ir is the sole fan_out_param writer" guard.
-    bare = node.model_copy(update={"modifier_set": ModifierSet(), "inputs": inner_inputs})
+    # neo_subgraph_input, which inner_inputs already points the read at. A stale
+    # fan_out_param (from the dropped Each) names a key the rewritten inputs no
+    # longer contain, so _extract_fan_in_dict never matches it.
+    #
+    # input_from is DROPPED, and it is the one field here that must be: it names a
+    # member of the PARENT, and the wrapper has just replaced this node's read with
+    # its own port. Keeping it would make the normalizer resolve an authored name
+    # against a scope that cannot contain it, and refuse a program that is correct
+    # (a declarative agent+Oracle node that names its upstream). The node's own
+    # ADDRESS needs no clearing: it is derived, so the wrapper's normalization
+    # recomputes it.
+    bare = node.model_copy(update={"modifier_set": ModifierSet(), "inputs": inner_inputs, "input_from": None})
     return Construct(
         name=node.name,
         input=port,
@@ -207,8 +213,9 @@ def _synthesize_packer_wrap(node: Node, scripted_lookup: dict[str, Callable] | N
 
     - A **packer** node runs in the PARENT: it fan-ins the N original upstreams
       (``inputs={k1: T1, k2: T2, ...}``) and emits a synthesized ``_NeoAgentPort_*``
-      model bundling them. The wrapped sub-construct's ``input=`` is that model,
-      found by the subgraph's type-based scan and delivered as ``neo_subgraph_input``.
+      model bundling them. The wrapped sub-construct's ``input=`` is that model, and
+      the parent resolves the packer as its feeder, delivering it as
+      ``neo_subgraph_input``.
     - Inside the sub-construct, one **unpacker** node PER key reads the port model
       (single-type) and re-emits its field under the ORIGINAL key name, so the bare
       agent's dict-form fan-in (``{k1: T1, ...}``) reads them as peer producers —
