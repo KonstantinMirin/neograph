@@ -13,7 +13,7 @@ Imports the type-compat primitives + shared vocabulary from
 
 from __future__ import annotations
 
-from typing import cast, get_origin
+from typing import cast
 
 from neograph._ir_consume import fan_out_candidates
 from neograph._ir_protocols import ConstructItem, ConstructLike
@@ -88,20 +88,16 @@ def _check_item_input(
         # rules).
         _check_fan_in_inputs(construct, item, cast(dict[str, TypeSpecStatic], input_type), producers, all_producers)
         return
-    # Raw dict class: inputs=dict — multi-field isinstance extraction,
-    # defers to runtime.
-    if input_type is dict:
-        return
-    # Parameterized generic dict[str, X]: validate against producers if any
-    # upstream has a parameterized dict output, otherwise defer to runtime.
-    if get_origin(input_type) is dict:
-        has_dict_producer = any(get_origin(p.effective_type) is dict for p in producers.values())
-        if not has_dict_producer:
-            return
-        # Fall through to plain-input validation below — _types_compatible
-        # handles parameterized generic comparison.
-    if not isinstance(input_type, type) and get_origin(input_type) is None:
-        return
+    # `inputs=dict`, `inputs=dict[str, X]` and a non-class non-generic annotation
+    # used to return HERE, each commented as deferring to the runtime -- which had
+    # nothing to defer to. The resolver stamped nothing, the runtime isinstance
+    # filter matched nothing, and the body was handed None on a green run: a
+    # decision dressed as a postponement. They now go through the resolver like
+    # every other read, which REFUSES them only when no producer can satisfy them.
+    # The legitimate twin keeps working for the same reason -- an Each-modified
+    # producer writes dict[str, X], and _types_compatible already accepts both a
+    # bare `dict` and a parameterized read against it, which is the documented way
+    # to consume a whole fan-out.
 
     # Each modifier rewires the effective input type via the `over` path.
     ms = getattr(item, "modifier_set", None)

@@ -22,19 +22,29 @@ The corpus is three sources, and the union is what the verdict ranges over:
 3. the keyless ``examples/`` -- the same list ``make examples`` runs -- driven by
    IMPORT, because every one of them builds its constructs at module level.
 
-``EXPECTED_UNSTAMPED`` is the shrink-only allowlist. It is EMPTY right now, which
-is why the verdict is red. Measured over 4785 constructs at the red step::
+``EXPECTED_UNSTAMPED`` is the shrink-only allowlist, and the measurement it was
+baselined from, over 4785 constructs at the red step::
 
     dict-key/peer            2737    addressed by NAME (disease-scan row 47)
     single-type/each-item     223    step 3 -- stamp EachItem
     dict-key/framework-port   111    step 7 -- the synthesized port read
     port/sub-construct        110    step 8 -- Construct.port_source
-    single-type/unfed           5    steps 2 and 4 -- refuse, do not stamp
+    single-type/unfed           5    steps 2 and 4 -- refuse, do not stamp   [now 3]
     single-type/mesh-member     1    step 5 -- refuse (sdqsv)
     single-type/loop            0    already stamped to the seed
 
-The implement atom sets the baseline; every later step of the plan DELETES rows,
-and ``ROW_CEILING`` moves down with them in the same commit.
+Every later step DELETES rows, and ``ROW_CEILING`` moves down with them in the same
+commit. No row has been retired yet, and ``single-type/unfed`` is the instructive
+case: steps 2 and 4 turned two of its three populations into refusals (an
+``input_from`` naming nothing; ``inputs=dict`` / ``dict[str, X]`` / a non-class
+annotation no producer could satisfy), taking it from 5 measured reads to 3. The
+remainder is one SHAPE, not a residue -- a ``route="decide"`` DISPATCH Portal, which
+the validator exempts on a membership claim ``portal_member_class`` denies -- so the
+row survives with a narrowed reason and step 5's name on it.
+
+That is why the ceiling counts SHAPES and the reasons name steps: a row that shrank
+by two thirds still licenses the same shape, and only the reason can say which
+population is left.
 """
 
 from __future__ import annotations
@@ -82,24 +92,28 @@ KEYLESS_EXAMPLE_GLOBS = (
 # (stamp_instrument.SHAPES) so a row cannot quietly cover a defect it was never
 # written for.
 #
-# EMPTY BY CONSTRUCTION AT THE RED STEP. It is not an empty parametrize and must
-# never become one (AGENTS.md / neograph-e8wiv): the emptiness is asserted below,
-# and the filtering rule it feeds is exercised against a SIMULATED unstamped read
-# so the ratchet has teeth while the dict has no rows.
+# The ratchet is stated as an ASSERTION over the dict and is exercised against a
+# SIMULATED over-ceiling allowlist, an unknown shape and an unstamped read -- never
+# as an empty parametrize, which reports as a skip and cannot be told from a test
+# that failed to run (AGENTS.md / neograph-e8wiv). So it keeps its teeth at every
+# size, including the empty one it is shrinking toward.
 # ═══════════════════════════════════════════════════════════════════════════
 EXPECTED_UNSTAMPED: dict[str, str] = {
     # Step 3 (neograph-4cvx8.5) stamps `EachItem` before the resolver consults
     # peers, which is what makes a peer stamp on an Each node unrepresentable.
     "single-type/each-item": "step 3 / neograph-4cvx8.5 -- stamp EachItem",
+    # The population that survives steps 2 and 4: a route="decide" DISPATCH Portal
+    # node. It classifies as `unfed` rather than `mesh-member` because
+    # portal_member_class says a dispatch Portal is NOT a member -- and the
+    # validator's exemption tests `portal is not None`, so it lets the dispatch node
+    # through on a membership claim the authority denies (N4 / neograph-qtxg1). Step
+    # 5 replaces that presence test with the authority, and the read is then refused
+    # by the first-of-chain rule like any other.
+    "single-type/unfed": "step 5 / neograph-4cvx8.7 -- a DISPATCH Portal escapes the member exemption (N4)",
     # Step 5 (neograph-4cvx8.7) REFUSES this read rather than stamping it: the
     # recorded decision on neograph-sdqsv. The row goes when the refusal lands,
     # because a refused construct never reaches the instrument.
     "single-type/mesh-member": "step 5 / neograph-4cvx8.7 -- refuse (sdqsv), do not stamp",
-    # Steps 2 and 4 (neograph-4cvx8.3 / .4) turn the remaining unfed reads into
-    # refusals: an `input_from` naming nothing, and the tolerated generic shapes
-    # (mkeul). This is the shape that must reach ZERO -- it is the one the
-    # runtime hands `None`.
-    "single-type/unfed": "steps 2+4 / neograph-4cvx8.3+.4 -- refuse, do not stamp",
     # Step 7 (neograph-4cvx8.6) retires the framework-port tail: the fan-agent
     # wrapper's synthesized `neo_subgraph_input` read gets a real `Port()` stamp,
     # and `_FRAMEWORK_PORT_KEYS` goes with it.
@@ -236,10 +250,14 @@ class TestExpectedUnstampedIsShrinkOnly:
     def test_the_real_allowlist_is_within_its_ceiling_and_every_row_is_justified(self):
         assert allowlist_defects(EXPECTED_UNSTAMPED, ROW_CEILING) == []
 
-    def test_the_emptiness_is_the_asserted_state_at_this_step(self):
-        """Stated as an assertion on the set, which is the only form that can be
-        exercised -- and which a later step legitimately changes when it sets the
-        baseline and then shrinks it back toward zero."""
+    def test_the_row_count_is_the_asserted_state_at_this_step(self):
+        """The ceiling is EXACT, not an upper bound.
+
+        A ceiling above its dict is silent headroom -- the same defect the file-size
+        ratchet refuses a tolerance band for. A step that retires a row lowers this
+        in the same commit, so the number always names the current state rather than
+        a past one.
+        """
         assert len(EXPECTED_UNSTAMPED) == ROW_CEILING
 
     def test_the_same_rule_refuses_a_simulated_over_ceiling_allowlist(self):

@@ -81,6 +81,7 @@ from pydantic import BaseModel
 from neograph import (
     Construct,
     ConstructError,
+    Each,
     ForwardConstruct,
     Loop,
     Node,
@@ -133,6 +134,12 @@ class Token(BaseModel, frozen=True):
 
 class Echo(BaseModel, frozen=True):
     saw: str
+
+
+class Bag(BaseModel, frozen=True):
+    """A container to fan over, for the one Each case in this file."""
+
+    items: list[Token]
 
 
 def _absent(value: Any) -> str:
@@ -823,4 +830,95 @@ class TestInputFromIsResolvedNotTrusted:
         assert result["after"] == Echo(saw="TRUE-ARM"), (
             "input_from must be able to name a branch-arm producer -- it is the only spelling that "
             f"can, and step 1's refusal advertises it. Got {result['after']!r}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 7 -- neograph-mkeul: three input shapes the validator waved through
+# "deferring to runtime", where the runtime then had nothing to defer TO.
+#
+# `inputs=dict`, `inputs=dict[str, X]` with no dict-typed producer, and a
+# non-class non-generic annotation each returned early from _check_item_input.
+# The resolver stamped nothing, the runtime isinstance filter matched nothing,
+# and the body received None on a green run.
+#
+# The legitimate cases share the spelling and must keep working: a producer that
+# writes `dict[str, X]` (an Each-modified node) IS satisfiable by both `dict` and
+# `dict[str, X]`, which is the documented way to consume a whole fan-out.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestUnresolvableGenericShapesAreRefused:
+    """neograph-mkeul. Each shape is refused, or resolves where it truly can."""
+
+    @staticmethod
+    def _pipeline_with(input_spec: Any, recorder: _Recorder) -> Construct:
+        """``maker(Token) -> reader(inputs=<input_spec>)``: nothing writes a dict."""
+        register_scripted("dr_mk_maker", _emit_token("A-MODEL-NOT-A-DICT"))
+        register_scripted("dr_mk_reader", recorder.echo)
+        return Construct(
+            f"mkeul-{getattr(input_spec, '__name__', str(input_spec))}",
+            nodes=[
+                Node.scripted("maker", fn="dr_mk_maker", outputs=Token),
+                Node.scripted("reader", fn="dr_mk_reader", inputs=input_spec, outputs=Echo),
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        ("input_spec", "label"),
+        [
+            (dict, "bare-dict"),
+            (dict[str, Token], "parameterized-dict"),
+            (Any, "non-class-annotation"),
+        ],
+        ids=["bare_dict", "dict_str_X", "Any"],
+    )
+    def test_a_shape_no_producer_can_satisfy_is_refused(self, input_spec, label):
+        """Refused at ``Construct()``, not deferred to a runtime that cannot answer.
+
+        ``maker`` writes a ``Token``. Nothing in the construct writes a mapping, so
+        there is no reading of these declarations under which the body gets a value
+        -- which is why "defers to runtime" was never a deferral: it was a decision
+        to hand the body ``None``.
+        """
+        recorder = _Recorder()
+        try:
+            pipeline = self._pipeline_with(input_spec, recorder)
+        except ConstructError as exc:
+            assert "reader" in str(exc), f"the refusal must name the read it refused. Got: {exc}"
+            return
+
+        result = run(compile(pipeline, **build_test_compile_kwargs()), input={"node_id": "mkeul"})
+        pytest.fail(
+            f"neograph-mkeul ({label}): inputs={input_spec!r} assembled and ran green. The body was "
+            f"handed {recorder.received[0]!r} and returned {result['reader']!r}. Expected a "
+            "ConstructError at Construct()."
+        )
+
+    def test_a_bare_dict_read_of_a_fanned_producer_still_resolves(self):
+        """The legitimate twin, which must NOT be caught by the refusal.
+
+        An ``Each``-modified producer writes ``dict[str, X]``, and consuming the whole
+        fan with ``inputs=dict`` is the documented spelling for it -- so the shape is
+        only unresolvable when no producer writes a mapping. Refusing the shape
+        itself, rather than the absence of a producer for it, would break this.
+        """
+        recorder = _Recorder()
+        register_scripted("dr_mk_seed", lambda _i, _c: Bag(items=[Token(label="x"), Token(label="y")]))
+        register_scripted("dr_mk_fan", lambda item, _c: Echo(saw=f"fanned-{item.label}"))
+        register_scripted("dr_mk_whole", recorder.echo)
+
+        seed = Node.scripted("seed", fn="dr_mk_seed", outputs=Bag)
+        fan = Node.scripted("fan", fn="dr_mk_fan", inputs=Token, outputs=Echo) | Each(over="seed.items", key="label")
+        whole = Node.scripted("whole", fn="dr_mk_whole", inputs=dict, outputs=Echo)
+        pipeline = Construct("mkeul-legit", nodes=[seed, fan, whole])
+
+        run(compile(pipeline, **build_test_compile_kwargs()), input={"node_id": "mkeul-ok"})
+
+        received = recorder.received[0]
+        assert isinstance(received, dict) and set(received) == {"x", "y"}, (
+            f"a bare dict read of an Each producer must receive the whole fan; got {received!r}"
+        )
+        assert {k: v.saw for k, v in received.items()} == {"x": "fanned-x", "y": "fanned-y"}, (
+            f"the fanned results must arrive keyed by each.key; got {received!r}"
         )

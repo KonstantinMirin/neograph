@@ -190,21 +190,35 @@ class TestConstructValidation:
         assert len(pipeline.nodes) == 3
         assert isinstance(pipeline.nodes[2].inputs, dict)
 
-    def test_dict_class_input_deferred_when_raw_dict(self):
-        """input=dict (raw class) defers to runtime isinstance scan."""
+    def test_dict_class_input_refused_when_no_producer_writes_a_mapping(self):
+        """``inputs=dict`` with only a model producer is refused, not deferred.
+
+        This test used to assert the tolerance, on the reasoning that the runtime
+        would sort it out with an isinstance scan. There was nothing to sort out:
+        the resolver stamped no source, the scan matched nothing, and the body was
+        handed ``None`` on a green run (neograph-mkeul). "Defers to runtime" named a
+        decision, not a postponement.
+
+        The shape itself stays legal -- see
+        ``test_each_downstream_accepted_when_dict_input``, where a fanned producer
+        DOES write ``dict[str, X]`` and the same declaration resolves.
+        """
         a = _producer("a", RawText)
         b = Node.scripted("b", fn="f", inputs=dict, outputs=Claims)
-        pipeline = Construct("dict-class", nodes=[a, b])
-        assert len(pipeline.nodes) == 2
-        assert pipeline.nodes[1].inputs is dict
+        with pytest.raises(ConstructError, match=r"no upstream produces a compatible value"):
+            Construct("dict-class", nodes=[a, b])
 
-    def test_dict_generic_input_deferred_when_parameterized(self):
-        """input=dict[str, X] (parameterized generic) defers to runtime."""
+    def test_dict_generic_input_refused_when_no_producer_writes_a_mapping(self):
+        """``inputs=dict[str, X]`` with only a model producer is refused.
+
+        The parameterized twin of the case above, and the same non-deferral: the
+        validator used to check for a dict-typed producer and, finding none, return
+        rather than refuse.
+        """
         a = _producer("a", RawText)
         b = Node.scripted("b", fn="f", inputs=dict[str, Claims], outputs=Claims)
-        pipeline = Construct("dict-generic", nodes=[a, b])
-        assert len(pipeline.nodes) == 2
-        assert pipeline.nodes[1].inputs == dict[str, Claims]
+        with pytest.raises(ConstructError, match=r"no upstream produces a compatible value"):
+            Construct("dict-generic", nodes=[a, b])
 
     def test_each_downstream_rejected_when_raw_input(self):
         """Consumer declaring raw input=X after an Each-modified producer
