@@ -26,7 +26,7 @@ The corpus is three sources, and the union is what the verdict ranges over:
 baselined from, over 4785 constructs at the red step::
 
     dict-key/peer            2737    addressed by NAME (disease-scan row 47)
-    single-type/each-item     223    step 3 -- stamp EachItem
+    single-type/each-item     223    step 3 -- stamp EachItem                 [GONE]
     dict-key/framework-port   111    step 7 -- the synthesized port read
     port/sub-construct        110    step 8 -- Construct.port_source
     single-type/unfed           5    steps 2 and 4 -- refuse, do not stamp   [now 3]
@@ -34,8 +34,11 @@ baselined from, over 4785 constructs at the red step::
     single-type/loop            0    already stamped to the seed
 
 Every later step DELETES rows, and ``ROW_CEILING`` moves down with them in the same
-commit. No row has been retired yet, and ``single-type/unfed`` is the instructive
-case: steps 2 and 4 turned two of its three populations into refusals (an
+commit. ``single-type/each-item`` is the first retired, and the largest: step 3 stamps
+the fan-out channel, so those 223 reads now hold an ``EachItem`` address instead of
+either nothing or a peer that no run reads.
+
+``single-type/unfed`` is the instructive case: steps 2 and 4 turned two of its three populations into refusals (an
 ``input_from`` naming nothing; ``inputs=dict`` / ``dict[str, X]`` / a non-class
 annotation no producer could satisfy), taking it from 5 measured reads to 3. The
 remainder is one SHAPE, not a residue -- a ``route="decide"`` DISPATCH Portal, which
@@ -99,9 +102,6 @@ KEYLESS_EXAMPLE_GLOBS = (
 # size, including the empty one it is shrinking toward.
 # ═══════════════════════════════════════════════════════════════════════════
 EXPECTED_UNSTAMPED: dict[str, str] = {
-    # Step 3 (neograph-4cvx8.5) stamps `EachItem` before the resolver consults
-    # peers, which is what makes a peer stamp on an Each node unrepresentable.
-    "single-type/each-item": "step 3 / neograph-4cvx8.5 -- stamp EachItem",
     # The population that survives steps 2 and 4: a route="decide" DISPATCH Portal
     # node. It classifies as `unfed` rather than `mesh-member` because
     # portal_member_class says a dispatch Portal is NOT a member -- and the
@@ -137,7 +137,7 @@ EXPECTED_UNSTAMPED: dict[str, str] = {
 # `single-type/loop` is deliberately NOT a row: the 86 measured Loop sites all
 # stamp their SEED, so a presence check already sees nothing there. Step 6 adds
 # the CARRY rung, which a presence check cannot see either way.
-ROW_CEILING = 6
+ROW_CEILING = 5
 
 
 def _load_module(path: Path, prefix: str) -> None:

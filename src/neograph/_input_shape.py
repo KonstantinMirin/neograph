@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Any, assert_never
 
 from neograph._ir_consume import loop_carry_dest_key
+from neograph._ir_source import EachItem
 from neograph._normalize import normalize_inputs, primary_output_field
 from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
@@ -39,10 +40,12 @@ def _classify_input_shape(state: StateBus, node: Node) -> InputShape:
         if isinstance(own_val, list) and own_val:
             return InputShape.LOOP_REENTRY
 
-    # StateBus.get optional: framework — neo_each_item is absent for non-fan-out
-    # nodes; absence is the documented signal.
-    replicate_item = state.get(StateKeys.EACH_ITEM)
-    if replicate_item is not None and _isinstance_safe(replicate_item, node.inputs):
+    # The ADDRESS decides, not the state. This was a presence check plus an
+    # isinstance probe against the declared type -- so any node that happened to see
+    # `neo_each_item` with a matching type would have read the item, and an Each node
+    # whose item failed the probe would have fallen through to read a PEER instead.
+    # Both are decisions the assembly-time stamp already made correctly.
+    if isinstance((node.input_sources or {}).get(StateKeys.SINGLE_INPUT), EachItem):
         return InputShape.EACH_ITEM
 
     if normalize_inputs(node.inputs).is_dict_form:

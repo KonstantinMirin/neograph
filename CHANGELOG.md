@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **The Each item channel is an address, not a presence check** (`neograph-4cvx8` step 3, the first half of `neograph-z7fhl`). An `Each`-modified node's value arrives on the fan-out channel, and `EachItem` had existed as vocabulary for exactly that -- unstamped. So the resolver went looking for a PEER instead, and when a compatible producer happened to precede the node it stamped one.
+
+  At run time nothing broke, because `_classify_input_shape` read the item by PRESENCE and never consulted the stamp. The defect surfaced in the ARTIFACT, which is `neograph-t1nbp`'s disease in its original form: measured on `seed(Bag) -> decoy(Token) -> fan(inputs=Token) | Each(over="seed.items")`, the Agent Spec export drew `decoy_to_fan_iterated_label` -- an edge feeding the fanned node from a producer no run reads, standing where the real source is missing (it lives in metadata, `neograph-qtfof.7`). A green run and an exported spec that wire different graphs.
+
+  The resolver now returns `Resolved(EachItem())` for an Each node before any search, so the peer answer is unrepresentable rather than merely unused, and `_classify_input_shape` decides from the stamp. Two decisions the presence probe was making wrongly-in-principle go with it: any node that saw `neo_each_item` with a matching type would have read the item, and an Each node whose item failed the isinstance probe would have fallen through to read a peer. `input_from` on an Each node is now REFUSED rather than silently ignored -- the runtime's probe used to win, so the declaration meant nothing.
+
+  Only the single-type sentinel is stamped, so dict-form Each nodes still classify as `FAN_IN_DICT` and still receive their `{key: value}` dict. That is every `@node(map_over=...)` in existence, and it is pinned by a run-level test.
+
+  Two guards moved, and one of them was introduced by this same epic two steps earlier. `_key_for` (behind `fan_out_param` / `handoff_param`) now skips FRAMEWORK keys, tested against the `neo_` prefix rather than one sentinel's spelling, because those views answer "which PARAMETER reads this channel" and their readers pass the answer on as an author's parameter name. And the `Source` construction SITE BUDGET fired falsely: stamping an existing channel for a second input SHAPE adds a site without adding a capability. It is replaced by a pinned SET of minted arrival channels -- what may be minted, rather than how many places mint it -- with a companion test that a pinned channel nothing mints is deleted rather than left standing as a guarantee.
+
+  The stamp instrument's largest row retires with this: 223 reads, `single-type/each-item`.
+
 - **BREAKING: three input shapes that "deferred to runtime" are refused** (`neograph-4cvx8` step 4, closes `neograph-mkeul`). `inputs=dict`, `inputs=dict[str, X]` with no dict-typed producer, and a non-class non-generic annotation each returned early from validation, commented as deferring to the runtime. The runtime had nothing to defer to: the resolver stamped no source, the isinstance filter matched nothing, and the body received `None` on a green run. "Defers to runtime" named a decision, not a postponement.
 
   They now go through the resolver like every other read, which refuses them only when no producer can satisfy them. The measurement is what made this the whole fix rather than a new rule: `_types_compatible` already accepts a bare `dict` and a parameterized `dict[str, X]` read against a `dict[str, X]` producer, so consuming a whole `Each` fan -- the legitimate reading of these declarations -- keeps working untouched. What is refused is the declaration NO producer can satisfy, not the spelling.

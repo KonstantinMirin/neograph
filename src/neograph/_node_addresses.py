@@ -21,13 +21,25 @@ from neograph._state_keys import StateKeys
 
 
 def _key_for(table: dict[str, Source] | None, kind: type) -> str | None:
-    """The inputs key whose Source is of ``kind``, or ``None``.
+    """The author's inputs key whose Source is of ``kind``, or ``None``.
 
     One lookup shared by the views, so "which key reads the fanned item" and "which
     key reads the mesh payload" cannot answer in different shapes.
+
+    FRAMEWORK keys are skipped, and that is what keeps these views honest once a
+    CHANNEL can also be stamped on the single-type sentinel. Both views answer
+    "which PARAMETER reads this channel", and their readers -- ``_fan_agent``, the
+    Agent Spec node lowering, the dict-form extractor -- pass the answer on as an
+    author's parameter name. ``neo_single_input`` is not one: it is the sentinel a
+    single-type read is stamped under, so an Each-modified node with
+    ``inputs=Token`` would otherwise make ``fan_out_param`` return it.
+
+    Tested against the ``neo_`` prefix rather than against that one sentinel's
+    spelling, so the NEXT framework key cannot leak into a view the way this one
+    would have.
     """
     for key, src in (table or {}).items():
-        if isinstance(src, kind):
+        if not key.startswith(StateKeys.FRAMEWORK_PREFIX) and isinstance(src, kind):
             return key
     return None
 
@@ -72,4 +84,3 @@ class AddressViews:
         if isinstance(src, Port):
             return StateKeys.SUBGRAPH_INPUT
         return None
-

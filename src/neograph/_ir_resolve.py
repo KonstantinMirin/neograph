@@ -27,7 +27,17 @@ from collections.abc import Sequence
 from neograph._construct_validation import _loop_aware_compatible
 from neograph._ir_consume import single_type_candidates
 from neograph._ir_fields import Producer
-from neograph._ir_source import Candidate, Peer, Port, PortRef, Resolution, Resolved, Source, Unresolved
+from neograph._ir_source import (
+    Candidate,
+    EachItem,
+    Peer,
+    Port,
+    PortRef,
+    Resolution,
+    Resolved,
+    Source,
+    Unresolved,
+)
 from neograph._normalize import normalize_inputs
 from neograph._state_keys import StateKeys
 from neograph.node import Node, TypeSpecStatic
@@ -181,6 +191,30 @@ def resolve_single_type_source(
     input_type = single_type_demand(node)
     if input_type is None:
         return None
+    if node.modifier_set.each is not None:
+        # The fanned item, BEFORE any search: an Each-modified node's value arrives
+        # on the fan-out channel, so there is no producer to look for. The search ran
+        # anyway, and when a compatible peer happened to precede the node it was
+        # stamped -- harmless at run time, where the item was read by presence, and
+        # visible in the EXPORT, which read the stamp and drew an edge from a producer
+        # no run reads. Stamping the channel makes the peer answer unrepresentable
+        # rather than merely unused.
+        if node.input_from is not None:
+            # A contradiction, refused rather than silently dropped: the author named
+            # a producer for a value that is not produced by one. Ignoring it is what
+            # the runtime did, which is how a declaration comes to mean nothing.
+            return Unresolved(
+                (
+                    Candidate(
+                        ref=PortRef.parse(node.input_from),
+                        reason=(
+                            "cannot feed an Each-modified node: its input is the fanned item, "
+                            "which arrives on the fan-out channel rather than from a producer"
+                        ),
+                    ),
+                )
+            )
+        return Resolved(EachItem())
     if node.input_from is not None:
         return _resolve_named_port(node.input_from, input_type, visible, shadowed)
     return _resolve_by_type(input_type, visible, shadowed)

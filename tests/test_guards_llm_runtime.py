@@ -2867,18 +2867,23 @@ class TestSourceConstructionMonopoly:
     # _ir_resolve is reachable only from it.
     SRC_CONSTRUCTION_ALLOWED = frozenset({"_ir_normalize.py", "_ir_resolve.py", "_ir_source.py"})
 
-    #: How many places mint an ARRIVAL CHANNEL -- a Source VARIANT, not a PortRef
-    #: address or a Resolution wrapper, which are ordinary control flow in a
-    #: resolver and fluctuate with any honest refactor. A FILE list alone cannot
-    #: tell a redistribution from a growth: three files may hold any number of
-    #: mints. This number can only go DOWN, or go up with a new arrival channel
-    #: that AGENTS.md's new-IR-capability bar has cleared.
-    SRC_CONSTRUCTION_SITE_BUDGET = 6
+    #: The ARRIVAL CHANNELS production code may mint. A FILE list alone cannot tell
+    #: a redistribution from a growth, so this pins WHAT is minted rather than where.
+    #:
+    #: It replaced a SITE COUNT, which was the wrong proxy and said so within two
+    #: steps: stamping an existing channel for a second input SHAPE (the Each item,
+    #: for single-type reads as well as dict-form ones) adds a site without adding a
+    #: capability, so the number moved for a change that was not the one it existed
+    #: to catch. The set does not move for that, and a new VARIANT -- a new place a
+    #: value can arrive from -- fails here until AGENTS.md's new-IR-capability bar has
+    #: been argued for it. The two dimensions are now covered separately: this says
+    #: what, SRC_CONSTRUCTION_ALLOWED says where.
+    MINTED_ARRIVAL_CHANNELS = frozenset({"Peer", "Port", "EachItem", "HandoffChannel", "Accumulated"})
 
-    #: The variants that ARE arrival channels. Deliberately derived by subtraction
-    #: from SOURCE_TYPES, so a new variant added there joins the budget instead of
-    #: being silently exempt from it.
-    ARRIVAL_CHANNEL_NAMES = frozenset({"PortRef", "Candidate", "Resolved", "Unresolved"})
+    #: Not arrival channels: an address, a near-miss record, and the two Resolution
+    #: wrappers. Derived by subtraction from SOURCE_TYPES, so a new variant added
+    #: there is an arrival channel by default rather than silently exempt.
+    NON_CHANNEL_NAMES = frozenset({"PortRef", "Candidate", "Resolved", "Unresolved"})
     SRC_SEALING_ALLOWED = frozenset({"_ir_source.py"})
     # GROWN by neograph-9axw6.10, and worth stating rather than slipping in: this is
     # the first addition to this allowlist since it was created, against three rows
@@ -2906,26 +2911,52 @@ class TestSourceConstructionMonopoly:
     def _tests_root() -> pathlib.Path:
         return pathlib.Path(__file__).resolve().parent
 
-    def test_the_number_of_source_construction_sites_has_not_grown(self):
-        """The file allowlist says WHERE a Source may be minted; this says HOW MANY.
+    def test_no_new_arrival_channel_is_minted(self):
+        """The file allowlist says WHERE a Source may be minted; this says WHAT.
 
-        Without it, moving a resolver into a new module reads identically to adding
-        a fifth place that mints a resolution -- the file list grows either way.
+        Moving a resolver into a new module and adding a new place a value can arrive
+        from both grow the file list. Only the second is a new capability, and this is
+        what tells them apart.
         """
         from tests.guard_ast import construction_call_lines, iter_py_files, rel_posix
 
         root = self._src_root()
-        sites = {
-            f"{rel_posix(py_file, root)}:{lineno}"
+        channels = self.SOURCE_TYPES - self.NON_CHANNEL_NAMES
+        minted = {
+            name
             for py_file in iter_py_files(root)
             if rel_posix(py_file, root) in self.SRC_CONSTRUCTION_ALLOWED - {"_ir_source.py"}
-            for lineno in construction_call_lines(py_file, self.SOURCE_TYPES - self.ARRIVAL_CHANNEL_NAMES)
+            for name in channels
+            if construction_call_lines(py_file, frozenset({name}))
         }
-        assert len(sites) <= self.SRC_CONSTRUCTION_SITE_BUDGET, (
-            f"{len(sites)} Source construction sites against a budget of "
-            f"{self.SRC_CONSTRUCTION_SITE_BUDGET}:\n" + "\n".join(f"  {s}" for s in sorted(sites)) + "\n\n"
-            "A new mint is a new ARRIVAL CHANNEL, which needs the new-IR-capability "
-            "argument AGENTS.md sets for _BranchNode and Portal -- not a budget bump."
+        unexpected = sorted(minted - self.MINTED_ARRIVAL_CHANNELS)
+        assert unexpected == [], (
+            f"production code mints a new arrival channel: {unexpected}. A new channel is a new "
+            "place a value can COME FROM, which needs the new-IR-capability argument AGENTS.md sets "
+            "for _BranchNode and Portal -- and the runtime interpreter needs a case for it. Add it "
+            "here with that argument, never as a drive-by."
+        )
+
+    def test_every_pinned_arrival_channel_is_still_minted(self):
+        """A pinned channel nothing mints is a stale row, not a guarantee.
+
+        ``LoopCarry`` and ``LastPresent`` are deliberately ABSENT from the pinned set:
+        they exist as vocabulary and are not stamped yet, so listing them would claim
+        cover this guard does not have.
+        """
+        from tests.guard_ast import construction_call_lines, iter_py_files, rel_posix
+
+        root = self._src_root()
+        minted = {
+            name
+            for py_file in iter_py_files(root)
+            if rel_posix(py_file, root) in self.SRC_CONSTRUCTION_ALLOWED - {"_ir_source.py"}
+            for name in self.MINTED_ARRIVAL_CHANNELS
+            if construction_call_lines(py_file, frozenset({name}))
+        }
+        assert sorted(self.MINTED_ARRIVAL_CHANNELS - minted) == [], (
+            "a channel is pinned as minted but nothing mints it -- delete the row rather than "
+            "leaving a guarantee about code that is gone"
         )
 
     def test_source_types_are_constructed_only_in_the_normalizer(self):

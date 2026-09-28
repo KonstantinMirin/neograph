@@ -89,8 +89,11 @@ from neograph import (
     construct_from_functions,
     node,
     run,
+    to_agent_spec,
 )
 from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
+from neograph._ir_source import EachItem
+from neograph._state_keys import StateKeys
 from tests.fakes import build_test_compile_kwargs, register_scripted
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -921,4 +924,128 @@ class TestUnresolvableGenericShapesAreRefused:
         )
         assert {k: v.saw for k, v in received.items()} == {"x": "fanned-x", "y": "fanned-y"}, (
             f"the fanned results must arrive keyed by each.key; got {received!r}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 8 -- neograph-z7fhl (half 2): the Each item channel is a Source, not a
+# presence check.
+#
+# An Each-modified node's value arrives on the fan-out channel, and `EachItem`
+# has existed as vocabulary for that since the closed Source set was written --
+# unstamped. So the resolver went looking for a PEER instead and, when a
+# compatible one happened to precede the node, stamped it.
+#
+# At run time nothing broke: `_classify_input_shape` sees `neo_each_item` present
+# and reads the item, so the wrong stamp is never consulted. The ARTIFACT is where
+# it surfaces -- the Agent Spec export reads the stamp and draws an edge from a
+# producer the runtime never reads. That is neograph-t1nbp's disease in its
+# original form: a green run and an exported spec that wire different graphs.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _each_node_with_a_compatible_decoy_peer() -> Construct:
+    """``seed(Bag) -> decoy(Token) -> fan(inputs=Token) | Each(over='seed.items')``.
+
+    ``decoy`` produces exactly the type the fanned node declares, and precedes it,
+    so it is what a type search finds. The fan's value comes from ``seed.items``.
+    """
+    register_scripted("dr_ec_seed", lambda _i, _c: Bag(items=[Token(label="x"), Token(label="y")]))
+    register_scripted("dr_ec_decoy", _emit_token("DECOY"))
+    register_scripted("dr_ec_fan", lambda item, _c: Echo(saw=f"fanned-{item.label}"))
+
+    return Construct(
+        "each-item-stamp",
+        nodes=[
+            Node.scripted("seed", fn="dr_ec_seed", outputs=Bag),
+            Node.scripted("decoy", fn="dr_ec_decoy", outputs=Token),
+            Node.scripted("fan", fn="dr_ec_fan", inputs=Token, outputs=Echo) | Each(over="seed.items", key="label"),
+        ],
+    )
+
+
+class TestTheEachItemChannelIsStamped:
+    """neograph-z7fhl half 2."""
+
+    def test_the_fanned_node_is_addressed_to_the_each_channel(self):
+        """The stamp must name the channel the value arrives on.
+
+        Assembly-level on purpose: this step's defect is an address, and the two
+        tests below are what say the address is USED (the export stops lying) and
+        that nothing behavioural moved (the fan still fans).
+        """
+        pipeline = _each_node_with_a_compatible_decoy_peer()
+        fan = pipeline.nodes[2]
+
+        assert isinstance(fan.input_sources[StateKeys.SINGLE_INPUT], EachItem), (
+            "an Each-modified node's single-type read arrives on the fan-out channel, so it must be "
+            f"stamped EachItem. Got {fan.input_sources!r} -- a peer stamp means the resolver went "
+            "looking for a producer for a value that is not produced by one."
+        )
+        assert fan.input_source_field is None, (
+            "input_source_field is the PEER-or-PORT view; an Each channel has no state field of that "
+            f"kind, and reporting one is what makes the export draw a false edge. Got "
+            f"{fan.input_source_field!r}"
+        )
+
+    def test_the_export_draws_no_edge_from_a_producer_the_runtime_never_reads(self):
+        """The observable half: the exported spec must not wire ``decoy`` into the fan.
+
+        Measured before the fix: the export emitted
+        ``decoy_to_fan_iterated_label``, feeding the fanned node from a producer no
+        run ever reads. The fan's real source (``seed.items``) is carried in metadata
+        rather than as an edge (neograph-qtfof.7), so this was a WRONG edge standing
+        where the right one is missing.
+        """
+        pipeline = _each_node_with_a_compatible_decoy_peer()
+        flow = to_agent_spec(pipeline)
+
+        edges = [
+            edge["name"]
+            for edge in flow.to_dict().get("data_flow_connections", [])
+            if isinstance(edge, dict) and isinstance(edge.get("name"), str)
+        ]
+        assert not [name for name in edges if name.startswith("decoy_to_fan")], (
+            f"the export wires decoy into the fanned node. Edges: {edges}"
+        )
+
+    def test_the_fan_still_delivers_the_item_to_every_branch(self):
+        """The behaviour that must NOT move: the item, keyed by ``each.key``."""
+        pipeline = _each_node_with_a_compatible_decoy_peer()
+        result = run(compile(pipeline, **build_test_compile_kwargs()), input={"node_id": "each-stamp"})
+
+        assert {k: v.saw for k, v in result["fan"].items()} == {"x": "fanned-x", "y": "fanned-y"}, (
+            f"the fan must still receive each item, not the decoy peer. Got {result['fan']!r}"
+        )
+
+    def test_a_dict_form_each_node_still_receives_its_dict(self):
+        """The regression the review's C6 finding predicted.
+
+        Classifying dict-form Each nodes onto the item channel would hand the body
+        the bare item instead of its ``{key: value}`` dict -- and since every
+        ``@node(map_over=...)`` is dict-form, that is every decorated fan-out in
+        existence. The dict-form path must stay FAN_IN_DICT, which is why the stamp
+        goes on the SINGLE-TYPE sentinel alone.
+        """
+        seen: list[Any] = []
+
+        @node(outputs=Echo, map_over="seed.items", map_key="label")
+        def fan(item: Token, extra: Token) -> Echo:
+            seen.append((item, extra))
+            return Echo(saw=f"{item.label}+{extra.label}")
+
+        @node(outputs=Bag)
+        def seed() -> Bag:
+            return Bag(items=[Token(label="x")])
+
+        @node(outputs=Token)
+        def extra() -> Token:
+            return Token(label="SIBLING")
+
+        pipeline = construct_from_functions("dict-form-each", [seed, extra, fan])
+        result = run(compile(pipeline, **build_test_compile_kwargs()), input={"node_id": "dict-each"})
+
+        assert result["fan"]["x"].saw == "x+SIBLING", (
+            f"a dict-form Each node must receive its dict of upstreams, not the bare item. Got "
+            f"{result['fan']!r} / seen={seen!r}"
         )
