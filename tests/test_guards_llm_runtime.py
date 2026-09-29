@@ -2838,6 +2838,10 @@ class TestSourceConstructionMonopoly:
             "Candidate",
             "Resolved",
             "Unresolved",
+            # Rung is a NARROWING of Source (what a LastPresent may hold), not a
+            # variant: nothing constructs it, and making nesting unrepresentable is
+            # what it is for.
+            "Rung",
         }
     )
 
@@ -2878,7 +2882,25 @@ class TestSourceConstructionMonopoly:
     #: value can arrive from -- fails here until AGENTS.md's new-IR-capability bar has
     #: been argued for it. The two dimensions are now covered separately: this says
     #: what, SRC_CONSTRUCTION_ALLOWED says where.
-    MINTED_ARRIVAL_CHANNELS = frozenset({"Peer", "Port", "EachItem", "HandoffChannel", "Accumulated"})
+    MINTED_ARRIVAL_CHANNELS = frozenset(
+        {
+            "Peer",
+            "Port",
+            "EachItem",
+            "HandoffChannel",
+            "Accumulated",
+            # GROWN by neograph-4cvx8 step 6, which is the argument AGENTS.md asks for
+            # rather than a drive-by: a Loop read has TWO arrivals -- the seed on
+            # iteration 0, the node's own carry list on 1+ -- and the runtime used to
+            # choose between them by probing whether that list was non-empty. LoopCarry
+            # is the carry channel, which the runtime physically HAS (state.py declares
+            # the append-list reducer); LastPresent is the ordered pair of the two, the
+            # `carry-before-seed` precedence rule its docstring already documented.
+            # Both existed as vocabulary and had zero constructions until this step.
+            "LoopCarry",
+            "LastPresent",
+        }
+    )
 
     #: Not arrival channels: an address, a near-miss record, and the two Resolution
     #: wrappers. Derived by subtraction from SOURCE_TYPES, so a new variant added

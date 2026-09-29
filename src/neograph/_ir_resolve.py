@@ -23,6 +23,7 @@ and refusal order. ``_ir_stamp`` walks the construct and attaches what these ret
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
 from neograph._construct_validation import _loop_aware_compatible
 from neograph._ir_consume import single_type_candidates
@@ -30,11 +31,14 @@ from neograph._ir_fields import Producer
 from neograph._ir_source import (
     Candidate,
     EachItem,
+    LastPresent,
+    LoopCarry,
     Peer,
     Port,
     PortRef,
     Resolution,
     Resolved,
+    Rung,
     Source,
     Unresolved,
 )
@@ -215,6 +219,18 @@ def resolve_single_type_source(
                 ),
             )
         )
+    if node.modifier_set.loop is not None:
+        # A Loop read has TWO arrivals and they are ordered: the SEED on iteration 0,
+        # the node's own CARRY on 1+. That is `carry-before-seed`, LastPresent's
+        # documented precedence rule, so the read is stamped with both rungs instead
+        # of the runtime deciding between them by probing whether the carry list is
+        # non-empty. The seed rung is resolved exactly as any other read would be,
+        # which is what keeps `input_source_field` (and so the Agent Spec export)
+        # answering with the seed.
+        seed = _resolve_by_type(input_type, visible, shadowed)
+        if isinstance(seed, Unresolved):
+            return seed
+        return Resolved(LastPresent((cast("Rung", seed.source), LoopCarry())))
     if node.modifier_set.each is not None:
         # The fanned item, BEFORE any search: an Each-modified node's value arrives
         # on the fan-out channel, so there is no producer to look for. The search ran

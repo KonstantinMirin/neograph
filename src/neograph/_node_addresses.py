@@ -16,11 +16,11 @@ accessors. Splitting was preferred to widening the size allowlist.
 
 from __future__ import annotations
 
-from neograph._ir_source import EachItem, HandoffChannel, Peer, Port, Source
+from neograph._ir_source import EachItem, HandoffChannel, LastPresent, LoopCarry, Peer, Port, Source
 from neograph._state_keys import StateKeys
 
 
-def _key_for(table: dict[str, Source] | None, kind: type) -> str | None:
+def _key_for(table: dict[str, Source] | None, kind: type, *, allow_framework: bool = False) -> str | None:
     """The author's inputs key whose Source is of ``kind``, or ``None``.
 
     One lookup shared by the views, so "which key reads the fanned item" and "which
@@ -37,9 +37,17 @@ def _key_for(table: dict[str, Source] | None, kind: type) -> str | None:
     Tested against the ``neo_`` prefix rather than against that one sentinel's
     spelling, so the NEXT framework key cannot leak into a view the way this one
     would have.
+
+    ``allow_framework`` is for the one view whose answer is a KEY INTO THE INPUTS
+    DICT rather than a name handed onward: ``carry_param``. A ``@node`` port param is
+    rewritten to the ``neo_subgraph_input`` key, which makes it a real declared input
+    key and therefore a legitimate carry destination -- filtering it out told the
+    runtime a Loop node had no carry, and the loop re-read its seed until
+    ``max_iterations``. Two questions, one lookup, and the difference is which one the
+    caller is asking.
     """
     for key, src in (table or {}).items():
-        if not key.startswith(StateKeys.FRAMEWORK_PREFIX) and isinstance(src, kind):
+        if (allow_framework or not key.startswith(StateKeys.FRAMEWORK_PREFIX)) and isinstance(src, kind):
             return key
     return None
 
@@ -54,6 +62,16 @@ class AddressViews:
         """Which inputs key reads the fanned-out item. Derived view over
         ``input_sources`` -- was a stored field until neograph-9axw6.10."""
         return _key_for(self.input_sources, EachItem)
+
+    @property
+    def carry_param(self) -> str | None:
+        """Which dict-form inputs key receives this Loop's own fed-back output.
+
+        Derived view, like the two beside it. Before it, three sites computed the
+        destination from the node's declarations with two different predicates, so
+        validation could approve one slot while the run bound another.
+        """
+        return _key_for(self.input_sources, LoopCarry, allow_framework=True)
 
     @property
     def handoff_param(self) -> str | None:
@@ -77,8 +95,16 @@ class AddressViews:
         ``None`` still means "nothing to resolve", never "ambiguous" -- two
         eligible producers raise at assembly, so ambiguity cannot reach the runtime,
         and a None here must not fall back to a type scan.
+
+        A ``LastPresent`` answers with its FIRST rung, which for a Loop read is the
+        SEED. That is the field an author names and the edge the Agent Spec export
+        draws: the carry is a self-edge the Loop lowering emits separately, so
+        answering with it here would change every exported Loop. The view is
+        deliberately lossy and the runtime does not use it for a multi-rung read.
         """
         src = (self.input_sources or {}).get(StateKeys.SINGLE_INPUT)
+        if isinstance(src, LastPresent):
+            src = src.rungs[0] if src.rungs else None
         if isinstance(src, Peer):
             return src.ref.field
         if isinstance(src, Port):

@@ -208,30 +208,28 @@ def declared_output_fields(item: ConstructItem) -> set[str]:
     return {p.field_name for p in contributed_fields(item)}
 
 
-
-
-
-
-
-
 def _subclass_either_way(produced: object, declared: object) -> bool:
-    """Bidirectional subclass test -- the default carry-compatibility predicate.
+    """Bidirectional subclass test, used by the output-boundary member scan.
 
-    Lives here so no caller has to reach across a layer for one. The runtime
-    (``_input_shape``) must not import the validation cluster, and the Agent Spec
-    lowering must not be imported by the runtime, so a shared default is the only
-    arrangement in which all three read ONE derivation.
+    It was ALSO the carry-compatibility default, on the reasoning that the runtime
+    must not import the validation cluster and so a shared default was the only way
+    for all three callers to read one derivation. That reasoning produced two
+    answers: this predicate accepts a supertype into a subtype slot, validation's
+    ``_types_compatible`` does not, so a ``Base`` output was approved into slot ``b``
+    and delivered into slot ``a``, declared ``Derived``, on a green run
+    on a green run. The claim that stood here -- that the two "agree on the plain-
+    class case that a loop carry is" -- was false in exactly that case, and is deleted
+    rather than reworded.
 
-    Validation passes its richer ``_types_compatible`` instead, which understands
-    generics and unions; the two agree on the plain-class case that a loop carry is.
+    The carry's destination is now resolved ONCE with validation's predicate and
+    STAMPED, so the runtime and the export read an address instead of sharing a
+    default. No predicate needs to cross a layer.
     """
     return (
         isinstance(declared, type)
         and isinstance(produced, type)
         and (issubclass(produced, declared) or issubclass(declared, produced))
     )
-
-
 
 
 def item_field_names(construct: Any) -> list[str]:
@@ -272,8 +270,6 @@ def item_field_names(construct: Any) -> list[str]:
     # being re-derived here -- omitting the latter is what made a sub-construct
     # whose output is satisfied only by a dispatched result raise at run time.
     return [p.field_name for item in iter_with_arms(construct) for p in contributed_fields(item)]
-
-
 
 
 def boundary_member_name(

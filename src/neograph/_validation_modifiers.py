@@ -60,9 +60,14 @@ def validate_loop_self_edge(node: Node) -> None:
     # a first-type-match of its own. Three answers, so validation could pass on one
     # slot while the run bound another and the export drew a third -- neograph-af8ro.
     #
-    # This now asks the ONE derivation which key is the carry destination, and
-    # refuses when there is none. Proving SOME slot is compatible and discarding
-    # which is the shape this epic exists to remove.
+    # Asks the ONE derivation, with the SAME predicate the normalizer stamps with.
+    # This check runs when the Loop modifier is PIPED on -- before any Construct, so
+    # before any stamp exists -- which is why it derives rather than reads. That is
+    # also why the derivation's predicate parameter lost its default: the runtime and
+    # the export used to take the lenient one while this took the strict one, so a
+    # Base output was approved into one slot and delivered into another (gosck). They
+    # now read the normalizer's stamp and derive nothing; this is the only site left
+    # that asks, and it asks for a precondition rather than for the binding.
     if isinstance(input_type, dict):
         if loop_carry_dest_key(node, _types_compatible) is not None:
             return

@@ -5,14 +5,13 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, assert_never
 
-from neograph._ir_consume import loop_carry_dest_key
-from neograph._ir_source import EachItem
+from neograph._ir_source import EachItem, LastPresent, LoopCarry
 from neograph._normalize import normalize_inputs, primary_output_field
 from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
 from neograph.describe_type import _admits_none
 from neograph.di import _isinstance_safe, _unwrap_each_dict, _unwrap_loop_value, read_upstream
-from neograph.modifiers import COMBO_DECOMPOSITION, PrimaryShape, classify_modifiers
+from neograph.errors import ExecutionError
 from neograph.naming import field_name_for
 from neograph.node import Node
 
@@ -32,11 +31,14 @@ def _classify_input_shape(state: StateBus, node: Node) -> InputShape:
     if node.inputs is None:
         return InputShape.NONE
 
-    combo, _ = classify_modifiers(node)
-    if COMBO_DECOMPOSITION[combo].primary is PrimaryShape.LOOP:
+    # A Loop read is stamped with BOTH its arrivals, seed-then-carry, so the question
+    # here is whether the CARRY RUNG is present -- not whether this node happens to
+    # have a non-empty list somewhere. Presence is per rung type, and a LoopCarry's
+    # append-list is present exactly when it is non-empty (iteration 1+).
+    if _has_carry_rung(node):
         own_field = primary_output_field(field_name_for(node.name), node.outputs)
-        # StateBus.get optional: loop-bootstrap — first router pass may have no
-        # self-output yet; absence signals "iteration 0" and falls through.
+        # StateBus.get optional: this IS the presence test for the carry rung --
+        # absence means iteration 0, where the seed rung answers instead.
         own_val = state.get(own_field)
         if isinstance(own_val, list) and own_val:
             return InputShape.LOOP_REENTRY
@@ -53,6 +55,21 @@ def _classify_input_shape(state: StateBus, node: Node) -> InputShape:
         return InputShape.FAN_IN_DICT
 
     return InputShape.SINGLE_TYPE
+
+
+def _has_carry_rung(node: Node) -> bool:
+    """True when this node's read is stamped with a ``LoopCarry`` rung.
+
+    Single-type reads carry it inside a ``LastPresent`` under the sentinel; dict-form
+    reads carry it on the destination KEY. Either way the address says the carry is
+    one of this read's arrivals, which is what used to be inferred from
+    ``classify_modifiers`` plus a probe of state.
+    """
+    table = node.input_sources or {}
+    single = table.get(StateKeys.SINGLE_INPUT)
+    if isinstance(single, LastPresent) and any(isinstance(rung, LoopCarry) for rung in single.rungs):
+        return True
+    return node.carry_param is not None
 
 
 def _extract_loop_reentry(state: StateBus, node: Node) -> Any:
@@ -72,28 +89,31 @@ def _extract_loop_reentry(state: StateBus, node: Node) -> Any:
         first_key = next(iter(by_name))
         return {first_key: latest}
 
-    # Multi-key dict: the CARRY DESTINATION is resolved by the one shared derivation,
-    # not guessed. This used to place `latest` into whichever key failed a presence
-    # probe and, if none did, fall back to next(iter(by_name)) -- a POSITIONAL guess
-    # that could put the carry in the wrong slot while validation had passed on a
-    # different one and the export had drawn a third. neograph-af8ro.
-    dest = loop_carry_dest_key(node)
+    # Multi-key dict: the carry's destination is the key STAMPED with it. The stamp
+    # is written once, by the normalizer, with the predicate validation uses -- so
+    # the slot the run binds is the slot validation approved. This used to recompute
+    # the destination here with a LOOSER default predicate, place
+    # `latest` into whichever sibling key read None, and fall back to
+    # next(iter(by_name)) -- a positional guess -- when no destination resolved.
+    dest = node.carry_param
+    if dest is None:
+        raise ExecutionError.build(
+            f"loop node '{node.name}' re-entered with no stamped carry destination",
+            expected="a dict-form input key stamped LoopCarry by the normalizer",
+            found=f"input_sources={node.input_sources!r}",
+            hint="assembly refuses a dict-form Loop whose output fits no input slot, so this is a bug in neograph",
+            node=node.name,
+        )
     result = {}
     for key, expected_type in by_name.items():
         if key == dest:
             result[key] = latest
             continue
-        # StateBus.get optional (via read_upstream required=False): loop-bootstrap —
-        # sibling keys may not have been re-produced this iteration; the carry's
-        # latest is the documented sentinel for an absent sibling.
-        upstream_val = read_upstream(state, key, expected_type, required=False, node_label=node.name)
-        result[key] = upstream_val if upstream_val is not None else latest
-    if dest is None:
-        # No resolvable destination: keep the historical behaviour rather than
-        # dropping the carry, and say so instead of letting a positional pick look
-        # deliberate. Validation refuses a dict-form loop with no compatible slot, so
-        # this is reachable only for shapes it does not cover.
-        result[next(iter(by_name))] = latest
+        # REQUIRED: a sibling key is an ordinary declared Peer read, and its producer
+        # runs before the loop, so its field is present on every iteration. Reading it
+        # optionally and substituting the CARRY on absence put a different value --
+        # of a type the slot need not accept -- where the sibling's own belonged.
+        result[key] = read_upstream(state, key, expected_type, required=True, node_label=node.name)
     return result
 
 

@@ -143,7 +143,7 @@ class Echo(BaseModel, frozen=True):
 
 
 class Bag(BaseModel, frozen=True):
-    """A container to fan over, for the one Each case in this file."""
+    """A container to fan over, for the Each cases in this file."""
 
     items: list[Token]
 
@@ -1291,3 +1291,159 @@ class TestMeshReadsAreRefusedOrRequired:
 
         with pytest.raises(ConstructError, match=r"handoff"):
             Construct("c5-optional-non-entry", nodes=[entry, peer])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 11 -- neograph-gosck and the Loop carry as an ADDRESS.
+#
+# A Loop node's read has TWO arrivals: the seed on iteration 0, the carry on 1+.
+# `LoopCarry` existed as vocabulary for the second and was never stamped, so the
+# runtime chose between them by PRESENCE of the node's own append-list -- and
+# `loop_carry_dest_key`, which decides WHICH dict-form key receives the carry, was
+# called with one predicate at validation and a looser default at run time and in
+# the export. One derivation, three callers, two answers.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class Base(BaseModel, frozen=True):
+    tag: str = "base"
+
+
+class Derived(Base, frozen=True):
+    extra: str = "derived"
+
+
+class TestTheLoopCarryDestinationHasOnePredicate:
+    """neograph-gosck: run-verified -- the validator approves one slot, the runtime
+    writes another."""
+
+    def test_the_carry_lands_in_the_slot_validation_approved(self):
+        """``inputs={"a": Derived, "b": Base}`` with ``outputs=Base``.
+
+        ``_subclass_either_way`` (the runtime/export default) accepts ``Base`` into the
+        ``Derived`` slot ``a`` because the two are related in one direction;
+        ``_types_compatible`` (validation's) does not, and approves ``b``. So the
+        validator proved ``b`` was feedable and the run put the carry in ``a``, a slot
+        declared for a type it does not satisfy -- on a green run.
+        """
+        seen: list[dict[str, Any]] = []
+
+        def body(input_data: Any, _config: Any) -> Base:
+            seen.append(dict(input_data) if isinstance(input_data, dict) else {"?": input_data})
+            return Base(tag=f"iter-{len(seen)}")
+
+        register_scripted("dr_lc_body", body)
+        register_scripted("dr_lc_seed", lambda _i, _c: Derived())
+        register_scripted("dr_lc_other", lambda _i, _c: Base(tag="sibling"))
+
+        refine = Node.scripted(
+            "refine",
+            fn="dr_lc_body",
+            inputs={"a": Derived, "b": Base},
+            outputs=Base,
+        ) | Loop(when=lambda d: d is None or len(seen) < 2, max_iterations=3)
+
+        pipeline = Construct(
+            "gosck-carry",
+            nodes=[
+                Node.scripted("a", fn="dr_lc_seed", outputs=Derived),
+                Node.scripted("b", fn="dr_lc_other", outputs=Base),
+                refine,
+            ],
+        )
+        run(compile(pipeline, **build_test_compile_kwargs()), input={"node_id": "gosck"})
+
+        reentry = seen[1]
+        assert isinstance(reentry["a"], Derived), (
+            "the carry landed in slot 'a', which is declared Derived and cannot hold the Base the "
+            f"loop feeds back. Validation approved slot 'b'. Got a={reentry['a']!r} b={reentry['b']!r}"
+        )
+
+
+class TestDictFormLoopSiblingsAreRequired:
+    """Scan row 7: an absent sibling key was SUBSTITUTED with the carry value."""
+
+    def test_an_absent_sibling_is_not_replaced_by_the_carry(self):
+        """A sibling read is a declared Peer read, and the carry is not its value.
+
+        On re-entry a sibling that has not been re-produced this iteration read
+        ``None`` and was handed the CARRY instead -- a different value, of a type the
+        slot need not accept, presented as though the sibling had produced it. The
+        sibling's producer runs before the loop, so its field IS present: the
+        substitution covered nothing real and hid a mismatch when it fired.
+        """
+        seen: list[dict[str, Any]] = []
+
+        def body(input_data: Any, _config: Any) -> Base:
+            seen.append(dict(input_data) if isinstance(input_data, dict) else {"?": input_data})
+            return Base(tag=f"iter-{len(seen)}")
+
+        register_scripted("dr_ls_body", body)
+        register_scripted("dr_ls_sib", lambda _i, _c: Token(label="SIBLING"))
+
+        refine = Node.scripted(
+            "refine",
+            fn="dr_ls_body",
+            inputs={"refine": Base, "sib": Token},
+            outputs=Base,
+        ) | Loop(when=lambda d: d is None or len(seen) < 2, max_iterations=3)
+
+        pipeline = Construct(
+            "row7-siblings",
+            nodes=[Node.scripted("sib", fn="dr_ls_sib", outputs=Token), refine],
+        )
+        run(compile(pipeline, **build_test_compile_kwargs()), input={"node_id": "row7"})
+
+        reentry = seen[1]
+        assert isinstance(reentry["sib"], Token), (
+            "on re-entry the sibling slot held the carry rather than the sibling's own value: "
+            f"got sib={reentry['sib']!r}. A declared Peer read is not a place to put the carry."
+        )
+
+
+class TestLastPresentsThirdAdmissionCriterion:
+    """A rung's field must be written at most ONCE per activation of the reading scope.
+
+    LangGraph state accumulates, so a value left from an earlier activation is
+    indistinguishable from one written for this one -- and "last present" would then
+    answer with the previous activation's value. The criterion is a PRECONDITION of
+    stamping ``LastPresent``, not a property of it, so it is pinned by the one
+    re-activation context that exists: a Loop node inside a sub-construct that is
+    itself fanned, so the node's scope is activated once per item.
+    """
+
+    def test_a_looping_node_in_a_fanned_sub_construct_does_not_see_the_previous_item(self):
+        """Each item's loop must start from ITS OWN seed.
+
+        If the carry list survived across activations, the second item would re-enter
+        against the first item's history and converge on the wrong value -- a
+        cross-item leak that presence alone cannot detect. It does not, because an
+        isolated subgraph starts from fresh state; this is what says so.
+        """
+
+        @node(outputs=Bag)
+        def seeds() -> Bag:
+            return Bag(items=[Token(label="aa", score=0.7), Token(label="b", score=0.1)])
+
+        @node(outputs=Token, loop_when=lambda t: t is None or t.score < 0.9, max_iterations=6)
+        def grow(item: Token) -> Token:
+            return Token(label=item.label + "+", score=min(item.score + 0.4, 1.0))
+
+        grow_sub = construct_from_functions("grow", [grow], input=Token, output=Token)
+        pipeline = construct_from_functions("reactivation", [seeds, grow_sub | Each(over="seeds.items", key="label")])
+        result = run(compile(pipeline, **build_test_compile_kwargs()), input={"node_id": "reactivation"})
+
+        grown = result["grow"]
+        assert set(grown) == {"aa", "b"}, f"both items must produce a result; got {grown!r}"
+        # The two items need DIFFERENT iteration counts, which is what makes a
+        # cross-activation leak visible: 'aa' converges in one (0.7 -> 1.0), 'b' in two
+        # (0.1 -> 0.5 -> 0.9, and the condition exits at >= 0.9). If either activation
+        # could see the other's carry list, the counts would not come out per-item.
+        assert grown["aa"].label == "aa+", (
+            f"item 'aa' converges in one iteration, so exactly one '+' -- got {grown['aa'].label!r}. "
+            "A different count means it re-entered against another activation's carry."
+        )
+        assert grown["b"].label == "b++", (
+            f"item 'b' needs two iterations from 0.1 -- got {grown['b'].label!r}. A different count "
+            "means it inherited a carry from the other item's activation."
+        )

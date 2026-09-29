@@ -34,8 +34,9 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from pydantic import BaseModel
 
+from neograph._construct_validation import _types_compatible
 from neograph._ir_branch import _BranchNode, iter_item_slots
-from neograph._ir_consume import fan_out_candidates, with_source
+from neograph._ir_consume import fan_out_candidates, loop_carry_dest_key, with_source
 from neograph._ir_fields import contributed_fields, declared_output_fields
 from neograph._ir_protocols import ConstructItem, ConstructLike
 from neograph._ir_resolve import resolve_port_source, resolve_single_type_source, single_type_demand
@@ -43,6 +44,7 @@ from neograph._ir_source import (
     Accumulated,
     EachItem,
     HandoffChannel,
+    LoopCarry,
     Port,
     PortRef,
 )
@@ -329,6 +331,19 @@ def normalize_ir(construct: Construct) -> None:
             key = item.handoff_param or ("handoff" if declared.is_dict_form and "handoff" in declared.by_name else None)
             if group_channel is not None and key is not None:
                 updates["input_sources"] = with_source(item, key, HandoffChannel(group_channel))
+        # A Loop-modified DICT-FORM node: stamp which KEY receives the carry. The
+        # derivation has one caller now, so the strict predicate validation always
+        # used is the only one in play -- the runtime and the export read this stamp
+        # rather than recomputing with a looser default and landing the carry in a
+        # slot declared for a type it does not satisfy.
+        if item.modifier_set.loop is not None:
+            carry_key = loop_carry_dest_key(item, _types_compatible)
+            if carry_key is not None:
+                updates["input_sources"] = with_source(
+                    item if "input_sources" not in updates else item.model_copy(update=updates),
+                    carry_key,
+                    LoopCarry(),
+                )
         # A dict-form input key that names a channel reads the UNION off that
         # unprefixed field. Stamped as its own Source variant so the address
         # table says what it is; the runtime read is the same state[key] as a

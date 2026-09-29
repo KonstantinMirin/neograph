@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from neograph._ir_fields import Producer, _subclass_either_way
+from neograph._ir_fields import Producer
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._type_spec import TypeSpecStatic
 from neograph.naming import field_name_for
@@ -99,7 +99,7 @@ def single_type_candidates(
 
 def loop_carry_dest_key(
     node: Node,
-    compatible: Callable[[TypeSpecStatic, TypeSpecStatic], bool] = _subclass_either_way,
+    compatible: Callable[[TypeSpecStatic, TypeSpecStatic], bool],
 ) -> str | None:
     """Which dict-form input key receives a Loop's own fed-back output.
 
@@ -122,6 +122,14 @@ def loop_carry_dest_key(
     a self-reference is named, not guessed -- otherwise the first key whose
     declared type can hold the fed-back output. ``None`` when the inputs are not
     dict-form, where there is no key to choose and the single value IS the carry.
+
+    ``compatible`` has NO DEFAULT, and that is the fix for the second half of the
+    same defect. One derivation was still two answers, because the validator passed
+    the strict predicate and the runtime and the export took the lenient default --
+    so a ``Base`` output was approved into slot ``b`` and delivered into slot ``a``,
+    declared ``Derived``, on a green run. There is now ONE caller:
+    the normalizer, which STAMPS the destination it picks, so the runtime and the
+    export read an answer instead of recomputing one.
     """
     ni = normalize_inputs(node.inputs)
     if not ni.is_dict_form:

@@ -37,7 +37,10 @@ ALL_VARIANTS = (
     EachItem(),
     LoopCarry(),
     HandoffChannel(channel="neo_handoff_entry"),
-    LastPresent(refs=(PortRef("carry"), PortRef("seed"))),
+    # A Loop read's two arrivals, in the documented carry-before-seed order. The
+    # rungs MIX channels, which is the shape that made the old
+    # source_channel_kind arm ("peer-field") false.
+    LastPresent(rungs=(Peer(ref=PortRef("seed")), LoopCarry())),
     Accumulated(channel="neo_accum_findings"),
 )
 
@@ -163,10 +166,13 @@ class TestEveryVariantHasExactlyOneNamedReadCase:
         )
 
     def test_channels_are_physical_not_per_feature(self) -> None:
-        """Variants map to state channels the runtime HAS, never to features. Two
-        variants legitimately share the peer-field channel (``LastPresent`` is an
-        ordered set of peer addresses), which is why this asserts a small closed
-        vocabulary rather than injectivity."""
+        """Variants map to state channels the runtime HAS, never to features.
+
+        ``LastPresent`` names the channels of its RUNGS, joined -- it is not itself a
+        channel, and its rungs may mix (a Loop's seed peer and its carry list). The arm
+        returned a flat "peer-field" while nothing was stamped LastPresent, which was
+        true only for as long as the variant was unused.
+        """
         kinds = {source_channel_kind(v) for v in ALL_VARIANTS}  # type: ignore[arg-type]
         assert kinds == {
             "peer-field",
@@ -175,6 +181,7 @@ class TestEveryVariantHasExactlyOneNamedReadCase:
             "carry-list",
             "mesh-channel",
             "accumulator-channel",
+            "peer-field|carry-list",
         }
 
 

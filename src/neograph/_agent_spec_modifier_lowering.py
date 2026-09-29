@@ -55,7 +55,6 @@ from neograph._agent_spec_placeholders import (
     property_title_to_prompt_path,
 )
 from neograph._ir_branch import _BranchNode
-from neograph._ir_consume import loop_carry_dest_key
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
@@ -403,10 +402,12 @@ def _lower_loop(
     # matches the fed-back output).
     ni = normalize_inputs(_item_inputs(node))
     no_self = normalize_outputs(_item_outputs(node))
-    # One derivation, shared with the validator and the runtime. This was a
-    # first-issubclass-match-with-a-break under a comment claiming it mirrored the
-    # upstream-resolution scan; it did not, and the runtime picked differently.
-    dest_key = loop_carry_dest_key(node) if isinstance(node, Node) else None
+    # The STAMP, not a derivation. This was a first-issubclass-match-with-a-break
+    # under a comment claiming it mirrored the upstream-resolution scan; it did not.
+    # Then it shared a derivation with the validator and the runtime -- and still
+    # disagreed, because the three passed different predicates to it. The destination
+    # is now resolved once by the normalizer and read here.
+    dest_key = node.carry_param if isinstance(node, Node) else None
 
     # Option F consumer sweep neograph-cbpyx: when the loop body is a
     # placeholder-translated LLM node, its declared inputs are flat ${var}->{{ flat }}

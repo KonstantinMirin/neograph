@@ -69,6 +69,7 @@ from neograph.naming import field_name_for, output_field_name
 
 __all__ = [
     "Accumulated",
+    "Rung",
     "Candidate",
     "EachItem",
     "HandoffChannel",
@@ -197,25 +198,40 @@ class HandoffChannel(_SealedSource):
 
 @dataclass(frozen=True)
 class LastPresent(_SealedSource):
-    """Ordered candidates; take the last one present.
+    """Ordered rungs; take the last one PRESENT.
 
     ADMISSION CRITERIA (design section 4.2). ``LastPresent`` is the variant every
     hard case reaches for, so stamp it ONLY when one of these holds:
 
-    - At most one candidate can be present at run time BY CONSTRUCTION, which
-      branch-arm exclusivity guarantees.
+    - At most one rung can be present at run time BY CONSTRUCTION, which branch-arm
+      exclusivity guarantees.
     - The ordering encodes a named, documented precedence rule, such as
       carry-before-seed or inner-producer-before-outer-port.
+    - **Each rung's field is written at most ONCE per activation of the reading
+      scope.** LangGraph state accumulates, so a value left over from an earlier
+      activation is indistinguishable from one written for this one -- and then
+      "last present" silently answers with the previous activation's value. The one
+      re-activation context today is an isolated subgraph, which starts from fresh
+      state; ``tests/test_declared_read_resolution.py`` pins a Loop node inside a
+      Loop-on-Construct against exactly that, because the criterion is a
+      PRECONDITION rather than a property of this class.
 
     It is NEVER the answer to a read that unions several present values; that is
     ``Accumulated``. It is NEVER an escape from refusing authored ambiguity.
 
-    Type filtering happens at assembly, so the runtime asks only whether a field is
-    PRESENT. Presence cannot select the wrong one of two values. This is the move
-    SSA makes with a phi node: name the alternatives instead of searching for them.
+    ``rungs`` is narrower than ``Source`` on purpose: a ``LastPresent`` cannot nest
+    inside another, and cannot hold an ``Accumulated``, because neither is a single
+    value whose presence answers the question. Making that unrepresentable is
+    cheaper than checking for it.
+
+    Type filtering happens at assembly, so the runtime asks only whether a rung is
+    PRESENT -- and what presence MEANS differs per rung: a ``LoopCarry``'s append-list
+    is present when it is non-empty, where a ``Peer``'s field is present when it is
+    not ``None``. SSA's phi node selects on the incoming EDGE, which is exact;
+    presence is a substitute for that, sound only under the criteria above.
     """
 
-    refs: tuple[PortRef, ...]
+    rungs: tuple[Rung, ...]
 
 
 @dataclass(frozen=True)
@@ -232,6 +248,14 @@ class Accumulated(_SealedSource):
 
     channel: str
 
+
+Rung = Peer | Port | EachItem | LoopCarry | HandoffChannel
+"""What a ``LastPresent`` may hold: a single value whose PRESENCE answers the read.
+
+Excludes ``LastPresent`` itself (no nesting) and ``Accumulated`` (a union, not a
+single value). Narrowing the type is what makes those unwriteable rather than
+merely checked for.
+"""
 
 Source = Peer | Port | EachItem | LoopCarry | HandoffChannel | LastPresent | Accumulated
 """The CLOSED set of places a value can arrive from.
@@ -312,8 +336,11 @@ def source_channel_kind(source: Source) -> str:
             return "carry-list"
         case HandoffChannel():
             return "mesh-channel"
-        case LastPresent():
-            return "peer-field"
+        case LastPresent(rungs=rungs):
+            # The rungs may MIX channels (a Loop's seed peer and its carry list), so
+            # there is no single physical channel to name. Returning "peer-field"
+            # was true only while nothing was stamped LastPresent.
+            return "|".join(source_channel_kind(rung) for rung in rungs)
         case Accumulated():
             return "accumulator-channel"
     assert_never(source)

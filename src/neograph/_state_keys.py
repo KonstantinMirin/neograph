@@ -234,7 +234,6 @@ class StateKeys:
         """
         return output_field_name(field_name, "dispatch_error")
 
-
     @staticmethod
     def oracle_collector(field_name: str) -> str:
         """Oracle barrier/collector field name for a given producer field."""

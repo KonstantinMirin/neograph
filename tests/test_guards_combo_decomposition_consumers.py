@@ -71,7 +71,14 @@ MIGRATED: frozenset[str] = frozenset(
         "state.py",
         "_state_write.py",
         "_subconstruct.py",
-        "_input_shape.py",
+        # _input_shape.py is REMOVED by neograph-4cvx8 step 6, and it is a shrink
+        # rather than a regression: the only combo question it asked was "is this
+        # node's primary shape LOOP", in order to then PROBE state for a non-empty
+        # carry list and infer a loop re-entry from it. Both halves are gone -- the
+        # read's arrivals are stamped (LastPresent over seed and LoopCarry), so the
+        # runtime asks the ADDRESS instead of the modifier set plus the state. A file
+        # that no longer asks the question does not belong in an inventory of files
+        # that must ask it the one sanctioned way; assertion (a) requires live use.
         # neograph-3ffdg.9: runner.py's combo-vocabulary use (the Portal-mesh hop
         # costing that reads primary_shape/PrimaryShape) moved wholesale into
         # _recursion_budget.py as a pure file split. runner.py is REMOVED because
