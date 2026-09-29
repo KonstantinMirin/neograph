@@ -28,6 +28,7 @@ from neograph._validation_types import (
     _types_compatible,
 )
 from neograph.errors import ConstructError, NeographError
+from neograph.naming import field_name_for
 from neograph.node import Node, TypeSpecStatic
 
 __all__ = ["_build_no_producer_error"]
@@ -64,6 +65,26 @@ def _build_no_producer_error(
                 "input_from names a MEMBER, or 'member.output' for one of a dict-form node's keys, "
                 "declared before this node (a branch arm's member counts, and means that arm's value)"
             ),
+            node=item.name,
+            construct=construct.name,
+            location=_source_location(),
+        )
+    # A read whose arrival is not a PRODUCER at all -- a Portal mesh member's hop, a
+    # fanned item -- is refused with the resolver's own reason, because "no upstream
+    # produces a compatible value" is technically true and useless: no upstream ever
+    # will, and the author needs the spelling that IS fed. The resolver signals this
+    # by naming the READING NODE itself as the candidate, which no producer-side
+    # refusal does.
+    self_field = field_name_for(item.name)
+    channel = next(
+        (c for c in (refusal.candidates if refusal else ()) if c.ref.member == self_field),
+        None,
+    )
+    if channel is not None:
+        return ConstructError.build(
+            f"declares {'inputs' if isinstance(item, Node) else 'input'}={_fmt_type(input_type)}, but {channel.reason}",
+            expected="a read addressed to the channel the value arrives on",
+            found=f"a single-type {_fmt_type(input_type)} read, which only a producer can satisfy",
             node=item.name,
             construct=construct.name,
             location=_source_location(),

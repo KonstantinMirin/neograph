@@ -318,8 +318,16 @@ def normalize_ir(construct: Construct) -> None:
             and item.handoff_channel is None
         ):
             group_channel = handoff_channels.get(member_portal.name)
-            if group_channel is not None:
-                key = item.handoff_param or "handoff"
+            # Only a member that DECLARES the reserved key gets the stamp. The `or
+            # "handoff"` fallback stamped it on every member, including single-type
+            # ones with no such key at all -- an address to a key the node does not
+            # have, which made the table say the node reads something it never
+            # declared. A single-type mesh read is now refused outright (its value
+            # arrives on the channel, which no single-type address can name), so
+            # there is nothing left for that fallback to serve.
+            declared = normalize_inputs(item.inputs)
+            key = item.handoff_param or ("handoff" if declared.is_dict_form and "handoff" in declared.by_name else None)
+            if group_channel is not None and key is not None:
                 updates["input_sources"] = with_source(item, key, HandoffChannel(group_channel))
         # A dict-form input key that names a channel reads the UNION off that
         # unprefixed field. Stamped as its own Source variant so the address

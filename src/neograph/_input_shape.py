@@ -10,6 +10,7 @@ from neograph._ir_source import EachItem
 from neograph._normalize import normalize_inputs, primary_output_field
 from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
+from neograph.describe_type import _admits_none
 from neograph.di import _isinstance_safe, _unwrap_each_dict, _unwrap_loop_value, read_upstream
 from neograph.modifiers import COMBO_DECOMPOSITION, PrimaryShape, classify_modifiers
 from neograph.naming import field_name_for
@@ -126,10 +127,19 @@ def _extract_fan_in_dict(state: StateBus, node: Node) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for input_name, expected_type in ni.by_name.items():
         if node.handoff_param is not None and input_name == node.handoff_param:
-            # StateBus.get optional: Portal mesh channel — a member reached via a
-            # hop has it populated by the prior hop's Command update, but an entry
-            # declaring a handoff param on FIRST activation sees None (design §3.3, D10).
-            value = state.get(node.handoff_channel) if node.handoff_channel is not None else None
+            # The DECLARED TYPE decides whether absence is a value. A non-entry member
+            # only ever arrives by hop, so its payload is always there and a missing one
+            # is a defect; the mesh ENTRY's first activation is linear, so it reads
+            # nothing there and types the key `payload | None` to say so (validated at
+            # assembly, _validation_portal). Reading it optionally for everyone made the
+            # non-entry case silent -- absence is a value only where the type admits one.
+            if node.handoff_channel is None:
+                value = None
+            elif _admits_none(expected_type):
+                # StateBus.get optional: the entry's first activation, declared Optional.
+                value = state.get(node.handoff_channel)
+            else:
+                value = state.get_required(node.handoff_channel, node_label=node.name)
         elif input_name == node.fan_out_param:
             # REQUIRED: node IS the fan-out target; EACH_ITEM is the dispatched value.
             value = state.get_required(StateKeys.EACH_ITEM, node_label=node.name)

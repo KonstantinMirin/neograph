@@ -21,6 +21,7 @@ from neograph._ir_protocols import ConstructLike
 from neograph._normalize import _declared_output, normalize_outputs
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._validation_types import _MISSING, _fmt_type, _resolve_field_annotation, _source_location
+from neograph.describe_type import _admits_none
 from neograph.errors import ConstructError
 from neograph.modifiers import HANDOFF_END, Portal, _group_portal_members
 from neograph.node import Node
@@ -65,7 +66,9 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
     # checks below do not apply. Including it here would look for a field literally
     # named "decide" on its payload and reject a valid dispatch node.
     member_positions = {
-        id(item): i for i, item in enumerate(nodes) if portal_member_class(item) not in (None, PortalMemberClass.DISPATCH)
+        id(item): i
+        for i, item in enumerate(nodes)
+        if portal_member_class(item) not in (None, PortalMemberClass.DISPATCH)
     }
     if not member_positions:
         return
@@ -88,6 +91,19 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
     groups = _group_portal_members(all_members)
     for group_name, members in groups.items():
         _check_one_mesh_group(construct, members, member_positions, nodes, sibling_names, group_name)
+
+
+def _is_optional_payload(declared: Any, payload: Any) -> bool:
+    """True when ``declared`` is exactly ``payload | None``.
+
+    Narrow on purpose: ``_admits_none`` (the nullability AUTHORITY, imported rather
+    than re-derived, so the renderer and this rule cannot describe different types)
+    says the annotation can hold ``None``; the rest of this says the only other thing
+    it can hold is the payload. ``payload | SomethingElse | None`` is not a mesh read.
+    """
+    if not _admits_none(declared):
+        return False
+    return tuple(arg for arg in get_args(declared) if arg is not type(None)) == (payload,)
 
 
 def _check_one_mesh_group(
@@ -167,7 +183,7 @@ def _check_one_mesh_group(
             if not (isinstance(member, Node) and member.mode in ("agent", "act")):
                 found = "sub-construct" if not isinstance(member, Node) else f"{member.mode}-mode"
                 raise ConstructError.build(
-                    f'Portal mesh member \'{name}\' sets trigger="tool" on a {found} member',
+                    f"Portal mesh member '{name}' sets trigger=\"tool\" on a {found} member",
                     expected='trigger="tool" requires an agent/act member',
                     found=f'trigger="tool" on a {found} member',
                     node=name,
@@ -253,8 +269,7 @@ def _check_one_mesh_group(
     if seen != set(adjacency):
         unreached = sorted(set(adjacency) - seen)
         raise ConstructError.build(
-            "two disjoint Portal meshes at one construct level"
-            + (f" (mesh {group_name!r})" if group_name else ""),
+            "two disjoint Portal meshes at one construct level" + (f" (mesh {group_name!r})" if group_name else ""),
             expected="one connected mesh per group per level (D-SINGLE-MESH)",
             found=f"members not reachable from entry '{entry.name}': {unreached}",
             construct=construct.name,
@@ -314,20 +329,45 @@ def _check_one_mesh_group(
     # singular ``.input`` (typed + validated by _add_subgraph's own boundary
     # check), not a fan-in ``inputs`` dict — there is no Construct analog to a
     # reserved ``handoff`` inputs key, so a Construct member is skipped here.
+    # The ENTRY may type the key ``payload | None``, and only the entry: its first
+    # activation is LINEAR, so no hop has written the channel and Optional is the only
+    # honest declaration of that. A non-entry arrives ONLY by hop, so its value is
+    # always present, and letting it declare Optional would buy back the silence this
+    # rule removes -- a missing hop payload reading as a legitimate None. The runtime
+    # follows the DECLARED TYPE rather than re-deriving which member is the entry
+    # (``_extract_fan_in_dict``): absence is a value only where the type admits one.
+    mesh_entry = members[0] if members else None
     for member in node_members:
         if not isinstance(member, Node):
             continue
         inputs = member.inputs
-        if isinstance(inputs, dict) and "handoff" in inputs and inputs["handoff"] is not payload:
-            raise ConstructError.build(
-                f"Portal member '{member.name}' types its 'handoff' input as "
-                f"{_fmt_type(inputs['handoff'])}, not the payload model {_fmt_type(payload)}",
-                expected=f"handoff: {_fmt_type(payload)}",
-                found=_fmt_type(inputs["handoff"]),
-                node=member.name,
-                construct=construct.name,
-                location=_source_location(),
-            )
+        if not (isinstance(inputs, dict) and "handoff" in inputs):
+            continue
+        declared = inputs["handoff"]
+        if declared is payload:
+            continue
+        if member is mesh_entry and _is_optional_payload(declared, payload):
+            continue
+        expected = (
+            f"handoff: {_fmt_type(payload)} (the entry may also declare {_fmt_type(payload)} | None)"
+            if member is mesh_entry
+            else f"handoff: {_fmt_type(payload)}"
+        )
+        raise ConstructError.build(
+            f"Portal member '{member.name}' types its 'handoff' input as "
+            f"{_fmt_type(declared)}, not the payload model {_fmt_type(payload)}",
+            expected=expected,
+            found=_fmt_type(declared),
+            hint=(
+                None
+                if member is mesh_entry
+                else "only the mesh ENTRY may declare the key Optional: a non-entry member's payload "
+                "always arrives by hop, so an absent one is a defect rather than a first activation"
+            ),
+            node=member.name,
+            construct=construct.name,
+            location=_source_location(),
+        )
 
 
 def _check_portal_dispatch_error_handler(construct: ConstructLike) -> None:

@@ -74,10 +74,6 @@ def _check_item_input(
         if not isinstance(item, Node):
             # A child port at position 0 of a portless parent -- neograph-xejyn.
             return
-        ms_first = getattr(item, "modifier_set", None)
-        if ms_first is not None and ms_first.portal is not None:
-            # A mesh member's single-type read (handoff is dict-form only) -- neograph-sdqsv.
-            return
     # Fan-in dict instance: inputs={"a": A, "b": B, ...} — validate each
     # (upstream_name, expected_type) pair against the upstream named by the
     # key (neograph-kqd.2). This was a bypass pre-kqd; it is now a positive

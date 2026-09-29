@@ -39,7 +39,9 @@ from neograph._ir_source import (
     Unresolved,
 )
 from neograph._normalize import normalize_inputs
+from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._state_keys import StateKeys
+from neograph.naming import field_name_for
 from neograph.node import Node, TypeSpecStatic
 
 __all__ = [
@@ -191,6 +193,28 @@ def resolve_single_type_source(
     input_type = single_type_demand(node)
     if input_type is None:
         return None
+    if portal_member_class(node) not in (None, PortalMemberClass.DISPATCH):
+        # A MESH MEMBER's value arrives by hop, on the entry-keyed mesh channel, so a
+        # single-type read declares something no producer feeds. The resolver used to
+        # search anyway and stamp whichever SIBLING member produced the same type --
+        # a field written only if that member happened to run. Refused, with the
+        # spelling that IS fed: the reserved dict-form `handoff` key, which is stamped
+        # HandoffChannel and read from the channel itself.
+        #
+        # portal_member_class, not `portal is not None`: a route="decide" Portal is a
+        # standalone linear node rather than a member, so it gets no exemption here
+        # and falls under the ordinary rules.
+        return Unresolved(
+            (
+                Candidate(
+                    ref=PortRef(field_name_for(node.name)),
+                    reason=(
+                        "is a Portal mesh member, whose value arrives on the mesh channel rather than "
+                        "from a producer: declare inputs={'handoff': <payload>} to read it"
+                    ),
+                ),
+            )
+        )
     if node.modifier_set.each is not None:
         # The fanned item, BEFORE any search: an Each-modified node's value arrives
         # on the fan-out channel, so there is no producer to look for. The search ran

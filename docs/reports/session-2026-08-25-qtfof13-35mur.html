@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session report: qtfof.13 export derivation / 35mur boundary bug</title>
+<style>
+:root {
+  --bg: #fbfbf9;
+  --panel: #ffffff;
+  --ink: #1c1d1a;
+  --ink-soft: #55574f;
+  --ink-faint: #83857c;
+  --rule: #e2e2dc;
+  --rule-soft: #eeeee8;
+  --accent: #2f5d50;
+  --accent-soft: #e8f0ec;
+  --good: #2f6b3c;
+  --warn: #8a5a12;
+  --bad: #96342b;
+  --code-bg: #f3f3ee;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14150f;
+    --panel: #1b1c16;
+    --ink: #e9e9e1;
+    --ink-soft: #b3b5a9;
+    --ink-faint: #85877c;
+    --rule: #2e302a;
+    --rule-soft: #24261f;
+    --accent: #8ec7b1;
+    --accent-soft: #1f2a26;
+    --good: #8fc79a;
+    --warn: #d8a95e;
+    --bad: #e0897e;
+    --code-bg: #22241d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14150f;
+  --panel: #1b1c16;
+  --ink: #e9e9e1;
+  --ink-soft: #b3b5a9;
+  --ink-faint: #85877c;
+  --rule: #2e302a;
+  --rule-soft: #24261f;
+  --accent: #8ec7b1;
+  --accent-soft: #1f2a26;
+  --good: #8fc79a;
+  --warn: #d8a95e;
+  --bad: #e0897e;
+  --code-bg: #22241d;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.62 ui-serif, Georgia, "Iowan Old Style", serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 60rem; margin: 0 auto; padding: 3.5rem 1.5rem 6rem; }
+header.doc { border-bottom: 2px solid var(--ink); padding-bottom: 1.25rem; margin-bottom: 2.5rem; }
+.kicker {
+  font: 600 0.72rem/1.4 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.75rem;
+}
+h1 { font-size: 2.1rem; line-height: 1.18; margin: 0 0 0.6rem; letter-spacing: -0.01em; }
+.sub { color: var(--ink-soft); margin: 0; font-size: 1.02rem; }
+.meta { margin-top: 1.25rem; display: flex; flex-wrap: wrap; gap: 0.4rem 1.75rem; font: 0.8rem/1.5 var(--mono); color: var(--ink-faint); }
+.meta b { color: var(--ink-soft); font-weight: 600; }
+h2 {
+  font-size: 1.3rem; margin: 3rem 0 1rem; padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--rule); letter-spacing: -0.005em;
+}
+h3 { font-size: 1.02rem; margin: 2rem 0 0.6rem; }
+h4 { font-size: 0.9rem; margin: 1.4rem 0 0.4rem; font-family: var(--mono); font-weight: 600; color: var(--ink-soft); }
+p { margin: 0 0 0.9rem; }
+ul, ol { margin: 0 0 0.9rem; padding-left: 1.3rem; }
+li { margin-bottom: 0.4rem; }
+code { font: 0.85em var(--mono); background: var(--code-bg); padding: 0.1em 0.34em; border-radius: 3px; }
+pre {
+  background: var(--code-bg); border: 1px solid var(--rule-soft); border-radius: 6px;
+  padding: 0.9rem 1rem; overflow-x: auto; font: 0.8rem/1.55 var(--mono); margin: 0 0 1.1rem;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+.scroll { overflow-x: auto; margin: 0 0 1.2rem; }
+table { border-collapse: collapse; width: 100%; font-size: 0.88rem; font-family: system-ui, sans-serif; }
+th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+th { font: 600 0.74rem/1.3 var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); border-bottom: 1px solid var(--rule); }
+tbody tr:last-child td { border-bottom: none; }
+td code { font-size: 0.82em; }
+.card {
+  background: var(--panel); border: 1px solid var(--rule); border-radius: 8px;
+  padding: 1.1rem 1.25rem; margin: 0 0 1.2rem;
+}
+.card h3 { margin-top: 0; }
+.verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.verdict { background: var(--panel); border: 1px solid var(--rule); border-left: 4px solid var(--rule); border-radius: 6px; padding: 0.9rem 1.1rem; }
+.verdict.closed { border-left-color: var(--good); }
+.verdict.blocked { border-left-color: var(--warn); }
+.verdict .id { font: 600 0.8rem var(--mono); color: var(--ink-soft); }
+.verdict .state { font: 700 1.02rem/1.3 system-ui, sans-serif; margin: 0.3rem 0 0.4rem; }
+.verdict.closed .state { color: var(--good); }
+.verdict.blocked .state { color: var(--warn); }
+.verdict p { font-size: 0.87rem; color: var(--ink-soft); margin: 0; font-family: system-ui, sans-serif; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.75rem; margin: 0 0 1.5rem; }
+.stat { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.75rem 0.9rem; }
+.stat .n { font: 700 1.35rem/1.1 system-ui, sans-serif; display: block; }
+.stat .l { font: 0.7rem/1.35 var(--mono); color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.05em; }
+.pill { display: inline-block; font: 600 0.68rem/1 var(--mono); padding: 0.28em 0.5em; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+.pill.ok { background: var(--accent-soft); color: var(--good); }
+.pill.hold { background: var(--accent-soft); color: var(--warn); }
+.pill.no { background: var(--accent-soft); color: var(--bad); }
+blockquote {
+  margin: 0 0 1.1rem; padding: 0.1rem 0 0.1rem 1rem;
+  border-left: 3px solid var(--accent); color: var(--ink-soft);
+}
+.note { background: var(--accent-soft); border-radius: 6px; padding: 0.85rem 1.1rem; margin: 0 0 1.2rem; font-size: 0.93rem; }
+.note strong { color: var(--ink); }
+hr.end { border: none; border-top: 1px solid var(--rule); margin: 3.5rem 0 1.25rem; }
+footer { font: 0.78rem/1.6 var(--mono); color: var(--ink-faint); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <div class="kicker">Session report &middot; dev-practices:execute</div>
+  <h1>Agent&nbsp;Spec provider derivation, and the sub-construct boundary that returned the wrong answer</h1>
+  <p class="sub">Two tasks executed as molecules: a portability gap that failed loudly, and a correctness bug that failed silently on a green run.</p>
+  <div class="meta">
+    <span><b>Date</b> 2026-08-24 &rarr; 2026-08-25</span>
+    <span><b>Branch</b> develop</span>
+    <span><b>Tasks</b> neograph-qtfof.13, neograph-35mur</span>
+    <span><b>Molecules</b> neograph-kl7rr (11), neograph-ogk5i (12)</span>
+  </div>
+</header>
+
+<div class="verdicts">
+  <div class="verdict closed">
+    <div class="id">neograph-qtfof.13</div>
+    <div class="state">Closed</div>
+    <p>api_provider / model_id / url derived per node from the resolved <code>llm_factory</code>. 72 of 72 blocked cells clear the third-party dispatch gate.</p>
+  </div>
+  <div class="verdict closed">
+    <div class="id">neograph-35mur &middot; GH&nbsp;#17</div>
+    <div class="state">Closed</div>
+    <p>Sub-construct boundary now resolves over declared items only. The reported symptom is gone in both reproduction shapes.</p>
+  </div>
+  <div class="verdict blocked">
+    <div class="id">neograph-t1nbp &middot; P1</div>
+    <div class="state">Filed &middot; open</div>
+    <p>Same disease, two more sites. The exported artifact wires a different edge than the runtime takes.</p>
+  </div>
+  <div class="verdict blocked">
+    <div class="id">neograph-r8yh7 &middot; P2</div>
+    <div class="state">Filed &middot; open</div>
+    <p>The EXECUTE tier measures the zero-arg export, so its portability number cannot move.</p>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat"><span class="n">5082</span><span class="l">tests passing</span></div>
+  <div class="stat"><span class="n">0</span><span class="l">failing</span></div>
+  <div class="stat"><span class="n">94&rarr;2</span><span class="l">skips</span></div>
+  <div class="stat"><span class="n">29/29</span><span class="l">keyless examples</span></div>
+  <div class="stat"><span class="n">5</span><span class="l">commits pushed</span></div>
+</div>
+
+<h2>What actually happened</h2>
+
+<p>Two beads tasks went through the molecular workflow — one <code>task-execute</code> molecule and one <code>bug-triage</code> molecule, cooked separately because bug and non-bug types must not share an epic. Both finished, landed, and pushed. The interesting part of the session was not the code; it was that <strong>three separate measurements overturned plans that all read as reasonable on paper.</strong></p>
+
+<blockquote>Each time the correction ran the same direction: the intended change got <em>smaller</em>, and the confidence in it got higher. That pattern is the report's main finding.</blockquote>
+
+<h2>Task 1 &mdash; <code>neograph-qtfof.13</code>: derive the provider instead of asking for it</h2>
+
+<h3>The gap</h3>
+<p><code>to_agent_spec()</code> emitted <code>LlmConfig.api_provider=None</code> for every LLM-bearing node, and <code>pyagentspec</code>'s own adapters refuse such an artifact. 72 of the 88 unexecutable matrix cells traced to exactly that. The previous ticket had shipped an opt-in <code>api_provider=</code> string, which is correct but uniform — it cannot express a construct whose tiers resolve to genuinely different providers.</p>
+
+<h3>What research established</h3>
+<table>
+<thead><tr><th>Question</th><th>Answer, verified against source</th></tr></thead>
+<tbody>
+<tr><td>Is <code>llm_factory</code> reachable from a bare <code>Construct</code>?</td><td>No — <code>LlmRuntime</code> is built inside <code>compile()</code>. But <code>lint()</code> and <code>Node.run_isolated()</code> already accept <code>llm_factory=</code>, so this is the <em>fourth</em> instance of an existing convention, not a new seam.</td></tr>
+<tr><td>What is the provider mapping?</td><td>There is no enum to map onto. <code>api_provider</code> is a free-form <code>Optional[str]</code>, and all five shipped adapters dispatch a bare <code>LlmConfig</code> on the single literal <code>"openai"</code> and raise otherwise. Other providers are represented by <em>subclasses</em>.</td></tr>
+<tr><td>Precedence?</td><td>Explicit wins. With a one-row table it stays the only route for an unclassifiable factory.</td></tr>
+<tr><td>Does import stay symmetric?</td><td>Yes — <code>from_agent_spec</code> already discards concrete provider info, so the derived value must never enter the IR.</td></tr>
+</tbody>
+</table>
+
+<div class="note"><strong>This reframed the ticket.</strong> Deriving <code>"anthropic"</code> from a <code>ChatAnthropic</code> would emit an artifact that <em>still</em> fails to load, with a worse message than today's honest <code>None</code>. The useful derivation is one row, and everything else stays <code>None</code> until neograph grows subclass lowering.</div>
+
+<h3>The correction that mattered</h3>
+<p>The plan that reached the maintainer carried a local OpenAI-compatible stub server, a round-trip marker change, and two escalated scope questions. The maintainer's objection was blunt and correct: <em>at compile time we already have the provider, and we know what <code>fast</code> resolves to — this is a standard LLM configuration.</em></p>
+<p>They were right. The feature is five steps: accept the kwarg, resolve the tier through the existing <code>_get_llm</code>, read provider/model/base-url off the resolved client, emit them at the single construction site, and record the tier so round-trip still restores it. Two things had been inflated and were withdrawn:</p>
+<ul>
+  <li>The <strong><code>api_key</code> finding</strong> was rated HIGH on the grounds that a derived config cannot authenticate. That is how every config export works — you do not ship the secret. Not a defect.</li>
+  <li>The <strong>stub server</strong> was never about the feature. It existed so a test tier could prove the artifact <em>executes</em>.</li>
+</ul>
+<p>And the stub turned out to be unnecessary: the <code>api_provider</code> failure is a <em>construction</em> failure inside the adapter, before any network call. So the gap is measurable at <strong>load</strong>, with no endpoint and no credentials.</p>
+
+<h3>Closing evidence &mdash; population, not sample</h3>
+<pre><code>api_provider-blocked cells targeted : 72
+still refused over api_provider      :  0
+past the third-party dispatch gate   : 72   (all then stop on: Missing credentials)</code></pre>
+<p>Pinned as a standing test that reads its own population from <code>EXEC_EXEMPT</code>, so the set cannot drift out from under it. The first version of that tier covered 4 representative cells; reporting "72" off a 4-cell proof would have been the exact self-certification the ticket's notes forbid.</p>
+
+<h3>What the file-size ratchet forced</h3>
+<p><code>_agent_spec.py</code> was at its exact ceiling. The rule says verbatim that <em>raising the number is not a remedy, splitting the file is</em> — so <code>_lower_construct_item</code> moved to its own module, taking the file from <strong>694 to 479</strong>, i.e. under 500, which <em>deletes</em> its allowlist entry rather than lowering it. <code>flow_export</code> is injected as a parameter to break the resulting cycle — the exact precedent AGENTS.md names.</p>
+
+<h2>Task 2 &mdash; <code>neograph-35mur</code>: the boundary that answered a different question</h2>
+
+<h3>The bug, reproduced exactly</h3>
+<p><code>Construct.output=X</code> was not a wire but a <em>search</em>: walk the child's final state in reverse, return the first <code>isinstance</code> match. That state holds more than the child computed — a forwarded <code>context=</code> field, the input port, framework keys — and context fields are appended <em>after</em> node output fields.</p>
+<pre><code>the LLM computed : Case(docket='D-1', readings=5, claims=3)
+boundary returned: Case(docket='D-1', readings=5, claims=0)   &lt;- the opening case</code></pre>
+<p>Same construct, one declaration apart:</p>
+<pre><code>context=None        -&gt; boundary = SETTLED
+context=['opening'] -&gt; boundary = OPENING     no error, exit 0</code></pre>
+<div class="note"><strong>The DX crime is the direction of the coupling.</strong> <code>context=</code> is an <em>input</em> declaration. Adding one silently re-pointed an unrelated <em>output</em>. The reporter's cost was a type invented purely to be type-distinct, whose docstring had to say <em>"distinctness is the whole of its job"</em> — against this codebase's own rule about types that only move shapes.</div>
+
+<h3>The measurement that changed the design</h3>
+<p>The ticket's acceptance criteria said the type scan should <em>refuse when more than one value matches</em>. The review instrumented the real scan across the whole suite before anyone wrote code:</p>
+<pre><code>output-boundary resolutions : 270
+ambiguous (&gt;1 type match)   :  26   (9.6%)
+item-order rule AGREES      :  24
+item-order rule DISAGREES   :   2   &lt;- and both ARE this bug</code></pre>
+<p>So refusing would have turned <strong>24 currently-green ordinary resolutions into hard failures</strong> — <code>review&nbsp;&rarr;&nbsp;revise</code>, <code>write&nbsp;&rarr;&nbsp;improve</code>, the canonical refine chain — and pushed authors toward exactly the invented-for-distinctness type the ticket exists to abolish.</p>
+
+<h3>Two maintainer decisions</h3>
+<table>
+<thead><tr><th>Decision</th><th>Chosen</th><th>Why it holds</th></tr></thead>
+<tbody>
+<tr>
+  <td><b>A.</b> Ambiguous or ordered?</td>
+  <td><span class="pill ok">Ordered</span> — restrict eligibility to the construct's own declared items, last one wins</td>
+  <td>A forwarded context field is not an item, so it can never win. Fixes the bug with a <b>2-of-270</b> delta and <b>no API change</b>. Converges with <code>resolve_end_node_sources</code>, which already answers this positionally.</td>
+</tr>
+<tr>
+  <td><b>B.</b> How to spell the explicit port?</td>
+  <td><span class="pill ok">Separate field</span> — <code>output_from="settle"</code></td>
+  <td><code>Portal.output</code> and <code>ConstructSpec.output</code> already use a <code>str</code> for a <em>type</em> name. One spelling, two meanings, on sibling fields is the same duplicated-authority condition that produced the bug.</td>
+</tr>
+</tbody>
+</table>
+
+<h3>What survives, deliberately</h3>
+<p>The type scan is <em>not</em> deleted, for two reasons that are not oversights:</p>
+<ul>
+  <li>A multi-arm branch's boundary is legitimately satisfied by a <em>different node per arm</em>. One name cannot express that.</li>
+  <li>Portal mode-(b) dispatch invokes a flow emitted at <em>runtime</em>, whose item names cannot be known at assembly — there is no eligibility set to pass.</li>
+</ul>
+<p>Reading the acceptance as "delete the scan" would have broken Portal. That escape hatch is now pinned to its one legitimate caller by a guard verified to fail on an injected second one.</p>
+
+<h2>Systemic finding: one heuristic, four sites, two contradictory rules</h2>
+<p>The trace-similar atom returned more value than the fix. The same disease — <em>choose which of several state values is meant by isinstance-matching over a bag</em> — has four implementations, and they do not agree:</p>
+<div class="scroll">
+<table>
+<thead><tr><th>Site</th><th>Precedence</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td><code>_scan_subgraph_output</code></td><td>reversed &mdash; later wins</td><td><span class="pill ok">fixed this session</span></td></tr>
+<tr><td><code>_scan_subgraph_input</code></td><td>reversed &mdash; later wins</td><td>deferred &rarr; <code>neograph-5suot</code> unknown&nbsp;#5</td></tr>
+<tr><td><code>_extract_single_type</code></td><td><b>forward &mdash; earlier wins</b></td><td><span class="pill no">new</span> &rarr; <code>neograph-t1nbp</code></td></tr>
+<tr><td><code>_agent_spec.py</code> export mirror</td><td>reversed &mdash; later wins</td><td><span class="pill no">new</span> &rarr; <code>neograph-t1nbp</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The consequence is worse than inconsistency. On one construct, measured:</p>
+<pre><code>runtime : sink consumes a   (FIRST match, forward scan)
+export  : wires sink &lt;- b   (LAST match, reverse scan)</code></pre>
+<div class="note"><strong>The exported Agent Spec artifact computes a different answer than the pipeline it was exported from.</strong> A portability defect stacked on a correctness one, and neither surface complains. Filed as <code>neograph-t1nbp</code> at P1.</div>
+
+<h2>Where the guards pushed back &mdash; and were right</h2>
+<p>Seven structural guards fired on this session's own work. None was weakened; each was a real signal.</p>
+<div class="scroll">
+<table>
+<thead><tr><th>Guard</th><th>What it caught</th><th>Resolution</th></tr></thead>
+<tbody>
+<tr><td>32-cell byte golden</td><td>The first version always wrote the tier into the round-trip marker, changing 20 golden cells. The fixture forbids rebaselining and ships no regeneration tooling <em>by design</em>.</td><td>Made the marker conditional — it records only what export would otherwise <em>lose</em>. Better design; golden untouched.</td></tr>
+<tr><td>File-size ratchet &times;2</td><td>Two files over their exact ceilings.</td><td>Split, never raised. One entry <em>deleted</em> (dropped under 500); the other finished at its original number.</td></tr>
+<tr><td>Validation-cluster line cap</td><td>New check pushed <code>_construct_validation.py</code> past 400.</td><td>Moved to <code>_validation_outputs.py</code>, its documented home; call folded into the existing output-check block.</td></tr>
+<tr><td><code>iter_with_arms</code> ban</td><td>Banned primitive used in the orchestrator.</td><td>Went with the move.</td></tr>
+<tr><td><code>_declared_output</code> monopoly</td><td>Hand-rolled <code>getattr(_, 'output', ...)</code> selector.</td><td>Direct typed read, with the reason commented.</td></tr>
+<tr><td>Combo / fused-column inventories</td><td>A consumer moved files during the split.</td><td>Re-keyed, and the dead imports left behind were <em>deleted</em> rather than kept to satisfy the inventory.</td></tr>
+<tr><td>API-manifest freshness</td><td>Public signature changed.</td><td>Manifest + generated docs region regenerated.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>Mistakes made in this session</h2>
+<p>Recorded because the pattern is more useful than the individual slips.</p>
+<ul>
+  <li><strong>Missed a consumer when threading the resolver.</strong> <code>_agent_spec_portal.py</code> was in neither the research nor the review consumer list and broke at the first full gate. This is the AGENTS.md Portal retrospective repeating verbatim — <em>treat any such list, including this one, as provisional until re-verified by grep</em>.</li>
+  <li><strong>Overwrote an existing file without looking.</strong> Used <code>cat &gt;</code> on <code>_agent_spec_types.py</code>, which already existed. Restored from git, no damage, new module renamed — but the check should have come first.</li>
+  <li><strong>Ran <code>ruff format</code> over the whole package</strong>, touching 20 unrelated files. Reverted all of them.</li>
+  <li><strong>Shipped a vacuous test</strong> in the first reproduction: <code>pytest.raises(Exception, match="nosuchnode")</code> passed because a Pydantic type error happened to contain the string. It would have kept passing if the feature were never built. Tightened to demand neograph's own <code>ConstructError</code>.</li>
+  <li><strong>Declared a disease scan "semantic" but ran three syntactic commands</strong>, and so missed a fifth resolver (<code>resolve_end_node_sources</code>, which answers the same question positionally). Caught by the review, not by me.</li>
+  <li><strong>Broke dict-form outputs</strong> with the first eligibility helper — those write <code>{node}_{key}</code>, not <code>{node}</code>. Caught by an unrelated existing test, not by the new boundary tests.</li>
+</ul>
+
+<h2>Delivered</h2>
+<h4>Commits on develop</h4>
+<div class="scroll">
+<table>
+<thead><tr><th>SHA</th><th>Subject</th></tr></thead>
+<tbody>
+<tr><td><code>881684e</code></td><td>feat(agent-spec): derive api_provider/model_id/url per node from the resolved llm_factory</td></tr>
+<tr><td><code>d761bc2</code></td><td>chore(beads): qtfof.13 closed on measured evidence; file r8yh7</td></tr>
+<tr><td><code>7faa1bd</code></td><td>fix(subconstruct): resolve the output boundary by eligibility, not a whole-state type scan</td></tr>
+<tr><td><code>d60e1db</code></td><td>chore(beads): close 35mur; file t1nbp</td></tr>
+<tr><td><code>1e278b1</code></td><td>chore(beads): close the 35mur triage epic</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>New public surface</h4>
+<ul>
+  <li><code>to_agent_spec(construct, api_provider=None, *, llm_factory=None)</code> — per-node provider/model/url derivation.</li>
+  <li><code>Construct.output_from: str | None</code> — names the member whose output is the boundary; refuses at <code>Construct(...)</code> on a bad name. Threaded through all three API surfaces, the YAML spec, lint, and the Agent Spec round trip.</li>
+</ul>
+
+<h4>Also landed</h4>
+<ul>
+  <li><code>skip</code> &rarr; <code>xfail(strict=True)</code> for the Agent Spec exempt cells: <strong>94 skips &rarr; 2</strong> (the remainder is the live-Langfuse pair). This un-reds <code>release-gate</code>'s <code>skipcheck</code> and gives those sets the shrink-only property their own docstrings ask for — a closed gap now turns the suite red instead of vanishing from a skip count.</li>
+  <li>Three new structural guards, each verified to fail on an injected violation.</li>
+  <li>CHANGELOG, AGENTS.md, and the <code>concepts/subgraphs</code> docs page updated; website builds (48 pages).</li>
+</ul>
+
+<h2>Open, and worth a decision</h2>
+<ul>
+  <li><strong><code>neograph-t1nbp</code> (P1)</strong> — the runtime/export divergence. This one returns a wrong answer across a portability boundary, which by the standard applied to GH&nbsp;#17 outranks work that fails loudly.</li>
+  <li><strong><code>neograph-5suot</code></strong> — its last open unknown is <code>_scan_subgraph_input</code>, and it can now adopt the eligibility half of this session's rule verbatim. The ordering argument in its notes was confirmed rather than assumed.</li>
+  <li><strong><code>neograph-r8yh7</code> (P2)</strong> — until this lands, do not quote a portability percentage off the EXECUTE tier without saying it measures the <em>zero-arg</em> export.</li>
+</ul>
+
+<hr class="end">
+<footer>
+neograph &middot; session report &middot; generated 2026-08-25 &middot; all figures measured on the tree at <code>1e278b1</code>
+</footer>
+
+</div>
+</body>
+</html>

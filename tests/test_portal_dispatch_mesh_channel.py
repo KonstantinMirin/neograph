@@ -35,17 +35,34 @@ class Spec(BaseModel, frozen=True):
 
 
 register_scripted("dgbqv12_fn", lambda i, c: Handoff(goto="__end__"))
+register_scripted("dgbqv12_spec", lambda i, c: Spec(spec="{}"))
 
 
 def _mesh(*, with_dispatch: bool) -> Construct:
-    triage = Node.scripted("triage", fn="dgbqv12_fn", inputs=Handoff, outputs=Handoff) | Portal(
+    """The mesh, declared the way a mesh read is SPELLED.
+
+    Members read the reserved dict-form ``handoff`` key. They used to declare a
+    single-type ``inputs=Handoff``, which neograph-sdqsv showed declares a read no
+    producer feeds -- the resolver found a SIBLING member of the same type and
+    stamped it -- so that spelling is refused now. The entry types the key
+    ``Handoff | None`` because its first activation is linear and reads nothing
+    there; ``billing`` only ever arrives by hop, so its read is required.
+
+    The dispatch node keeps a single-type read and is FED by a preceding producer:
+    ``route="decide"`` is a standalone linear node, so its input comes from the
+    pipeline like any other node's. (Before step 5 of neograph-4cvx8 it needed no
+    producer at all -- the member exemption tested ``portal is not None``, which
+    ``portal_member_class`` denies for a dispatch Portal, so it was tolerated unfed.)
+    """
+    triage = Node.scripted("triage", fn="dgbqv12_fn", inputs={"handoff": Handoff | None}, outputs=Handoff) | Portal(
         to=["billing"], max_hops=5
     )
-    billing = Node.scripted("billing", fn="dgbqv12_fn", inputs=Handoff, outputs=Handoff) | Portal(
+    billing = Node.scripted("billing", fn="dgbqv12_fn", inputs={"handoff": Handoff}, outputs=Handoff) | Portal(
         to=["triage"]
     )
     items: list = [triage, billing]
     if with_dispatch:
+        spec_seed = Node.scripted("spec_seed", fn="dgbqv12_spec", outputs=Spec)
         planner = Node.scripted("planner", fn="dgbqv12_fn", inputs=Spec, outputs=Handoff) | Portal(
             route="decide",
             spec_field="spec",
@@ -54,6 +71,7 @@ def _mesh(*, with_dispatch: bool) -> Construct:
             max_depth=2,
         )
         items.insert(0, planner)
+        items.insert(0, spec_seed)
     return Construct("dgbqv12", nodes=items)
 
 
@@ -63,11 +81,7 @@ def _runtime_write_key(construct: Construct) -> str:
     Mirrors _wiring's own filter, which skips DISPATCH -- that is precisely the
     filter _ir_normalize was missing.
     """
-    members = [
-        item
-        for item in construct.nodes
-        if portal_member_class(item) not in (None, PortalMemberClass.DISPATCH)
-    ]
+    members = [item for item in construct.nodes if portal_member_class(item) not in (None, PortalMemberClass.DISPATCH)]
     return MeshContext.build(_group_portal_members(members)[None]).channel_key
 
 

@@ -29,8 +29,8 @@ baselined from, over 4785 constructs at the red step::
     single-type/each-item     223    step 3 -- stamp EachItem                 [GONE]
     dict-key/framework-port   111    the DX port-KEY rewrite (neograph-d8ac9)
     port/sub-construct        110    step 8 -- Construct.port_source
-    single-type/unfed           5    steps 2 and 4 -- refuse, do not stamp   [now 3]
-    single-type/mesh-member     1    step 5 -- refuse (sdqsv)
+    single-type/unfed           5    steps 2, 4 and 5 -- refuse, do not stamp [GONE]
+    single-type/mesh-member     1    step 5 -- refuse (sdqsv)                [GONE]
     single-type/loop            0    already stamped to the seed
 
 Every later step DELETES rows, and ``ROW_CEILING`` moves down with them in the same
@@ -102,18 +102,6 @@ KEYLESS_EXAMPLE_GLOBS = (
 # size, including the empty one it is shrinking toward.
 # ═══════════════════════════════════════════════════════════════════════════
 EXPECTED_UNSTAMPED: dict[str, str] = {
-    # The population that survives steps 2 and 4: a route="decide" DISPATCH Portal
-    # node. It classifies as `unfed` rather than `mesh-member` because
-    # portal_member_class says a dispatch Portal is NOT a member -- and the
-    # validator's exemption tests `portal is not None`, so it lets the dispatch node
-    # through on a membership claim the authority denies (N4 / neograph-qtxg1). Step
-    # 5 replaces that presence test with the authority, and the read is then refused
-    # by the first-of-chain rule like any other.
-    "single-type/unfed": "step 5 / neograph-4cvx8.7 -- a DISPATCH Portal escapes the member exemption (N4)",
-    # Step 5 (neograph-4cvx8.7) REFUSES this read rather than stamping it: the
-    # recorded decision on neograph-sdqsv. The row goes when the refusal lands,
-    # because a refused construct never reaches the instrument.
-    "single-type/mesh-member": "step 5 / neograph-4cvx8.7 -- refuse (sdqsv), do not stamp",
     # NOT step 7's, which is what re-measuring showed. Step 7 retired the framework
     # TAIL -- the fallback that served SINGLE-TYPE reads whose stamp was stale or
     # absent (the fan-agent wrapper, run_isolated), and those are stamped Port() now.
@@ -140,7 +128,7 @@ EXPECTED_UNSTAMPED: dict[str, str] = {
 # `single-type/loop` is deliberately NOT a row: the 86 measured Loop sites all
 # stamp their SEED, so a presence check already sees nothing there. Step 6 adds
 # the CARRY rung, which a presence check cannot see either way.
-ROW_CEILING = 5
+ROW_CEILING = 3
 
 
 def _load_module(path: Path, prefix: str) -> None:

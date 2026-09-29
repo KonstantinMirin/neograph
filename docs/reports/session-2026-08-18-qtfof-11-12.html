@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session report: qtfof.11 / qtfof.12 bug triage</title>
+<style>
+:root {
+  --bg: #fbfbf9;
+  --panel: #ffffff;
+  --ink: #1c1d1a;
+  --ink-soft: #55574f;
+  --ink-faint: #83857c;
+  --rule: #e2e2dc;
+  --rule-soft: #eeeee8;
+  --accent: #2f5d50;
+  --accent-soft: #e8f0ec;
+  --good: #2f6b3c;
+  --warn: #8a5a12;
+  --bad: #96342b;
+  --code-bg: #f3f3ee;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14150f;
+    --panel: #1b1c16;
+    --ink: #e9e9e1;
+    --ink-soft: #b3b5a9;
+    --ink-faint: #85877c;
+    --rule: #2e302a;
+    --rule-soft: #24261f;
+    --accent: #8ec7b1;
+    --accent-soft: #1f2a26;
+    --good: #8fc79a;
+    --warn: #d8a95e;
+    --bad: #e0897e;
+    --code-bg: #22241d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14150f;
+  --panel: #1b1c16;
+  --ink: #e9e9e1;
+  --ink-soft: #b3b5a9;
+  --ink-faint: #85877c;
+  --rule: #2e302a;
+  --rule-soft: #24261f;
+  --accent: #8ec7b1;
+  --accent-soft: #1f2a26;
+  --good: #8fc79a;
+  --warn: #d8a95e;
+  --bad: #e0897e;
+  --code-bg: #22241d;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.62 ui-serif, Georgia, "Iowan Old Style", serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 60rem; margin: 0 auto; padding: 3.5rem 1.5rem 6rem; }
+header.doc { border-bottom: 2px solid var(--ink); padding-bottom: 1.25rem; margin-bottom: 2.5rem; }
+.kicker {
+  font: 600 0.72rem/1.4 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.75rem;
+}
+h1 { font-size: 2.1rem; line-height: 1.18; margin: 0 0 0.6rem; letter-spacing: -0.01em; }
+.sub { color: var(--ink-soft); margin: 0; font-size: 1.02rem; }
+.meta { margin-top: 1.25rem; display: flex; flex-wrap: wrap; gap: 0.4rem 1.75rem; font: 0.8rem/1.5 var(--mono); color: var(--ink-faint); }
+.meta b { color: var(--ink-soft); font-weight: 600; }
+h2 {
+  font-size: 1.3rem; margin: 3rem 0 1rem; padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--rule); letter-spacing: -0.005em;
+}
+h3 { font-size: 1.02rem; margin: 2rem 0 0.6rem; }
+h4 { font-size: 0.9rem; margin: 1.4rem 0 0.4rem; font-family: var(--mono); font-weight: 600; color: var(--ink-soft); }
+p { margin: 0 0 0.9rem; }
+ul, ol { margin: 0 0 0.9rem; padding-left: 1.3rem; }
+li { margin-bottom: 0.4rem; }
+code { font: 0.85em var(--mono); background: var(--code-bg); padding: 0.1em 0.34em; border-radius: 3px; }
+pre {
+  background: var(--code-bg); border: 1px solid var(--rule-soft); border-radius: 6px;
+  padding: 0.9rem 1rem; overflow-x: auto; font: 0.8rem/1.55 var(--mono); margin: 0 0 1.1rem;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+.scroll { overflow-x: auto; margin: 0 0 1.2rem; }
+table { border-collapse: collapse; width: 100%; font-size: 0.88rem; font-family: system-ui, sans-serif; }
+th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+th { font: 600 0.74rem/1.3 var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); border-bottom: 1px solid var(--rule); }
+tbody tr:last-child td { border-bottom: none; }
+td code { font-size: 0.82em; }
+.card {
+  background: var(--panel); border: 1px solid var(--rule); border-radius: 8px;
+  padding: 1.1rem 1.25rem; margin: 0 0 1.2rem;
+}
+.card h3 { margin-top: 0; }
+.verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.verdict { background: var(--panel); border: 1px solid var(--rule); border-left: 4px solid var(--rule); border-radius: 6px; padding: 0.9rem 1.1rem; }
+.verdict.closed { border-left-color: var(--good); }
+.verdict.blocked { border-left-color: var(--warn); }
+.verdict .id { font: 600 0.8rem var(--mono); color: var(--ink-soft); }
+.verdict .state { font: 700 1.02rem/1.3 system-ui, sans-serif; margin: 0.3rem 0 0.4rem; }
+.verdict.closed .state { color: var(--good); }
+.verdict.blocked .state { color: var(--warn); }
+.verdict p { font-size: 0.87rem; color: var(--ink-soft); margin: 0; font-family: system-ui, sans-serif; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.75rem; margin: 0 0 1.5rem; }
+.stat { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.75rem 0.9rem; }
+.stat .n { font: 700 1.35rem/1.1 system-ui, sans-serif; display: block; }
+.stat .l { font: 0.7rem/1.35 var(--mono); color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.05em; }
+.pill { display: inline-block; font: 600 0.68rem/1 var(--mono); padding: 0.28em 0.5em; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+.pill.ok { background: var(--accent-soft); color: var(--good); }
+.pill.hold { background: var(--accent-soft); color: var(--warn); }
+.pill.no { background: var(--accent-soft); color: var(--bad); }
+blockquote {
+  margin: 0 0 1.1rem; padding: 0.1rem 0 0.1rem 1rem;
+  border-left: 3px solid var(--accent); color: var(--ink-soft);
+}
+.note { background: var(--accent-soft); border-radius: 6px; padding: 0.85rem 1.1rem; margin: 0 0 1.2rem; font-size: 0.93rem; }
+.note strong { color: var(--ink); }
+hr.end { border: none; border-top: 1px solid var(--rule); margin: 3.5rem 0 1.25rem; }
+footer { font: 0.78rem/1.6 var(--mono); color: var(--ink-faint); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <div class="kicker">neograph &middot; session report</div>
+  <h1>Agent Spec boundary wiring: Each fan-out results, and a Portal mesh that cannot be proven</h1>
+  <p class="sub">Molecular bug triage of <code>neograph-qtfof.11</code> and <code>neograph-qtfof.12</code> &mdash; one bug fixed end to end, one bug half-fixed and deliberately left open.</p>
+  <div class="meta">
+    <span><b>Date</b> 2026-08-18</span>
+    <span><b>Branch</b> develop</span>
+    <span><b>Molecule</b> neograph-zvjhn (22 atoms)</span>
+    <span><b>Commits</b> 4, pushed</span>
+    <span><b>SDK</b> pyagentspec 26.1.2</span>
+  </div>
+</header>
+
+<h2>1. Mandate and outcome</h2>
+
+<p>The session was invoked as <code>/dev-practices:execute qtfof.11 qtfof.12</code>. Both tickets are type <code>bug</code>, so the <code>bug-triage</code> formula was cooked into epic <strong>neograph-zvjhn</strong>: one shared baseline atom, nine atoms per bug, two finalize atoms, plus one refine atom spawned mid-walk by a <code>NEEDS_REFINEMENT</code> triage verdict. All 22 atoms are closed.</p>
+
+<div class="verdicts">
+  <div class="verdict closed">
+    <div class="id">neograph-qtfof.11</div>
+    <div class="state">CLOSED &mdash; fixed</div>
+    <p>An Each sub-flow's EndNode declared no outputs, so the exported MapNode exposed none and the entire fan-out result was dropped at the boundary. Fixed, mutation-verified, proven end to end through the real third-party runtime and over the JSON wire form.</p>
+  </div>
+  <div class="verdict blocked">
+    <div class="id">neograph-qtfof.12</div>
+    <div class="state">OPEN &mdash; blocked</div>
+    <p>Half landed (the conformance misattribution). The data-plane half was <em>not</em> landed: its acceptance requires execution under the real loader, and that is measurably impossible today. Now blocked on the new ticket qtfof.20.</p>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat"><span class="n">4851 &rarr; 4895</span><span class="l">tests passing</span></div>
+  <div class="stat"><span class="n">0</span><span class="l">failures, start and end</span></div>
+  <div class="stat"><span class="n">105 &rarr; 96</span><span class="l">skips (exemptions shrank)</span></div>
+  <div class="stat"><span class="n">4 &rarr; 10</span><span class="l">cells certified portable</span></div>
+  <div class="stat"><span class="n">2</span><span class="l">new structural guards</span></div>
+  <div class="stat"><span class="n">3</span><span class="l">follow-up tickets filed</span></div>
+</div>
+
+<div class="note">
+  <strong>The one-line summary.</strong> qtfof.11 turned out to be bigger than its ticket &mdash; fixing it flipped a latent trap in pyagentspec's edge synthesis, unblocked six matrix cells, and exposed a stale conformance predicate. qtfof.12 turned out to be smaller than its ticket &mdash; only half of it is provable today, and the honest move was to land that half and say plainly why the rest did not ship.
+</div>
+
+<h2>2. Baseline and final gate</h2>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Gate</th><th>Baseline (pre-change)</th><th>Final</th><th>Delta</th></tr></thead>
+  <tbody>
+    <tr><td><code>uv run pytest</code></td><td>4851 passed, 105 skipped, 0 failed (103.8s)</td><td>4895 passed, 96 skipped, 0 failed (92.1s)</td><td>+44 passed, &minus;9 skipped</td></tr>
+    <tr><td><code>ruff check src tests</code></td><td>clean</td><td>clean</td><td>&mdash;</td></tr>
+    <tr><td><code>mypy src</code></td><td>clean, 152 files</td><td>clean, 152 files</td><td>&mdash;</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>The nine fewer skips are the point, not a rounding artifact: <code>EXEC_EXEMPT</code> and <code>COMPARE_EXEMPT</code> are computed, shrink-only exemption sets, and six Each cells moved out of them into the differential-execution tier. Both sets shrinking is the direction the conformance epic exists to drive.</p>
+
+<h2>3. Bug one &mdash; qtfof.11: the fan-out result never left the MapNode</h2>
+
+<h3>Root cause</h3>
+
+<p><code>_lower_each</code> built the Each sub-Flow's terminal boundary as a bare <code>EndNode(name=...)</code> &mdash; no declared outputs, no <code>DataFlowEdge</code> feeding it. pyagentspec infers <em>up</em> that chain, so a single empty node erased the whole result:</p>
+
+<pre><code>EndNode.outputs = []                      (built bare)
+  -&gt; Flow._get_inferred_outputs()  = []   (reads its EndNodes)
+    -&gt; MapNode._get_inferred_outputs() = []   (reads subflow.outputs)
+      -&gt; nothing downstream can source a DataFlowEdge from the MapNode
+        -&gt; the outermost EndNode falls into qtfof.9's unwirable fallback
+          -&gt; a third-party invoke() returns {}</code></pre>
+
+<p>Observed directly before any change: the body executed once per element, and <code>invoke()</code> returned <code>{'outputs': {}}</code>. The graph computed the right thing and threw it away at the boundary.</p>
+
+<h3>The design question the ticket demanded be settled first</h3>
+
+<p>The ticket refused to be fixed blind: <em>does a MapNode wrap the inferred output in a list, or is the inner shape surfaced as-is?</em> Answered by reading the installed SDK rather than guessing &mdash; <code>MapNode._get_inferred_outputs</code> retitles every sub-flow output <code>collected_{title}</code>, and <code>_get_default_reducers</code> assigns <code>APPEND</code> to each, which wraps it in an array. So the inner EndNode declares the terminal producer's <strong>bare</strong> Properties; the prefix and the list-wrapping are pyagentspec's own doing.</p>
+
+<p>That answer drove the implementation choice: <strong>read the lowered node's materialised <code>.outputs</code>, never re-derive the convention.</strong> <code>ComponentWithIO.model_post_init</code> materialises inferred Properties at construction, so the MapNode can simply be asked. There is now zero <code>collected_</code> string literal in <code>src/</code>, and a guard keeps it that way.</p>
+
+<h3>The discovery that changed the fix: the auto-wiring flip</h3>
+
+<p>This was raised as a <span class="pill no">HIGH</span> risk in the architect-review atom, before any code was written, and it is the finding that justified the whole review step.</p>
+
+<blockquote>pyagentspec's loader synthesises same-title data edges for a Flow <em>only</em> while <code>data_flow_connections is None</code> &mdash; all-or-nothing (<code>_langgraphconverter.py</code>). The plain Each sub-Flow shipped <code>None</code> and <strong>depended</strong> on that synthesis for its <code>StartNode('item') &rarr; body('item')</code> input path.</blockquote>
+
+<p>Adding the EndNode edge &mdash; the ticket's actual fix &mdash; would have been the sub-Flow's first explicit edge, silently switching synthesis off and starving the body's input. The fix would have converted a missing-result bug into a missing-input bug, and every assertion in the original reproduction test would still have passed, because a constant body returns the same value regardless of what it was handed.</p>
+
+<p>Two consequences, both folded into the same change:</p>
+<ul>
+  <li>The <code>StartNode &rarr; body</code> edges are emitted alongside the EndNode edge, generically for both the plain and the fused Each&nbsp;&times;&nbsp;Oracle branches. That is <em>not</em> a blanket replay of the loader's rule &mdash; replayed verbatim on the fused body it would put both variants and the merge onto the EndNode's single input (many sources, one destination, last writer wins). Only the two safe directions are emitted.</li>
+  <li>The reproduction test was strengthened before implementation: the Each body now <strong>echoes the element it received</strong>, so the collected list must contain three distinct values. A constant result would have certified the broken input path.</li>
+</ul>
+
+<p>The generic wiring also closed a pre-existing gap nobody had filed: the fused Each&nbsp;&times;&nbsp;Oracle sub-flow already shipped explicit edges, so its <code>item</code> input had <em>never</em> been fed. Those three cells became loadable for the first time.</p>
+
+<h3>What landed</h3>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>File</th><th>Change</th></tr></thead>
+  <tbody>
+    <tr><td><code>_agent_spec_boundary.py</code></td><td>New <code>close_sub_flow()</code> &mdash; builds a modifier's sub-Flow closed at its boundary (EndNode declared from the lowered terminal producer, terminal&rarr;End edge, Start&rarr;body edges). Plus <code>_INFERRED_SHAPES</code>/<code>_inferred_output_props</code> admitting <code>PrimaryShape.EACH</code> to <code>resolve_end_node_sources</code> by reading the lowered MapNode.</td></tr>
+    <tr><td><code>_agent_spec_modifier_lowering.py</code></td><td><code>_lower_each</code> delegates its whole sub-Flow assembly to <code>close_sub_flow</code>. Net <strong>shrink</strong> 650 &rarr; 648 lines despite gaining behaviour.</td></tr>
+    <tr><td><code>_agent_spec_conformance.py</code></td><td><code>modifier_metadata_only_fanout</code> repointed from the IR level to the exported artifact (see &sect;5).</td></tr>
+    <tr><td><code>tests/test_agent_spec_each_output_boundary.py</code></td><td>New, 12 tests: end-to-end result under the real loader, the MapNode's declared titles, both boundary edges.</td></tr>
+    <tr><td><code>tests/agent_spec_loader_harness.py</code></td><td>New shared <code>terminal_property_map()</code> &mdash; one projection for both COMPARE tiers.</td></tr>
+    <tr><td><code>tests/test_guards_agent_spec_sdk_conventions.py</code></td><td>New guard, 6 tests: no SDK-inferred naming convention may be hand-rolled in <code>src/</code>.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Mutation verification</h3>
+
+<p>Two independent reverts, each confirming the tests grade what they claim:</p>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Mutation</th><th>Result</th><th>What it proves</th></tr></thead>
+  <tbody>
+    <tr><td>EndNode built without <code>outputs=</code></td><td>12 of 12 RED</td><td>The core defect is what the suite measures.</td></tr>
+    <tr><td><code>StartNode &rarr; body</code> half dropped only</td><td>3 RED, 9 pass</td><td>Exactly the echo assertion added by the review's finding&nbsp;6. Without it, this silent seam ships green.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Knock-on effects, all in the shrink direction</h3>
+
+<ul>
+  <li><strong>COMPARE tier widened by six cells.</strong> The calibration test demanded bodies for the newly loadable fused cells rather than an exemption; they were written.</li>
+  <li><strong>Conformance PORTABLE set 4 &rarr; 10.</strong> The vacuity-ratchet literal was updated only after re-reading both directions of the biconditional and confirming both were empty.</li>
+  <li><strong>Byte-snapshot golden regenerated</strong> as its seventh sanctioned modification, following the procedure that file's own docstring records: extent measured <em>before</em> patching &mdash; exactly 4 of 34 cells changed, 30 byte-identical, key sets equal per changed cell, diff confined to four top-level keys.</li>
+  <li><strong>File-size ratchet lowered</strong> 650 &rarr; 648. The guard's counsel is "if it grew, shrink it in-PR, do not raise the number"; moving the sub-Flow assembly into the module that already owned the outermost boundary satisfied that literally.</li>
+</ul>
+
+<h3>End-to-end proof</h3>
+
+<p>Beyond the test suite, the fix was exercised over the real wire form &mdash; <code>to_agent_spec()</code> &rarr; <code>to_dict()</code> &rarr; <code>json.dumps</code> (7960 bytes) &rarr; <code>json.loads</code> &rarr; <code>AgentSpecLoader.load_dict</code> &rarr; <code>invoke()</code>:</p>
+
+<pre><code>outputs: {'collected_ok': ['e1', 'e2', 'e3']}</code></pre>
+
+<p>The body echoed its element, so this single result proves both directions across the wire: per-element input arrival and per-element result collection. The import direction (<code>from_agent_spec</code>) was re-checked and still reconstructs the Construct.</p>
+
+<h2>4. Bug two &mdash; qtfof.12: the half that could be proven, and the half that could not</h2>
+
+<p>The ticket contained two separable defects. They were graded differently, on purpose.</p>
+
+<h3>Half A &mdash; the misattribution <span class="pill ok">landed</span></h3>
+
+<p>An <em>ungated</em> Portal peer mesh exports a <code>Swarm</code>, and the conformance walker early-returns <code>portal_mesh_unverified</code> for it &mdash; an honest "zero GREEN cells of this shape, so absence of a failure signal is not evidence". A <em>gated</em> mesh exports a <strong>Flow</strong> (the mesh-exit pause composite), fell past that early return into the outermost-EndNode check, and was reported as <code>outermost_end_node_unwired</code> &mdash; that is, filed against <strong>neograph-qtfof.9</strong>, a ticket that has landed and whose fix provably cannot reach this shape.</p>
+
+<p>Filing an open gap against a closed bead makes the conformance report claim the gap is already fixed. The gated mesh now gets the same <code>portal_mesh_unverified</code> predicate its ungated sibling does, detected structurally off the artifact (an <code>AgentNode</code> whose <code>.agent</code> is a <code>Swarm</code> &mdash; the only such construction site). Both predicates sit at the same tier, so the <em>verdict</em> does not move: the finding is re-addressed, not promoted. That is asserted explicitly, so a future change cannot quietly turn a re-attribution into a promotion.</p>
+
+<p>Detection is deliberately not marker-based. Reading <code>neograph/modifier</code> would mean importing <code>_agent_spec_markers</code> and creating the cycle the classifier's docstring forbids. That invariant turned out to be unguarded, so the session added a guard for it.</p>
+
+<h3>Half B &mdash; the data plane <span class="pill hold">not landed</span></h3>
+
+<p>The gated Flow's two exit EndNodes still declare nothing, and the Flow still carries zero <code>data_flow_connections</code>. Its acceptance criterion names execution under the real <code>AgentSpecLoader</code>, and that evidence cannot be produced today. Three independent blockers, each measured against the installed SDK rather than assumed:</p>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>#</th><th>Shape</th><th>Blocker</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Ungated mesh &rarr; <code>Swarm(handoff=NEVER)</code></td><td><code>ValueError: Handoff mode NEVER is not supported for conversion in LangGraph adapter</code>. neograph exports <code>NEVER</code> deliberately &mdash; it is the faithful encoding of a Portal mesh's non-conversation-sharing semantics &mdash; so this is a real semantic collision, not a typo.</td></tr>
+    <tr><td>2</td><td>Gated mesh &rarr; Flow wrapping the Swarm</td><td>Loads, then dies at run time: <code>TypeError: AgentNodeExecutor can only be used with AgentSpecAgent agents</code>. pyagentspec accepts <code>AgentNode(agent=Swarm)</code> at the <em>schema</em> level (<code>SerializeAsAny[AgenticComponent]</code>) while its own reference runtime refuses to execute it. The composite is schema-legal and runtime-dead.</td></tr>
+    <tr><td>3</td><td>Mesh members</td><td><code>llm_config.api_provider = None</code> (the separate qtfof.8 gap). Even with 1 and 2 solved, execution needs a resolvable provider.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="note">
+  <strong>Why this half was not fixed anyway.</strong> The ticket itself says fixing an unexercised path blind is how a second silent seam gets added, and the execute skill's rule is explicit: infeasible integration <em>blocks closure</em>, it never downgrades the bar. The implementation atom closed; the <strong>bead did not</strong>. Landing a plausible-looking data plane against a path no runtime can execute would have satisfied the ticket's text while violating its reasoning.
+</div>
+
+<p>Both blockers are pinned by tests that pass today and <strong>fail loudly the day either lifts</strong> &mdash; an SDK upgrade or an export-shape change. That failure is the signal that the prerequisite has been met. The prerequisite is filed as <strong>neograph-qtfof.20</strong>, now a hard dependency of qtfof.12.</p>
+
+<h2>5. The cross-cutting finding: predicates keyed on a proxy</h2>
+
+<p>Both bugs' disease scans converged on one shape, which is the session's most transferable result:</p>
+
+<blockquote>A conformance predicate keyed on a <em>proxy</em> (a modifier is present; the top-level export type) rather than on the artifact fact its own meaning text claims to measure &mdash; so it fires on shapes it does not describe, or misses shapes it does.</blockquote>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Instance</th><th>Proxy it was keyed on</th><th>Disposition</th></tr></thead>
+  <tbody>
+    <tr><td><code>modifier_metadata_only_fanout</code></td><td>"an Each modifier is present"</td><td><span class="pill ok">migrated</span> to <code>_check_map_node_fanout</code>: is every MapNode's <code>iterated_*</code> input actually fed? Still fires for the LLM-mode and single-type-inputs Each, which genuinely ship no edge &mdash; now for the real reason.</td></tr>
+    <tr><td><code>portal_mesh_unverified</code></td><td>"the top-level export is a Swarm"</td><td><span class="pill ok">migrated</span> to also cover the Flow-wrapping-a-Swarm spelling of the same shape.</td></tr>
+    <tr><td><code>modifier_metadata_only_branch</code></td><td>"a Loop or Operator modifier is present"</td><td><span class="pill hold">deferred</span> to neograph-qtfof.19 &mdash; the same question, unanswered, and not something a fix atom should refactor in passing.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>The first instance was found only because the empirical calibration test contradicted it: once the Each cells actually executed correctly, a predicate calling them unportable became a demonstrable over-match. That test earned its keep this session.</p>
+
+<h2>6. New structural guards</h2>
+
+<p>Both were written to fail first, and both were <em>proved</em> to fail by injecting a real violation into <code>src/</code> and reverting &mdash; not asserted.</p>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Guard</th><th>Bans</th><th>Meta-tests</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>test_guards_agent_spec_sdk_conventions.py</code><br><span style="color:var(--ink-faint)">qtfof.11</span></td>
+      <td>Any string constant in <code>src/neograph</code> spelling out an SDK-inferred naming convention (<code>collected_</code>). Allowlist empty, and may only stay empty.</td>
+      <td>f-string form; the <strong>concatenation form a regex would miss</strong> (which is why it is AST-based); prose does not fire; unrelated literals do not fire; anti-vacuity floor on files scanned.</td>
+    </tr>
+    <tr>
+      <td><code>TestClassifierDoesNotImportTheExporter</code><br><span style="color:var(--ink-faint)">qtfof.12</span></td>
+      <td>Any <code>neograph._agent_spec*</code> import from <code>_agent_spec_conformance.py</code> &mdash; the invariant that forced structural detection over a marker read.</td>
+      <td>plain <code>from</code> import; <strong>aliased <code>import ... as</code></strong> (an <code>ast.Import</code>, invisible to a <code>from</code>-regex); <strong>function-local import</strong> &mdash; the spelling reached for precisely to "avoid the cycle", which only hides it until run time; unrelated imports do not fire.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2>7. The molecule walk</h2>
+
+<p>Twenty-one atoms were cooked; one more was spawned by triage. Every gate label was earned before its dependent atom ran.</p>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Atom</th><th>Step</th><th>Outcome</th></tr></thead>
+  <tbody>
+    <tr><td><code>.1</code></td><td>Baseline</td><td>4851 passed, 0 failed. Recorded on the epic.</td></tr>
+    <tr><td><code>.2</code></td><td>Reproduce qtfof.11</td><td>12 RED. Root cause traced through the SDK's own inference chain. <code>reproduce:complete</code>.</td></tr>
+    <tr><td><code>.3</code></td><td>Trace similar</td><td>Exhaustive sweep: exactly three boundary-construction sites exist, all already filed. No new ticket needed.</td></tr>
+    <tr><td><code>.4</code></td><td>Disease scan</td><td>Classified syntactic; one ALLOWLIST row, one zero-instance invariant to preserve. <code>codebase-scan:complete</code>.</td></tr>
+    <tr><td><code>.5</code></td><td>Architect review</td><td>One HIGH (the auto-wiring flip), three MEDIUM. Verdict <code>NEEDS_REFINEMENT</code>.</td></tr>
+    <tr><td><code>.6</code></td><td>Triage</td><td>Routed the verdict: spawned <code>.22</code> and inserted it before the fix atom.</td></tr>
+    <tr><td><code>.22</code></td><td>Refine</td><td>Fix approach rewritten: Start&rarr;body edges made mandatory, generic-over-both-branches decided, coverage gap closed.</td></tr>
+    <tr><td><code>.7</code></td><td>Fix qtfof.11</td><td>Landed; two mutations verified; full gate green. Bug closed.</td></tr>
+    <tr><td><code>.8</code></td><td>Sweep verify</td><td>Re-scan diffed row by row; guard written and proved failing-first. <code>sweep:complete</code>.</td></tr>
+    <tr><td><code>.9</code></td><td>E2E verify</td><td>Executed over the JSON wire form (see &sect;3).</td></tr>
+    <tr><td><code>.10</code></td><td>Commit</td><td><code>42dbba1</code>.</td></tr>
+    <tr><td><code>.11</code></td><td>Reproduce qtfof.12</td><td>2 RED (misattribution) + 4 GREEN blocker pins. <code>reproduce:complete</code>.</td></tr>
+    <tr><td><code>.12</code></td><td>Trace similar</td><td>Found the proxy-keyed-predicate shape had two instances, one already fixed earlier in this molecule.</td></tr>
+    <tr><td><code>.13</code></td><td>Disease scan</td><td>Six emission sites swept; one MIGRATE, one DEFER (filed qtfof.19). <code>codebase-scan:complete</code>.</td></tr>
+    <tr><td><code>.14</code></td><td>Architect review</td><td>ALL_LOW for half A; half B classified as blocked, not refinable.</td></tr>
+    <tr><td><code>.15</code></td><td>Triage</td><td>Proceed with half A only.</td></tr>
+    <tr><td><code>.16</code></td><td>Fix qtfof.12</td><td>Half A landed and mutation-verified. Filed qtfof.20; bug left open and blocked on it.</td></tr>
+    <tr><td><code>.17</code></td><td>Sweep verify</td><td>Second guard written and proved failing-first. <code>sweep:complete</code>.</td></tr>
+    <tr><td><code>.18</code></td><td>E2E verify</td><td>Not applicable for what landed &mdash; and the reason is itself the finding.</td></tr>
+    <tr><td><code>.19</code></td><td>Commit</td><td><code>d912ec3</code>.</td></tr>
+    <tr><td><code>.20</code></td><td>Regression</td><td>4895 passed, 0 failed; ruff and mypy clean.</td></tr>
+    <tr><td><code>.21</code></td><td>Sync</td><td>Beads exported, rebased, pushed; working tree clean against origin.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>8. Commits</h2>
+
+<pre><code>a08b1cc  chore(beads): close the qtfof.11/.12 bug-triage molecule
+619a536  chore(beads): sync issue state for the qtfof.11/.12 bug-triage molecule
+d912ec3  fix(agent-spec): stop filing a gated Portal mesh under the landed qtfof.9 (qtfof.12, half A)
+           4 files changed  |  src +42, tests +224
+42dbba1  fix(agent-spec): declare and wire an Each sub-flow's EndNode (qtfof.11)
+          13 files changed  |  src +254/-, tests +510, golden regenerated</code></pre>
+
+<p>All four are on <code>origin/develop</code>; <code>git status</code> reports the branch up to date.</p>
+
+<h2>9. Tickets filed</h2>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>ID</th><th>Priority</th><th>What it is</th></tr></thead>
+  <tbody>
+    <tr><td><code>neograph-qtfof.20</code></td><td>P2</td><td><strong>Make a Portal mesh cell executable under the real AgentSpecLoader.</strong> The prerequisite qtfof.12 is now blocked on. Carries all three measured blockers, plus the note that blockers 1 and 2 are arguably upstream SDK gaps worth reporting.</td></tr>
+    <tr><td><code>neograph-qtfof.19</code></td><td>P3</td><td><strong>Is <code>modifier_metadata_only_branch</code> an IR-level over-match</strong> now that qtfof.6 synthesizes a Loop predicate? The third instance of the proxy-keyed-predicate shape, deferred rather than refactored in passing.</td></tr>
+    <tr><td><code>neograph-zvjhn.22</code></td><td>P2</td><td>The refine atom spawned by triage; closed within the molecule.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>10. Judgement calls, stated plainly</h2>
+
+<p>Four decisions in this session were judgement, not mechanics. Each is recorded here so it can be overruled rather than discovered.</p>
+
+<ol>
+  <li><strong>Widening the fix beyond its ticket.</strong> qtfof.11's ticket describes the EndNode only. The Start&rarr;body edges were added because the ticket's own fix makes them necessary &mdash; not as scope creep but as the cost of not shipping a new silent seam. The generic form also fixed the fused branch's unfiled unfed input.</li>
+  <li><strong>Repointing a conformance predicate during a bug fix.</strong> Normally out of bounds for a fix atom. Forced here: the calibration test fails if a predicate calls a cell unportable while the empirical authority executes it correctly. The alternative &mdash; a computed exemption &mdash; would have preserved a known-stale predicate.</li>
+  <li><strong>Two allowlist-style sets grew by one entry each</strong> (the designated Flow-walker set; nothing else). Both are one-per-concern registries rather than capability monopolies, and both entries carry a written justification in the guard itself. The file-size ratchet went the other way &mdash; it was <em>lowered</em>.</li>
+  <li><strong>The qtfof.12 reproduction contains characterization tests</strong> that assert the current broken state. That is normally an anti-pattern. It is justified only because each such assertion carries a message naming what to do when it flips, and because the alternatives &mdash; a permanently red test, or a blind fix &mdash; are worse. <em>They must be deleted, not amended, when half B lands.</em></li>
+</ol>
+
+<h3>Known limits of what was proven</h3>
+
+<ul>
+  <li>The Each collection's <strong>ordering</strong> is pyagentspec's arrival order under its APPEND reducer, not neograph's <code>map_key</code> order. The shared COMPARE projection is a transpose, not a rename, and the cells compared use constant bodies, so ordering was not the thing under test.</li>
+  <li>The <code>collected_</code> guard catches the prefix as <strong>source text</strong>. A fully dynamic construction (<code>"".join([...])</code>) is out of reach of any static scan and is not claimed.</li>
+  <li>A <strong>non-EndNode downstream consumer</strong> of an Each producer remains unsupported: such a consumer must declare <code>list[X]</code>/<code>dict[str, X]</code>, which <code>_properties_for</code> rejects outright long before any edge is emitted. That is an existing, already-loud gap, explicitly out of qtfof.11's scope.</li>
+  <li>The <code>iterated_</code> input prefix is still hand-composed at one site. It was dispositioned ALLOWLIST, not migrated: it is shipped, execution-tested, and migrating it is a refactor of a working path, which a fix atom does not do.</li>
+</ul>
+
+<h2>11. Handoff</h2>
+
+<p>Nothing is stranded. The tree is clean, everything is pushed, and the molecule is closed.</p>
+
+<ul>
+  <li><strong>qtfof.12 is open and blocked</strong> on qtfof.20. It should not be picked up before that; its remaining half has no way to be verified.</li>
+  <li><strong>When qtfof.20 lands</strong>, the signal is mechanical: <code>TestTheDataPlaneHalfIsBlockedByTheSdk</code> starts failing. Then reuse <code>close_sub_flow</code> for the data plane &mdash; and answer, rather than override, the shape mismatch it exposes: that helper assumes one terminal producer, while a gated mesh has two exits and no terminal producer at all.</li>
+  <li><strong>qtfof.19</strong> is independent and cheap: determine empirically whether a Loop cell with a synthesized predicate now executes correctly, then either repoint the predicate or record the measured reason it must stay IR-level.</li>
+  <li><strong>Worth considering:</strong> blockers 1 and 2 of qtfof.20 look like genuine pyagentspec gaps &mdash; a schema-legal composite its own adapter cannot execute, and a handoff mode the adapter refuses. Reporting them upstream may be cheaper than working around them.</li>
+</ul>
+
+<hr class="end">
+<footer>
+  neograph &middot; session report &middot; work performed 2026-08-18 on branch develop &middot; molecule neograph-zvjhn<br>
+  Written to <code>docs/reports/session-2026-08-18-qtfof-11-12.html</code>
+</footer>
+
+</div>
+</body>
+</html>

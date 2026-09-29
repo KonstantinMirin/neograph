@@ -86,6 +86,7 @@ from neograph import (
     Loop,
     Node,
     Oracle,
+    Portal,
     Tool,
     compile,
     construct_from_functions,
@@ -1178,3 +1179,115 @@ class TestTheFrameworkPortTailIsGone:
             "run_isolated now seeds the port channel, so the second spelling must go rather than "
             "linger as a channel nothing writes."
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 10 -- neograph-sdqsv, neograph-qtxg1 (N4) and the review's C5.
+#
+# A Portal mesh member's value arrives by HOP, on the entry-keyed mesh channel.
+# A single-type `inputs=Payload` on a member therefore declares a read no producer
+# feeds -- and the resolver, finding a SIBLING member that produces the same type,
+# stamped it. Six such stamps were measured. Validation waved the shape through on
+# a presence test (`portal is not None`) whose comment said "mesh member", while
+# `portal_member_class` says a route="decide" DISPATCH Portal is NOT one -- so a
+# dispatch first node was tolerated unfed by a claim the authority denies.
+#
+# The refusal has to point somewhere sound, which is C5: the dict-form `handoff`
+# key it names is itself None on the ENTRY's first activation, and validation
+# required that key to be typed exactly the payload -- so the shape the refusal
+# recommends could not be declared honestly.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class Payload(BaseModel, frozen=True):
+    goto: str
+
+
+class Spec(BaseModel, frozen=True):
+    spec: str
+
+
+def _mesh_with_single_type_members() -> Construct:
+    """Two peers whose reads are single-type, each producing the other's type."""
+    register_scripted("dr_ms_hop", lambda _i, _c: Payload(goto="__end__"))
+    triage = Node.scripted("triage", fn="dr_ms_hop", inputs=Payload, outputs=Payload) | Portal(
+        to=["billing"], max_hops=5
+    )
+    billing = Node.scripted("billing", fn="dr_ms_hop", inputs=Payload, outputs=Payload) | Portal(to=["triage"])
+    return Construct("sdqsv-mesh", nodes=[triage, billing])
+
+
+class TestMeshReadsAreRefusedOrRequired:
+    """neograph-sdqsv, neograph-qtxg1, and the C5 half that makes the hint true."""
+
+    def test_a_single_type_read_on_a_mesh_member_is_refused(self):
+        """Refused with a hint naming the spelling that CAN be fed.
+
+        Measured before: `triage` was stamped `Peer(billing)` -- its sibling, whose
+        field is written only if that member ran. The value the member actually reads
+        comes from the mesh channel, which no single-type address can name.
+        """
+        with pytest.raises(ConstructError) as exc_info:
+            _mesh_with_single_type_members()
+
+        message = str(exc_info.value)
+        assert "handoff" in message, f"the refusal must name the dict-form reserved key that IS fed. Got: {message}"
+
+    def test_a_dispatch_portal_first_node_is_refused(self):
+        """N4: `route="decide"` is not a mesh member, so the member exemption is not its.
+
+        `portal_member_class` returns DISPATCH, and both the validator's mesh rules
+        and the wiring layer skip DISPATCH -- only this exemption tested
+        `portal is not None` and let it through, so a dispatch node declaring an
+        unfeedable single-type read assembled and ran with `None`.
+        """
+        register_scripted("dr_ms_plan", lambda _i, _c: Payload(goto="__end__"))
+        planner = Node.scripted("planner", fn="dr_ms_plan", inputs=Spec, outputs=Payload) | Portal(
+            route="decide",
+            spec_field="spec",
+            input_field="dispatch_input",
+            output=Payload,
+            max_depth=2,
+        )
+        with pytest.raises(ConstructError, match=r"no upstream produces a compatible value|first"):
+            Construct("qtxg1-dispatch-first", nodes=[planner])
+
+    def test_the_mesh_entry_may_declare_its_handoff_optional(self):
+        """C5. The entry's first activation is LINEAR: no hop has written the channel.
+
+        So the entry legitimately reads nothing there, and the only honest declaration
+        is `Payload | None`. Validation required the key to be typed exactly the
+        payload, which made the shape the refusal above recommends undeclarable -- a
+        refusal pointing at a door that does not open.
+        """
+        register_scripted("dr_ms_entry", lambda _i, _c: Payload(goto="billing"))
+        register_scripted("dr_ms_peer", lambda _i, _c: Payload(goto="__end__"))
+
+        entry = Node.scripted("entry", fn="dr_ms_entry", inputs={"handoff": Payload | None}, outputs=Payload) | Portal(
+            to=["peer"], max_hops=3
+        )
+        peer = Node.scripted("peer", fn="dr_ms_peer", inputs={"handoff": Payload}, outputs=Payload) | Portal(
+            to=["entry"]
+        )
+
+        pipeline = Construct("c5-optional-entry", nodes=[entry, peer])
+        assert pipeline.nodes[0].handoff_param == "handoff"
+
+    def test_a_non_entry_member_must_declare_the_payload_exactly(self):
+        """A non-entry member only ever arrives by hop, so its read is REQUIRED.
+
+        Letting it declare the key Optional would buy back exactly the silence this
+        step removes: a missing hop payload would read as a legitimate None.
+        """
+        register_scripted("dr_ms_e2", lambda _i, _c: Payload(goto="peer"))
+        register_scripted("dr_ms_p2", lambda _i, _c: Payload(goto="__end__"))
+
+        entry = Node.scripted("entry", fn="dr_ms_e2", inputs={"handoff": Payload | None}, outputs=Payload) | Portal(
+            to=["peer"], max_hops=3
+        )
+        peer = Node.scripted("peer", fn="dr_ms_p2", inputs={"handoff": Payload | None}, outputs=Payload) | Portal(
+            to=["entry"]
+        )
+
+        with pytest.raises(ConstructError, match=r"handoff"):
+            Construct("c5-optional-non-entry", nodes=[entry, peer])

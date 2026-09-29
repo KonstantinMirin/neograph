@@ -127,6 +127,14 @@ MIGRATED: frozenset[str] = frozenset(
         # mesh, so the runtime wrote one channel key and every member read another.
         # Now asks the same classifier _wiring and _validation_portal already did.
         "_ir_normalize.py",
+        # neograph-4cvx8 step 5: the resolver REFUSES a mesh member's single-type read.
+        # A member's value arrives by hop on the mesh channel, so no producer feeds
+        # that declaration -- and the resolver used to search anyway and stamp whichever
+        # sibling member produced the same type. Asks the classifier rather than
+        # `portal is not None` for the reason this inventory exists: a route="decide"
+        # Portal is not a member, so it must NOT get the member refusal and falls under
+        # the ordinary rules instead.
+        "_ir_resolve.py",
         # neograph-wvp7j: the test scaffold's mesh collector. It asks the classifier
         # twice -- to FILTER construct.nodes down to mesh participants (excluding
         # DISPATCH, which is a standalone linear node and never a member), and to

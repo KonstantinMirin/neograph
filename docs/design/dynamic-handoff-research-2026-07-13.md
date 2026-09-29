@@ -559,6 +559,29 @@ load-bearing *at runtime*, not just a file loader.
   reachable," not "exactly one producer feeds each consumer." Mode (b) has no such
   weakening: the emitted spec is validated in full at dispatch.
 
+> **Amendment, 2026-09-29 (`neograph-4cvx8` step 5, closing `neograph-sdqsv`).** The
+> position above resolved the difficulty by DEFERRING to a runtime isinstance scan
+> over state. That scan no longer exists (`neograph-t1nbp` deleted it), and the
+> deferral was never sound anyway: a mesh member's single-type `inputs=Payload`
+> declares a read no producer feeds, and while the resolver still searched, it found
+> whichever SIBLING member produced the same type and stamped that -- a field written
+> only if that member happened to run. Six such stamps were measured.
+>
+> The fixpoint is not computed and does not need to be. A member's value arrives on
+> ONE named channel written by the mechanism that creates the fact, so the read is
+> spelled as the reserved dict-form `handoff` key and addressed to that channel.
+> A single-type read on a member is REFUSED at assembly, with a hint naming the key.
+> What replaced "defer to the runtime" is therefore not a stronger static analysis but
+> a narrower surface: the ambiguity the fixpoint would have had to resolve is not
+> expressible.
+>
+> One asymmetry is load-bearing and is validated: the mesh ENTRY may type the key
+> `Payload | None`, because its first activation is linear and no hop has written the
+> channel yet. A non-entry member may not -- it only ever arrives by hop, so its
+> payload is always present and an absent one is a defect. The runtime follows the
+> DECLARED TYPE rather than re-deriving which member is the entry: absence is a value
+> only where the type admits one.
+
 ### 5b. Composition with checkpointing
 
 - **Mode (a) peer hops are checkpointed supersteps.** Each `Command(goto)` hop writes
