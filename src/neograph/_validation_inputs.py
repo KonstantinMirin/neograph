@@ -72,7 +72,18 @@ def _check_item_input(
                     location=_source_location(),
                 )
         if not isinstance(item, Node):
-            # A child port at position 0 of a portless parent -- neograph-xejyn.
+            # A child port that no producer in this parent can feed -- neograph-xejyn.
+            #
+            # STILL TOLERATED, and the attempt to refuse it here is what showed why.
+            # Measured: refusing broke a ported child placed first in a portless
+            # parent whose port is fed from OUTSIDE, through run(input=...). That is a
+            # real program with no other spelling today, because the public way to
+            # feed a root construct's own port is xejyn's FIRST half and is deferred.
+            # Refusing the second half first would leave the shape unwritable.
+            #
+            # What DID land is the runtime half: a rung that was stamped and holds
+            # nothing is now reported instead of silently omitting the port key. An
+            # ABSENT stamp stays this exemption's business.
             return
     # Fan-in dict instance: inputs={"a": A, "b": B, ...} — validate each
     # (upstream_name, expected_type) pair against the upstream named by the

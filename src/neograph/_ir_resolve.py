@@ -25,12 +25,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import cast
 
-from neograph._construct_validation import _loop_aware_compatible
+from neograph._construct_validation import _loop_aware_compatible, _types_compatible
 from neograph._ir_consume import single_type_candidates
 from neograph._ir_fields import Producer
+from neograph._ir_protocols import ConstructItem
 from neograph._ir_source import (
     Candidate,
     EachItem,
+    HandoffChannel,
     LastPresent,
     LoopCarry,
     Peer,
@@ -42,7 +44,7 @@ from neograph._ir_source import (
     Source,
     Unresolved,
 )
-from neograph._normalize import normalize_inputs
+from neograph._normalize import _declared_output, normalize_inputs
 from neograph._portal_member import PortalMemberClass, portal_member_class
 from neograph._state_keys import StateKeys
 from neograph.naming import field_name_for
@@ -78,6 +80,19 @@ def _candidate(producer: Producer, reason: str) -> Candidate:
     return Candidate(ref=PortRef(producer.field_name), reason=reason)
 
 
+def _shadowing_arm_matches(input_type: TypeSpecStatic, shadowed: Sequence[Producer]) -> list[Producer]:
+    """The hidden BRANCH-ARM producers that could satisfy ``input_type``.
+
+    Non-empty only for a read placed after a join, and it is what makes that read a
+    REFUSAL rather than a resolution: which arm ran is a runtime fact. Shared by the
+    two resolvers so a MODIFIED child cannot quietly resolve to one of its own
+    channels while a shadowed feeder goes unreported -- which is what happened when
+    the port resolver treated "feeder unresolved" as "the feeder is simply not one of
+    this port's arrivals".
+    """
+    return [p for p in shadowed if p.effective_type is not None and _loop_aware_compatible(p, input_type)]
+
+
 def _resolve_by_type(
     input_type: TypeSpecStatic,
     visible: Sequence[Producer],
@@ -105,7 +120,7 @@ def _resolve_by_type(
     every-arm-produces-it form -- stamping the arms as one ordered read -- is
     filed and deliberately not smuggled in here.
     """
-    arm_matches = [p for p in shadowed if p.effective_type is not None and _loop_aware_compatible(p, input_type)]
+    arm_matches = _shadowing_arm_matches(input_type, shadowed)
     if arm_matches:
         return Unresolved(
             tuple(
@@ -261,7 +276,7 @@ def resolve_single_type_source(
 
 
 def resolve_port_source(
-    sub_input: TypeSpecStatic | None,
+    item: ConstructItem,
     visible: Sequence[Producer],
     shadowed: Sequence[Producer] = (),
 ) -> Resolution | None:
@@ -271,7 +286,56 @@ def resolve_port_source(
     during its own ``__init__``, before it is placed, so it cannot see the
     producers that will feed it. Same derivation as a Node's read, which is what
     gives the port the enclosing-port fallback and the arm scoping it never had.
+
+    A MODIFIED child has more arrivals than its feeder, and they are ordered -- the
+    runtime used to try them as a five-rung ladder of presence probes, then omit the
+    port key entirely when every rung missed. They are now the rungs of one
+    ``LastPresent``, in the ladder's own precedence order REVERSED (it took the first
+    present, ``LastPresent`` takes the last), so the order is preserved rather than
+    reinvented:
+
+    * the resolved feeder (``Peer``/``Port``) -- the lowest precedence, tried last
+    * the mesh channel, for a Portal member: a hop's payload outranks the feeder
+    * the fanned item, for an ``Each`` child: THIS branch's value outranks both
+    * the child's own carry, for a ``Loop``: an iteration's own output outranks all
+
+    The carry rung is included only when the child's OUTPUT can satisfy its own
+    ``input=``. That was a runtime ``isinstance(latest, sub.input)`` probe -- the
+    produce-and-validate shape, where feeding the output back would be wrong -- and it
+    is a question about two DECLARATIONS, so it is answered here.
     """
+    sub_input = getattr(item, "input", None)
     if sub_input is None:
         return None
-    return _resolve_by_type(sub_input, visible, shadowed)
+    if _shadowing_arm_matches(sub_input, shadowed):
+        # A shadowed feeder is a REFUSAL even for a modified child, and it has to be
+        # checked before the rungs: a Loop-on-Construct would otherwise resolve to its
+        # own carry and the shadowed producer would go unreported -- swallowing step
+        # 1's guarantee for exactly the `out = self.a(c) if cond else self.b(c)` shape
+        # that motivated it.
+        return _resolve_by_type(sub_input, visible, shadowed)
+    feeder = _resolve_by_type(sub_input, visible, shadowed)
+
+    # A MODIFIED child's value need not come from a producer at all: a fanned child
+    # reads the item, a mesh member reads the hop. So an unresolved FEEDER is only a
+    # refusal when no other rung can supply the port -- otherwise the feeder is simply
+    # not one of this port's arrivals. (A plain child has no other rung, so the
+    # refusal still lands there, which is xejyn's second half.)
+    modifiers = getattr(item, "modifier_set", None)
+    rungs: list[Rung] = [] if isinstance(feeder, Unresolved) else [cast("Rung", feeder.source)]
+    portal = getattr(modifiers, "portal", None) if modifiers is not None else None
+    if portal is not None and portal_member_class(item) not in (None, PortalMemberClass.DISPATCH):
+        channel = getattr(item, "handoff_channel", None)
+        if channel is not None:
+            rungs.append(HandoffChannel(channel))
+    if modifiers is not None and modifiers.each is not None:
+        rungs.append(EachItem())
+    if modifiers is not None and modifiers.loop is not None:
+        declared_output = _declared_output(item)
+        if declared_output is not None and _types_compatible(declared_output, sub_input):
+            rungs.append(LoopCarry())
+    if not rungs:
+        return feeder  # Unresolved: nothing can feed this port.
+    if len(rungs) == 1:
+        return Resolved(rungs[0])
+    return Resolved(LastPresent(tuple(rungs)))

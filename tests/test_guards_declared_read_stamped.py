@@ -109,9 +109,14 @@ EXPECTED_UNSTAMPED: dict[str, str] = {
     # layer's port-param rewrite (_param_classify / _construct_builder) and stamped by
     # nobody: the same channel with a second spelling. neograph-d8ac9 owns it.
     "dict-key/framework-port": "neograph-d8ac9 -- the DX layer's port KEY rewrite is unstamped",
-    # Step 8 (neograph-4cvx8.9) makes `Construct.port_source` the stamped Source
-    # for the whole `_build_sub_input` ladder (N3, N7, xejyn half 2).
-    "port/sub-construct": "step 8 / neograph-4cvx8.9 -- stamp Construct.port_source",
+    # Step 8 stamped the port and made ONE reader of it, but this row SURVIVES and
+    # the reason is narrowed: what is left unstamped is a port nothing in the parent
+    # can feed. Refusing that is neograph-xejyn's second half, and it cannot land
+    # before the first -- a public spelling for feeding a ROOT construct's own port --
+    # which the user deferred on 2026-09-21. Measured when step 8 tried it anyway:
+    # refusing broke a ported child fed from outside through run(input=...) and the
+    # zero-field port the fan-agent wrapper synthesizes.
+    "port/sub-construct": "neograph-xejyn half 1 -- a port no producer can feed has no address to stamp",
     # Disease-scan row 47: a named dict-form key IS the producer's name, and
     # `_check_fan_in_inputs` requires that producer at assembly, so today's form
     # is the dispositioned target, not a defect. The elegance review's C1 end

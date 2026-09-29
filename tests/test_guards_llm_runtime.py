@@ -2922,6 +2922,13 @@ class TestSourceConstructionMonopoly:
             # pins the Each fan-in double-fire edge case, which requires a table
             # state the normalizer will not produce (that is the defect it probes).
             "test_obligation_r1r2.py",
+            # neograph-4cvx8 step 8, and argued rather than assumed (this list's own
+            # rule): it points a BUILT child's port_source at a field no node writes,
+            # to pin that a stamped-but-empty address is now REPORTED instead of
+            # silently omitting the port key. A validated graph cannot contain that
+            # shape -- which is the point -- so the only way to exercise the reporting
+            # is to fabricate it, the same activity the two rows above are for.
+            "test_declared_read_resolution.py",
         }
     )
 

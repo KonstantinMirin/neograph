@@ -35,7 +35,6 @@ from neograph._ir_fields import Producer, contributed_fields
 from neograph._ir_protocols import ConstructItem
 from neograph._ir_source import Resolution, Resolved, Unresolved
 from neograph._state_keys import StateKeys
-from neograph._type_spec import TypeSpecStatic
 from neograph.node import Node
 
 if TYPE_CHECKING:
@@ -50,7 +49,7 @@ __all__ = ["read_refusals", "stamp_declared_reads"]
 _REFUSALS_ATTR = "_neo_read_refusals"
 
 ReadResolver = Callable[[Node, Sequence[Producer], Sequence[Producer]], Resolution | None]
-PortResolver = Callable[[TypeSpecStatic | None, Sequence[Producer], Sequence[Producer]], Resolution | None]
+PortResolver = Callable[[ConstructItem, Sequence[Producer], Sequence[Producer]], Resolution | None]
 
 
 def read_refusals(construct: Any) -> dict[str, Unresolved]:
@@ -61,20 +60,6 @@ def read_refusals(construct: Any) -> dict[str, Unresolved]:
     unresolved.
     """
     return getattr(construct, _REFUSALS_ATTR, None) or {}
-
-
-def _sub_construct_input(item: ConstructItem) -> TypeSpecStatic | None:
-    """``item.input`` when ``item`` is a placed sub-construct, else ``None``.
-
-    ``isinstance(item, Construct)`` is not available here: importing ``construct``
-    would close a cycle, and ``_ir_normalize`` documents the same constraint. The
-    structural test is exact over what ``construct.nodes`` can hold -- a
-    ``_BranchNode`` is never yielded by the slot walk, so a non-``Node`` item with
-    a ``nodes`` attribute is a Construct.
-    """
-    if isinstance(item, Node) or getattr(item, "nodes", None) is None:
-        return None
-    return getattr(item, "input", None)
 
 
 def stamp_declared_reads(
@@ -124,7 +109,7 @@ def stamp_declared_reads(
                     update={"input_sources": with_source(item, StateKeys.SINGLE_INPUT, resolution.source)}
                 )
         else:
-            resolution = resolve_port(_sub_construct_input(item), visible, shadowed)
+            resolution = resolve_port(item, visible, shadowed)
             if isinstance(resolution, Resolved):
                 container[idx] = item.model_copy(update={"port_source": resolution.source})
 

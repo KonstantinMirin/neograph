@@ -97,6 +97,7 @@ from neograph import (
 from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
 from neograph._ir_source import EachItem, Port
 from neograph._state_keys import StateKeys
+from neograph.errors import ExecutionError
 from tests.fakes import FakeTool, build_test_compile_kwargs, register_scripted, register_tool_factory
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1447,3 +1448,123 @@ class TestLastPresentsThirdAdmissionCriterion:
             f"item 'b' needs two iterations from 0.1 -- got {grown['b'].label!r}. A different count "
             "means it inherited a carry from the other item's activation."
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 12 -- neograph-2dehj (N7) and xejyn half 2: the sub-construct port's
+# runtime ladder.
+#
+# `_build_sub_input` tried five rungs in order -- the child's own carry list, the
+# fanned item, the mesh channel, the parent's port, the resolved peer -- each by
+# PRESENCE, two of them with an extra isinstance probe. When every rung missed it
+# omitted the port key entirely, so the child's first node read nothing and the
+# body was handed None on a green run.
+#
+# Step 1 already moved the SELECTION of the peer/port rung into the one resolver.
+# What is left is the READ: one stamped Source per port, and an absence that is
+# reported rather than skipped.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _loop_on_construct_first_in_a_portless_parent(recorder: _Recorder) -> Construct:
+    """``parent[child[inner]]`` where child is ported + Looped and nothing feeds it."""
+    register_scripted("dr_n7_inner", recorder.echo)
+
+    child = Construct(
+        "child",
+        input=Token,
+        output=Echo,
+        nodes=[Node.scripted("inner", fn="dr_n7_inner", inputs=Token, outputs=Echo)],
+    ) | Loop(when=lambda v: v is None, max_iterations=2)
+    return Construct("n7-parent", nodes=[child])
+
+
+class TestAnUnfedChildPortIsReported:
+    """neograph-2dehj (N7), and where xejyn half 2 actually stands.
+
+    REFUSING an unfed child port was this step's plan and it is NOT what landed --
+    trying it is what showed why. Measured: it broke a ported child placed first in a
+    portless parent whose port is fed from OUTSIDE via ``run(input=...)``, and also the
+    synthesized zero-field port the fan-agent wrapper mints. The first of those is a
+    real program with no other spelling today, because the public way to feed a root
+    construct's own port is xejyn's FIRST half, deferred by the user on 2026-09-21.
+    Refusing the second half first would make the shape unwritable.
+
+    So the line this step draws is between a BROKEN address and an ABSENT one: a rung
+    that was stamped and holds nothing is reported, and a port nothing could feed stays
+    xejyn's question.
+    """
+
+    def test_a_child_with_no_stamped_feeder_still_assembles(self):
+        """The shape that stays tolerated, with the reason written down.
+
+        Pinning it so the next step to touch this does not "fix" it by refusing, which
+        is where this step went first.
+        """
+        recorder = _Recorder()
+        pipeline = _loop_on_construct_first_in_a_portless_parent(recorder)
+        assert pipeline.nodes[0].port_source is None, (
+            "nothing in this parent can feed the child's port, so there is no address to stamp -- "
+            f"got {pipeline.nodes[0].port_source!r}. Refusing it needs xejyn's first half."
+        )
+
+    def test_the_same_child_resolves_once_a_producer_feeds_it(self):
+        """The migration the refusal asks for, and it needs no new API.
+
+        A seed producer ahead of the child is what the four inert ``test_loop`` sites
+        were missing. With one, the port resolves and the loop reads it.
+        """
+        recorder = _Recorder()
+        register_scripted("dr_n7_seed", _emit_token("FED-BY-SEED"))
+        register_scripted("dr_n7_inner2", recorder.echo)
+
+        child = Construct(
+            "child",
+            input=Token,
+            output=Echo,
+            nodes=[Node.scripted("inner", fn="dr_n7_inner2", inputs=Token, outputs=Echo)],
+        ) | Loop(when=lambda v: v is None, max_iterations=2)
+        pipeline = Construct(
+            "n7-fed", nodes=[Node.scripted("seed", fn="dr_n7_seed", outputs=Token), child]
+        )
+
+        result = run(compile(pipeline, **build_test_compile_kwargs()), input={"node_id": "n7-fed"})
+
+        got = result["child"]
+        final = got[-1] if isinstance(got, list) else got
+        assert final == Echo(saw="FED-BY-SEED"), f"the child's port must read the seed; got {got!r}"
+
+    def test_an_absent_stamped_rung_is_reported_rather_than_skipped(self):
+        """Simulated, because a validated graph has no such shape left.
+
+        The property under test is the ABSENCE of the silent-omission path: when the
+        stamped rung holds nothing, the port key used to be left out of the child's
+        state and the inner body saw ``None``. It must raise instead. Simulated by
+        pointing a built child's stamp at a field no node writes -- the same way the
+        step-0 instrument's rule is exercised against a removed stamp.
+        """
+        from neograph._ir_source import Peer, PortRef
+
+        recorder = _Recorder()
+        register_scripted("dr_n7_seed3", _emit_token("REAL"))
+        register_scripted("dr_n7_inner3", recorder.echo)
+
+        child = Construct(
+            "child",
+            input=Token,
+            output=Echo,
+            nodes=[Node.scripted("inner", fn="dr_n7_inner3", inputs=Token, outputs=Echo)],
+        )
+        pipeline = Construct(
+            "n7-simulated", nodes=[Node.scripted("seed", fn="dr_n7_seed3", outputs=Token), child]
+        )
+        # Mutate the BUILT ir: model_copy does not re-run __init__, so the normalizer
+        # cannot re-stamp what we point elsewhere.
+        pipeline.nodes[1] = pipeline.nodes[1].model_copy(
+            update={"port_source": Peer(PortRef("nobody_writes_this"))}
+        )
+
+        # StateMissingError (an ExecutionError subclass): this is a required state read
+        # that missed, named after the reading child, exactly like every other one.
+        with pytest.raises(ExecutionError, match=r"child"):
+            run(compile(pipeline, **build_test_compile_kwargs()), input={"node_id": "n7-sim"})

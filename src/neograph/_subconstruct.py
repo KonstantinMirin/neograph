@@ -11,13 +11,14 @@ from pydantic import BaseModel
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_fields import item_field_names
 from neograph._ir_normalize import resolve_output_from
-from neograph._ir_source import Peer, Port
+from neograph._ir_source import HandoffChannel, LastPresent, LoopCarry, Source, source_channel_kind
 from neograph._oracle import _inject_oracle_config
+from neograph._read_source import read_source
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
-from neograph.errors import ExecutionError
+from neograph.errors import ExecutionError, StateMissingError
 from neograph.modifiers import (
     COMBO_DECOMPOSITION,
     PrimaryShape,
@@ -58,6 +59,24 @@ def _scan_subgraph_output(sub_result: dict[str, Any], sub_output_type: type, *, 
         if isinstance(check_val, sub_output_type):
             return check_val
     return None
+
+
+def _absence_is_a_defect(source: Source) -> bool:
+    """Whether reading nothing through ``source`` means something is WRONG.
+
+    Two channels are legitimately empty at a known moment, and both were documented
+    before this: a ``LoopCarry`` on iteration 0 (there is no previous iteration) and a
+    mesh ``HandoffChannel`` on the entry's first activation (no hop has run). Every
+    other rung names a field that something wrote before this node, so reading nothing
+    through it means the address is broken -- which used to omit the port key and hand
+    the child's first node ``None``.
+
+    An ABSENT stamp is not a defect either: it means nothing in the parent could feed
+    the port, which is ``neograph-xejyn`` and still tolerated -- the caller checks that
+    before asking here.
+    """
+    rungs = source.rungs if isinstance(source, LastPresent) else (source,)
+    return any(not isinstance(rung, (LoopCarry, HandoffChannel)) for rung in rungs)
 
 
 def make_subgraph_fn(
@@ -114,84 +133,47 @@ def make_subgraph_fn(
         """
         bus = adapt_state(state)
 
-        # Loop re-entry: on iteration 2+, read from own append-list.
-        # When output type matches input type (classic refine pattern),
-        # feed the output back as input.  When output differs from input
-        # (produce+validate pattern), skip the shortcut and re-read
-        # original inputs from parent state.
-        input_data = None
-        if has_loop:
-            # StateBus.get optional: loop-bootstrap — sub-construct's own field
-            # is unbound on iteration 0.
-            own_val = bus.get(field_name)
-            if isinstance(own_val, list):
-                # Latest-of-append-list unwrap delegates to the di monopoly
-                # per neograph-ovx1: None for the unbound/empty first iteration,
-                # own_val[-1] otherwise.
-                latest = _unwrap_loop_value(own_val, object)
-                if latest is not None and (sub.input is None or isinstance(latest, sub.input)):
-                    input_data = latest
-
-        # Each fan-over-agent (see neograph-1h8c): the parent's each_router put THIS
-        # branch's item into EACH_ITEM (the Send payload). Deliver it AS the
-        # sub-construct's single-value input port so the isolated ReAct cycle reads
-        # its OWN per-branch value — mirroring the qot6 single-key dict-form rewrite.
-        # Takes precedence over the port read below (EACH_ITEM is the specific
-        # dispatched value for THIS branch).
-        if has_each and input_data is None:
-            # StateBus.get optional: EACH_ITEM is populated by the each_router Send
-            # for every fanned branch; absent only on a mis-wired graph.
-            each_item = bus.get(StateKeys.EACH_ITEM)
-            if each_item is not None:
-                input_data = each_item
-
-        # Portal mesh member (do0d9 site 7): source the boundary input
-        # DETERMINISTICALLY from the routed parent handoff channel, taking
-        # precedence over the port read below. A member reached via a hop
-        # always has the channel populated by the prior hop's Command update; on
-        # the mesh entry's first activation the channel default (None) falls
-        # through to the port read.
-        if input_data is None and handoff_channel is not None:
-            # StateBus.get optional: Portal mesh channel — populated by the prior
-            # hop's Command update for a member reached via a hop; the mesh
-            # entry's first activation legitimately sees None (design §3.3, D10).
-            channel_val = bus.get(handoff_channel)
-            if channel_val is not None:
-                input_data = channel_val
-
-        # Last rung: read the PORT from the field the normalizer resolved at
-        # assembly. This was a reverse scan of the entire parent bag taking the
-        # first isinstance match, so framework bookkeeping and forwarded context=
-        # fields competed to be the port's value and dict ordering decided the
-        # winner. The precedence is unchanged -- last declared compatible producer
-        # -- but it is now computed from DECLARATIONS once, and the runtime asks
-        # only whether the named field is present.
-        # isinstance narrow, not a cast: the normalizer stamps a Peer here today, and
-        # mypy correctly refused `.ref` on the bare union because six of the seven
-        # variants do not have one. That refusal is the closed Source set earning its
-        # keep -- when the accumulator channel adds a variant that can feed a port,
-        # this line stops type-checking until it is taught, instead of reading an
-        # attribute that is not there at run time.
-        if input_data is None and sub.input is not None and isinstance(sub.port_source, Port):
-            # The child's port is fed by the PARENT'S OWN port. Rule 3 of the
-            # resolver ("a peer outranks the port, and the port is still a
-            # candidate") has always said so for a Node's read; the port question
-            # was answered by a second derivation that had no such rung, so a
-            # ported child placed first in a ported parent read nothing while the
-            # value it was placed to consume sat in the parent's port.
-            # One resolver, one rung set.
-            # StateBus.get optional: a portless parent has no port field at all,
-            # and the next rung (the resolved peer field) answers those.
-            input_data = bus.get(StateKeys.SUBGRAPH_INPUT)
-
-        if input_data is None and sub.input is not None and isinstance(sub.port_source, Peer):
-            # StateBus.get optional: the resolved field may be unbound on this
-            # superstep (a Loop's iteration-0 read, an unreached branch arm).
-            # _unwrap_loop_value because a Loop-modified producer's field holds an
-            # APPEND-LIST, and the port wants the latest element -- the scan this
-            # replaced unwrapped before its isinstance check, so dropping the unwrap
-            # handed a list[Draft] to a port declaring Draft.
-            input_data = _unwrap_loop_value(bus.get(sub.port_source.ref.field), object)
+        # ONE stamped Source, ONE read. This was a five-rung ladder -- the child's own
+        # carry list, the fanned item, the mesh channel, the parent's port, the
+        # resolved peer -- each tried by PRESENCE, two of them with an extra
+        # isinstance probe, and when every rung missed the port key was OMITTED so the
+        # child's first node read nothing and its body was handed None on a green run.
+        #
+        # The rungs are the same and in the same precedence order; what changed is
+        # that the ORDER is now written down at assembly (resolve_port_source) instead
+        # of being the order of five if-statements, and an absence is reported.
+        port_source = sub.port_source
+        input_data = (
+            read_source(bus, port_source, sub.input, label=field_name)
+            if sub.input is not None and port_source is not None
+            else None
+        )
+        if (
+            sub.input is not None
+            and port_source is not None
+            and input_data is None
+            and _absence_is_a_defect(port_source)
+        ):
+            # A STAMPED address that holds nothing is a broken address: assembly said
+            # which field feeds this port, and that field was never written. Omitting
+            # the port key -- the old behaviour -- handed the child's first node None
+            # on a green run.
+            #
+            # An ABSENT stamp is a different question and is deliberately not raised
+            # here: it means nothing in the parent could feed the port, which is
+            # neograph-xejyn, and a ported child fed from OUTSIDE through run(input=)
+            # has no other spelling until xejyn's first half lands. A synthesized
+            # fan-agent port with no fields is the other legitimate case -- there is
+            # nothing to read.
+            # StateMissingError, not a bespoke ExecutionError: this IS a required
+            # state read that missed, which is the error's stated purpose, and the
+            # canonical form names the reading node the way every other required read
+            # does. The channel the address names stands in for the key when the source
+            # has more than one rung.
+            raise StateMissingError.build(
+                key=source_channel_kind(port_source),
+                node_label=sub.name,
+            )
 
         # Run sub-graph with isolated state.
         # StateBus.get optional: framework — node_id is a DI-style context key
