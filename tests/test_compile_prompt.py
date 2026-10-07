@@ -149,6 +149,124 @@ class TestCompilePromptParity:
         )
         assert standalone == graph_messages
 
+    @pytest.mark.parametrize("entry_point", ["compile_prompt", "render_prompt"])
+    def test_context_matches_graph_messages_byte_for_byte(self, tmp_path, entry_point):
+        """neograph-1f8zz: standalone compilation preserves declared context.
+
+        The catalog is only a context field of analyze, not one of its inputs,
+        so reproducing the prompt requires the standalone context channel.
+        """
+        from neograph import compile_prompt, render_prompt
+        from neograph._llm_runtime import LlmRuntime
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "analyze.md").write_text("Analyze: {seed}\nCatalog: {build_catalog}\nSchema:\n{json_schema}\n")
+        compiler = DefaultPromptCompiler(prompts)
+        catalog = RawText(text="catalog-context-only: UC-001, UC-002")
+        seed_value = RawText(text="hello world")
+        mod = types.ModuleType("test_compile_prompt_context_mod")
+
+        @node(outputs=RawText)
+        def build_catalog() -> RawText:
+            return catalog
+
+        @node(outputs=RawText)
+        def seed(build_catalog: RawText) -> RawText:
+            return seed_value
+
+        @node(
+            outputs=Claims,
+            mode="think",
+            model="fast",
+            prompt="analyze",
+            context=["build_catalog"],
+        )
+        def analyze(seed: RawText) -> Claims: ...
+
+        mod.build_catalog = build_catalog
+        mod.seed = seed
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+        fake = CapturingFake(lambda m: m(items=["ok"]))
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: fake,
+            prompt_compiler=compiler,
+            **build_test_compile_kwargs(),
+        )
+        run(graph, input={"node_id": "context-parity"})
+
+        assert len(fake.captured) == 1
+        graph_messages = fake.captured[0]
+        assert any(catalog.text in message["content"] for message in graph_messages)
+
+        if entry_point == "compile_prompt":
+            standalone = compile_prompt(
+                "analyze",
+                {"seed": seed_value},
+                context={"build_catalog": catalog},
+                output_model=Claims,
+                prompt_compiler=compiler,
+            )
+            assert standalone == graph_messages
+        else:
+            standalone = render_prompt(
+                analyze,
+                {"seed": seed_value},
+                context={"build_catalog": catalog},
+                runtime=LlmRuntime.build(prompt_compiler=compiler),
+            )
+            assert standalone == "\n\n".join(f"[{message['role']}]\n{message['content']}" for message in graph_messages)
+
+
+class TestStandalonePromptContext:
+    """Both inspection APIs reuse the runtime's context rendering and opt-in gate."""
+
+    @staticmethod
+    def _invoke(entry_point, compiler, context):
+        from neograph import Node, compile_prompt, render_prompt
+        from neograph._llm_runtime import LlmRuntime
+
+        if entry_point == "compile_prompt":
+            return compile_prompt("analyze", None, context=context, prompt_compiler=compiler)
+        return render_prompt(
+            Node("analyze", outputs=Claims, prompt="analyze", model="fast"),
+            None,
+            context=context,
+            runtime=LlmRuntime.build(prompt_compiler=compiler),
+        )
+
+    @pytest.mark.parametrize("entry_point", ["compile_prompt", "render_prompt"])
+    def test_context_offers_rendered_text_and_original_typed_value(self, entry_point):
+        catalog = RawText(text="UC-001, UC-002")
+        supplied = {"catalog": catalog}
+        captured = {}
+
+        def compiler(template, data, *, context=None, raw_context=None):
+            captured["context"] = context
+            captured["raw_context"] = raw_context
+            return [{"role": "user", "content": raw_context["catalog"].text}]
+
+        self._invoke(entry_point, compiler, supplied)
+
+        assert isinstance(captured["context"]["catalog"], str)
+        assert catalog.text in captured["context"]["catalog"]
+        assert captured["raw_context"]["catalog"] is catalog
+        assert supplied == {"catalog": catalog}
+        assert supplied["catalog"] is catalog
+
+    @pytest.mark.parametrize("entry_point", ["compile_prompt", "render_prompt"])
+    def test_compiler_without_context_parameters_remains_compatible(self, entry_point):
+        # A closed signature is essential: **kwargs would bypass the opt-in gate.
+        def compiler(template, data):
+            return [{"role": "user", "content": "hello"}]
+
+        result = self._invoke(entry_point, compiler, {"catalog": RawText(text="UC-001")})
+
+        expected = [{"role": "user", "content": "hello"}] if entry_point == "compile_prompt" else "[user]\nhello"
+        assert result == expected
+
 
 class TestCompilePromptRoutesThroughSharedSeam:
     """Anti-duplication guard: compile_prompt MUST call the same internal

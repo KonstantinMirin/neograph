@@ -468,7 +468,11 @@ class TestLlmResponsibilityDiscipline:
         # raw getattr(node, "outputs", None), which diverged from the real
         # dispatch path for dict-form/oracle_gen_type nodes; a cast (mirroring
         # _dispatch.py's own pattern) resolves the mypy type gap.
-        "_llm_render.py": 471,
+        # neograph-1f8zz: 471 -> 483. The two public inspection functions and
+        # their shared wrapper now forward context to the existing compile seam;
+        # public docstrings describe the rendered/raw contract. Same reviewed
+        # proxy widening as above, no new definitions, still below LIMIT = 500.
+        "_llm_render.py": 483,
         # neograph-ble3: new pure-leaf detection module.
         "_dsml.py": 55,
         # neograph-ble3: compat shim — sum-type + Protocol + 3 adapters + factory.

@@ -119,7 +119,7 @@ compile(construct: 'Construct', checkpointer: 'Any' = None, _context_types: 'dic
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-compile_prompt(template: 'str', input_data: 'Any', *, output_model: 'type[BaseModel] | None' = None, output_schema: 'str | None' = None, di_inputs: 'dict[str, Any] | None' = None, prompt_compiler: 'Any | None' = None, renderer: 'Any | None' = None, node_name: 'str' = '', template_text: 'str | None' = None, loader: 'Any | None' = None) -> 'list[dict]'
+compile_prompt(template: 'str', input_data: 'Any', *, output_model: 'type[BaseModel] | None' = None, output_schema: 'str | None' = None, di_inputs: 'dict[str, Any] | None' = None, context: 'dict[str, Any] | None' = None, prompt_compiler: 'Any | None' = None, renderer: 'Any | None' = None, node_name: 'str' = '', template_text: 'str | None' = None, loader: 'Any | None' = None) -> 'list[dict]'
 ```
 
 ### configure_image
@@ -580,7 +580,7 @@ render_inputs(input_data: 'Any', *, renderer: 'Renderer | None' = None) -> 'dict
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-render_prompt(node: 'Any', input_data: 'Any', *, config: 'RunnableConfig | None' = None, runtime: 'LlmRuntime | None' = None) -> 'str'
+render_prompt(node: 'Any', input_data: 'Any', *, config: 'RunnableConfig | None' = None, runtime: 'LlmRuntime | None' = None, context: 'dict[str, Any] | None' = None) -> 'str'
 ```
 
 ### Rendered

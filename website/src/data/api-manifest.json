@@ -1192,14 +1192,14 @@
       "doc": "Render the exact prompt a node would send to the LLM, without calling it.",
       "kind": "function",
       "name": "render_prompt",
-      "signature": "(node: 'Any', input_data: 'Any', *, config: 'RunnableConfig | None' = None, runtime: 'LlmRuntime | None' = None) -> 'str'"
+      "signature": "(node: 'Any', input_data: 'Any', *, config: 'RunnableConfig | None' = None, runtime: 'LlmRuntime | None' = None, context: 'dict[str, Any] | None' = None) -> 'str'"
     },
     {
       "anchor": "compile_prompt",
       "doc": "Compile a prompt to a message list \u2014 standalone, no compiled graph, no run.",
       "kind": "function",
       "name": "compile_prompt",
-      "signature": "(template: 'str', input_data: 'Any', *, output_model: 'type[BaseModel] | None' = None, output_schema: 'str | None' = None, di_inputs: 'dict[str, Any] | None' = None, prompt_compiler: 'Any | None' = None, renderer: 'Any | None' = None, node_name: 'str' = '', template_text: 'str | None' = None, loader: 'Any | None' = None) -> 'list[dict]'"
+      "signature": "(template: 'str', input_data: 'Any', *, output_model: 'type[BaseModel] | None' = None, output_schema: 'str | None' = None, di_inputs: 'dict[str, Any] | None' = None, context: 'dict[str, Any] | None' = None, prompt_compiler: 'Any | None' = None, renderer: 'Any | None' = None, node_name: 'str' = '', template_text: 'str | None' = None, loader: 'Any | None' = None) -> 'list[dict]'"
     },
     {
       "anchor": "configure_image",

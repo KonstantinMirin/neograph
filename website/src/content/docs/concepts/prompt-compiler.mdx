@@ -56,6 +56,39 @@ The `template` argument is whatever string was passed to `@node(prompt=...)`. Tw
 
 The detection lives at `src/neograph/_llm_render.py::_is_inline_prompt`. If you want the compiler to receive the string, make sure it has no internal spaces. The conventional pattern is short snake_case identifiers like `"review_security"`.
 
+## Reproduce a prompt outside the graph
+
+`compile_prompt()` builds the same message list without calling the model.
+For a node declaring `context=["guidelines"]`, supply the resolved value through
+`context=`, separately from its upstream inputs:
+
+```python
+from neograph import compile_prompt
+
+messages = compile_prompt(
+    "report",
+    {"review": "Two files reviewed; one missing test."},
+    context={"guidelines": "Every bug fix needs a regression test."},
+    template_text="Guidelines: {guidelines}\nFindings: {review}",
+)
+assert messages == [{
+    "role": "user",
+    "content": "Guidelines: Every bug fix needs a regression test.\nFindings: Two files reviewed; one missing test.",
+}]
+```
+
+To reproduce production messages, pass the same `prompt_compiler`, input values,
+output model/schema, renderer, and relevant context values used by the graph.
+`render_prompt(node, input_data, runtime=runtime, context=...)` accepts the same
+context map and returns a readable string instead of a message list. Neither
+function fetches graph state: the caller supplies the resolved context values.
+
+For template references, the existing compilation path renders `context` to text
+and offers the original typed values as `raw_context` to compilers accepting that
+keyword. Compilers without context parameters remain supported. Inline prompts
+continue to substitute from `input_data`; this does not add context variables to
+the inline syntax.
+
 ## Minimal compiler (file-per-prompt)
 
 This is the shape used by the [example sub-projects](https://github.com/KonstantinMirin/neograph/tree/main/examples) (`code-review`, `lead-outreach`, `spec-builder`, `lead-research`):

@@ -271,6 +271,7 @@ def _render_and_compile(
     config: RunnableConfig | None,
     output_model: type[BaseModel] | None,
     output_schema: str | None,
+    context: dict[str, Any] | None = None,
 ) -> list:
     """The shared render-then-compile core: apply the renderer via RenderedInput
     (raw for inline, for_template_ref for file-ref — exactly ``_render_input``'s
@@ -290,6 +291,7 @@ def _render_and_compile(
         config=config,
         output_model=output_model,
         output_schema=output_schema,
+        context=context,
     )
 
 
@@ -300,6 +302,7 @@ def compile_prompt(
     output_model: type[BaseModel] | None = None,
     output_schema: str | None = None,
     di_inputs: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
     prompt_compiler: Any | None = None,
     renderer: Any | None = None,
     node_name: str = "",
@@ -328,6 +331,10 @@ def compile_prompt(
             name — the run-wide ambient context an LLM-mode node's template can
             reference. Layered as the BASE (upstream outputs shadow on collision),
             exactly as the graph does.
+        context: resolved values of the node's declared context fields. Pass
+            the same values the graph supplies, not the entire graph state.
+            The compiler receives rendered text and, when accepted, raw_context
+            containing the typed objects that text was rendered from.
         prompt_compiler: the file-ref compiler (pass the SAME one production uses to
             get byte-identity). Not needed for an inline template.
         renderer: the input renderer (``node.renderer or runtime.renderer`` in the
@@ -357,6 +364,7 @@ def compile_prompt(
         config=config,
         output_model=output_model,
         output_schema=output_schema,
+        context=context,
     )
 
 
@@ -394,6 +402,7 @@ def render_prompt(
     *,
     config: RunnableConfig | None = None,
     runtime: LlmRuntime | None = None,
+    context: dict[str, Any] | None = None,
 ) -> str:
     """Render the exact prompt a node would send to the LLM, without calling it.
 
@@ -404,6 +413,8 @@ def render_prompt(
     Args:
         node: A Node instance with prompt, model, and output fields.
         input_data: The input data (Pydantic model, dict, or primitive).
+        context: resolved values of the node's declared context fields, supplied
+            by the caller. Uses the same rendered/raw channels as compile_prompt().
         config: Optional RunnableConfig-style dict for the prompt compiler.
         runtime: LLM runtime bundle (llm_factory/prompt_compiler/renderer).
             If omitted, falls back to the legacy compat slot set via
@@ -443,6 +454,7 @@ def render_prompt(
         config=config,
         output_model=output_model,
         output_schema=output_schema,
+        context=context,
     )
 
     parts: list[str] = []
